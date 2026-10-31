@@ -7,6 +7,7 @@ use ::clap::{Parser, Subcommand};
 use ::voice_filter::agc::Agc;
 use ::voice_filter::atomic::AtomicF32;
 use ::voice_filter::chain::Chain;
+use ::voice_filter::compressor::Compressor;
 use ::voice_filter::denoise::Denoise;
 use ::voice_filter::equalizer::Equalizer;
 use ::voice_filter::highpass::HighPass;
@@ -58,6 +59,7 @@ fn main() -> Result<ExitCode> {
             Box::new(HighPass::new()),
             Box::new(Equalizer::new()),
             Box::new(Agc::new()),
+            Box::new(Compressor::new()),
             Box::new(Limiter::new()),
         ]);
         Ok((chain, atten_lim))

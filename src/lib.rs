@@ -8,6 +8,7 @@ pub mod atomic;
 pub mod biquad;
 pub mod bridge;
 pub mod chain;
+pub mod compressor;
 pub mod dbus;
 pub mod denoise;
 pub mod equalizer;
