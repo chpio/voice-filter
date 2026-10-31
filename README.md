@@ -1,37 +1,131 @@
-# voice-filter
+# Voice Filter
 
-A live voice filter for Linux. It shows up in PipeWire as a virtual microphone named
-_Voice Filter_, so any app (Discord, the browser, OBS) can use it like a regular microphone.
+**A live voice filter for Linux.** Voice Filter shows up in PipeWire as a virtual microphone named
+_Voice Filter_. Any app (Discord, the browser, OBS) can use it like a regular microphone and gets
+your voice with the background noise removed and a clearer, even tone.
 
-Planned:
+- **Removes background noise** with [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet), a
+  neural network that keeps the full 48 kHz range
+- **Enhances the voice** with classic DSP: high-pass, EQ, de-esser, automatic gain control,
+  compressor and limiter
+- **Runs on the CPU**: the whole chain takes about 2–3 % of one core
+- **Switch and tune everything at runtime** from a GNOME app or over D-Bus, without clicks and
+  without changing the latency
+- **Test offline** with WAV files: the same chain, with the latency and processing time of every
+  stage
 
-- removes echo and background noise (_DeepFilterNet3_)
-- maybe later: suppresses other voices
-- enhances the voice with classic DSP: high-pass, EQ, de-esser, compressor, AGC and limiter
-- runs entirely on the CPU, with a total latency below 40 ms
-- stages and modes can be switched at runtime without clicks, from a GNOME app
+> **Status:** early and not released yet. Noise suppression and voice enhancement work. Echo
+> cancellation and presets are next, see the [roadmap](docs/concept.md#roadmap).
 
-The project is at an early stage: so far it removes noise, cuts rumble, makes the voice clearer
-with an EQ, tames harsh S sounds and evens out its level. The design is described in
-[docs/concept.md](docs/concept.md).
+## How it works
+
+A single process reads the microphone, runs it through a chain of stages in 10 ms frames and
+plays the result into the virtual microphone:
+
+```text
+ Microphone ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──▶ agc ──▶ compressor ──▶ limiter ──▶ "Voice Filter" ──▶ apps
+```
+
+| Stage        | What it does                                                             | Settings                               | Latency |
+| ------------ | ------------------------------------------------------------------------ | -------------------------------------- | ------: |
+| `denoise`    | Removes background noise (DeepFilterNet3)                                | `limit`                                |   30 ms |
+| `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz                  | `freq`                                 |       – |
+| `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)       | `low-mid`, `presence`, `presence-freq` |       – |
+| `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates | `freq`, `threshold`                    |    1 ms |
+| `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses      | `target`, `max-gain`                   |       – |
+| `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                 | `threshold`, `ratio`, `target`         |       – |
+| `limiter`    | Keeps the peaks below −1 dBFS                                            | `ceiling`, `release`                   |    1 ms |
+
+The values above are the defaults. The settings change them while it runs, but aren't kept for
+the next run yet.
+
+Every stage can be switched off while it runs. A stage that is off is skipped (it uses no CPU) and
+its input plays instead, delayed by the stage's latency, so the total latency never changes.
+Switching crossfades over one frame, so there are no clicks.
+
+**Latency.** Measured live with a USB microphone: about 51 ms from the microphone to the app.
+That's 8 ms microphone, 11 ms for turning PipeWire's blocks into 10 ms frames and 32 ms for the
+chain. Most of it is DeepFilterNet3's lookahead. The GNOME app shows the current value.
+
+## Installation
+
+There are no packages yet, so build it from source. You need Rust 1.96 or newer (from
+[rustup](https://rustup.rs) if your distribution's is older), clang, the PipeWire development
+files and, for the GNOME app, GTK 4 and libadwaita:
+
+| Distribution  | Packages                                                  |
+| ------------- | --------------------------------------------------------- |
+| Arch Linux    | `rust clang pipewire gtk4 libadwaita`                     |
+| Debian/Ubuntu | `clang libpipewire-0.3-dev libgtk-4-dev libadwaita-1-dev` |
+
+```bash
+cargo install --path .                          # installs voice-filter into ~/.cargo/bin
+cargo install --path . --no-default-features    # without the GNOME app, no GTK needed
+```
 
 ## Usage
 
 ```bash
-voice-filter inputs                   # lists the microphones
+voice-filter inputs                   # lists the microphones, the chosen one marked with *
 voice-filter run --input <name>       # provides "Voice Filter", until Ctrl+C
-voice-filter process in.wav out.wav   # filters a 48 kHz WAV file, prints latency and timing
-voice-filter ui                       # the GNOME app, controls a running `voice-filter run`
+voice-filter ui                       # opens the GNOME app for a running `voice-filter run`
 ```
 
-Select "Voice Filter" as the microphone in the app, or as the default input of the system. The
-microphone given with `--input` is kept for the next runs; without one so far, it's the default
-input, which doesn't work once "Voice Filter" is the default itself. The microphone is only in use
-while an app records from "Voice Filter".
+1. Start `voice-filter run`. Without `--input` it reads the default input. A microphone given with
+   `--input` is kept for the next runs.
+2. Select **Voice Filter** as the microphone in your app (or as the default input of the system).
+3. Open `voice-filter ui` to choose the microphone, switch stages on and off or adjust their
+   settings.
 
-While it runs, the GNOME app (`voice-filter ui`) switches its stages, sets their parameters (e.g.
-the attenuation limit of the noise suppression or the frequency of the high-pass) and shows its
-latency. Or over D-Bus, e.g. with `busctl`:
+The microphone is only in use while an app records from Voice Filter. If Voice Filter is the
+default input, set the microphone with `--input` or in the app; otherwise it falls back to the
+source with the highest priority.
+
+Only one `voice-filter run` can be active at a time. A second one stops with "Voice Filter is
+already running".
+
+### The GNOME app
+
+`voice-filter ui` controls a running `voice-filter run`. It's a separate process, so closing it
+never interrupts the audio. In the app you can:
+
+- choose the **microphone**, switched while the filter keeps running
+- turn on **Listen** to hear yourself through the filter on the default output (use headphones)
+- switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
+  suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
+  or the frequency of the high-pass
+- watch the **latency**, the processing time per frame and dropouts
+
+### Offline mode
+
+```bash
+voice-filter process in.wav out.wav
+```
+
+Runs a WAV file (48 kHz, mixed down to mono) through the same chain and writes the result, lined
+up with the input. It prints the latency and the processing time of every stage. Use it to compare
+settings, e.g. `--atten-lim 12` for a limit of 12 dB (the option works for `run` too).
+
+### D-Bus
+
+The daemon serves `net.b128.VoiceFilter.Daemon` on the session bus (object `/net/b128/VoiceFilter`,
+interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
+
+| Member            | Type                 | Description                                                            |
+| ----------------- | -------------------- | ---------------------------------------------------------------------- |
+| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input              |
+| `Listen`          | `b`, read/write      | plays Voice Filter on the default output                               |
+| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                     |
+| `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value |
+| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range       |
+| `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                             |
+| `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                           |
+| `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms              |
+| `Quantum`         | `t`, read            | samples per PipeWire cycle                                             |
+| `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms           |
+| `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start            |
+
+For example with `busctl`:
 
 ```bash
 busctl --user introspect net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1
@@ -40,16 +134,19 @@ busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.Vo
 busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetStageEnabled sb agc false
 ```
 
-## Building
+The interface may still change until the first release.
 
-Needs Rust, the PipeWire development files (`pipewire` on Arch, `libpipewire-0.3-dev` on
-Debian/Ubuntu), clang, and for the GNOME app GTK 4 and libadwaita (`gtk4` and `libadwaita` on Arch,
-`libgtk-4-dev` and `libadwaita-1-dev` on Debian/Ubuntu).
+## Development
 
 ```bash
-cargo build --release
-cargo build --release --no-default-features   # without the GNOME app, no GTK needed
+cargo test --workspace
+cargo test --release -p deep-filter-rt   # the model runs about 10x faster in release builds
+cargo clippy --workspace --all-targets
 ```
+
+The design, the choice of models, the latency measurements and the roadmap are in
+[docs/concept.md](docs/concept.md). The DeepFilterNet3 inference is vendored as its own crate,
+[deep-filter-rt](crates/deep-filter-rt), because upstream's crate on crates.io is outdated.
 
 ## License
 
@@ -60,3 +157,6 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
 
 at your option.
+
+The noise suppression is [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) by Hendrik
+Schröter (MIT or Apache-2.0), see [crates/deep-filter-rt/NOTICE.md](crates/deep-filter-rt/NOTICE.md).

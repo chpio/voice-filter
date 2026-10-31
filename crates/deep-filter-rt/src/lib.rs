@@ -1,3 +1,24 @@
+//! Real-time noise suppression with [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet),
+//! in pure Rust on the CPU.
+//!
+//! [`tract::DfTract`] runs the embedded DeepFilterNet3 model on 48 kHz audio in frames of 10 ms
+//! (480 samples per channel), with a delay of [`tract::DfTract::delay`] samples (30 ms). This
+//! module holds the signal processing around the model: the STFT state ([`DFState`]), the ERB
+//! features, the gains and the post filter.
+//!
+//! ```no_run
+//! use deep_filter_rt::tract::DfTract;
+//! use ndarray::Array2;
+//!
+//! let mut df = DfTract::default(); // the embedded model with the default parameters
+//! let noisy = Array2::<f32>::zeros((df.ch, df.hop_size));
+//! let mut enhanced = Array2::<f32>::zeros((df.ch, df.hop_size));
+//! let lsnr = df.process(noisy.view(), enhanced.view_mut())?; // local SNR estimate in dB
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+//!
+//! Debug builds run the model about 10 times slower than release builds.
+
 use ::std::ops::MulAssign;
 use ::std::sync::Arc;
 use ::std::vec::Vec;

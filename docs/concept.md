@@ -1,6 +1,10 @@
 # Concept: Live Voice Filter for Linux
 
-Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore.
+Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore. How to use it is in the [README](../README.md).
+
+**Status** (2026-10-31): phase 1 is done and most of phase 2. The live filter runs as the virtual microphone "Voice Filter" with DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor and limiter, controlled from a GNOME app over D-Bus. Missing from phase 2: presets. See the [roadmap](#roadmap).
+
+**Contents:** [Goal and requirements](#goal-and-requirements) · [Signal chain](#signal-chain) · [Model choice](#model-choice) · [Echo cancellation](#echo-cancellation) · [Suppressing other voices](#suppressing-other-voices) · [Voice enhancement](#voice-enhancement) · [GPU strategy](#gpu-strategy) · [Architecture](#architecture) · [Risks and open questions](#risks-and-open-questions) · [Roadmap](#roadmap)
 
 ## Goal and requirements
 
@@ -20,7 +24,7 @@ The signal passes through all stages in a fixed order. Echo comes first, because
 2. **Remove echo** – WebRTC AEC3 via the PipeWire module (see [Echo cancellation](#echo-cancellation))
 3. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter)
 4. **Suppress other voices** (optional, postponed) – Hush, modes Off · Full · Gate, about 11 ms more
-5. **Enhance the voice** – high-pass, EQ, de-esser, compressor, AGC, limiter
+5. **Enhance the voice** – high-pass, EQ, de-esser, AGC, compressor, limiter
 6. **Restoration** (optional, later) – ML model such as Stream.FM, GPU required
 7. **Virtual microphone "Voice Filter"** – selected in Discord, the browser or OBS
 
@@ -95,14 +99,16 @@ Classic DSP brings the biggest audible gain and runs live with practically no CP
 
 **Level 1: classic DSP (part of the first version)**
 
-1. High-pass around 80 Hz against rumble, footfall noise and plosives
-2. EQ: slight cut around 250 Hz against muddiness, boost around 3.5 kHz for presence
-3. De-esser against harsh S sounds
-4. Compressor for an even volume
-5. Automatic gain control (AGC)
-6. Limiter against clipping
+| Order | Stage      | Purpose                                 | Implemented as                                                                                                                                  |
+| ----: | ---------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+|     1 | High-pass  | Rumble, footfall noise, plosives        | 80 Hz, 4th order Butterworth (two biquads)                                                                                                      |
+|     2 | EQ         | Less muddiness, more presence           | −3 dB at 250 Hz, +3 dB at 3.5 kHz (peaking, Q 1)                                                                                                |
+|     3 | De-esser   | Harsh S sounds                          | band above 5 kHz turned down while its share of the energy is above −7 dB (ratio 4, at most 12 dB), split with a linear-phase FIR, 1 ms latency |
+|     4 | AGC        | A constant level, whatever the distance | −18 dBFS RMS, gain −12…+30 dB, rises 6 dB/s, falls 30 dB/s, holds below −55 dBFS                                                                |
+|     5 | Compressor | Even loudness within words              | 3:1 above −24 dBFS, soft knee 6 dB, attack 5 ms, release 120 ms                                                                                 |
+|     6 | Limiter    | No clipping                             | −1 dBFS, 1 ms lookahead, release 50 ms                                                                                                          |
 
-The values are starting points, later adjustable as presets.
+The AGC comes before the compressor (the first draft had it the other way round): the compressor then sees a known level, so its threshold and make-up gain can be fixed relative to the AGC's target. The de-esser goes after the EQ, whose presence boost brings out the S sounds, and before the AGC: it detects the S sounds relative to the total energy, so it doesn't depend on the level. The values are the defaults, each one adjustable at runtime from the GNOME app; presets are to follow.
 
 **Level 2: ML restoration ("studio voice")**
 
@@ -134,9 +140,9 @@ A single Rust process as a PipeWire node. All stages run inside it, so the laten
   - The virtual microphone is a stream with `media.class = Audio/Source`, not `Audio/Source/Virtual`: WirePlumber never sets a format for the latter, so it gets no ports and no app can record from it (the same happens to `pw-loopback`'s virtual sources).
   - The quantum belongs to the whole graph: the default here is 1024 samples (21 ms), `node.latency = 480/48000` lowers it, but PipeWire rounds it down to a power of two (`clock.power-of-two-quantum`, true by default), so it runs at 256. With 256 the bridge needs at least 448 samples (9.3 ms) to turn the blocks into 480-sample frames, measured are 11.3 ms; with `clock.power-of-two-quantum = false` (a system-wide setting in `pipewire.conf.d`) it would be 0–10 ms, depending on the order of the callbacks. The process callback has to produce `buffer.requested()` samples (feature `v0_3_49`), not the buffer size, otherwise the buffer adds about 250 ms. A FIFO collects the samples into 480-sample frames; if the quantum doesn't fit 480, this adds up to one frame (10 ms) of latency.
   - The capture stream and the virtual microphone go into one `node.group`, like `module-loopback` does, so both run in the microphone's cycle; a virtual source has no clock of its own.
-- **Stages:** a common trait with name, latency and processing of one frame. Stages are interchangeable and optional.
+- **Stages:** a common trait with name, latency and processing of one frame. Stages are interchangeable and optional. Each can be switched off at runtime: its input, delayed by its latency, plays instead, crossfaded over one frame, so the total latency never changes; a switched off stage doesn't process and saves its CPU.
 - **Resampling 48 ↔ 16 kHz:** fixed filter with factor 3. Known, constant latency, no allocation in the audio path.
-- **Control:** a GNOME app (GTK4 with libadwaita via `gtk4-rs`/`libadwaita-rs`) as a separate process; the audio process keeps running when the window is closed. They talk over the D-Bus session bus (`zbus`), which also allows a command line (`busctl` or our own `voice-filter ctl`). Inside the audio process the settings are shared lock-free with the audio path.
+- **Control:** a GNOME app (GTK4 with libadwaita via `gtk4-rs`/`libadwaita-rs`, `voice-filter ui`) as a separate process; the audio process keeps running when the window is closed. They talk over the D-Bus session bus (`zbus`, name `net.b128.VoiceFilter.Daemon`), which also allows a command line (`busctl` or our own `voice-filter ctl`). Inside the audio process the settings are shared lock-free with the audio path.
 - **Test mode:** the same chain processes WAV files offline. This allows comparing models and settings and measuring real-time capability.
 
 ## Risks and open questions
@@ -153,7 +159,7 @@ The biggest risk is latency: all stages together must stay live.
 
 **Decided:**
 
-- Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that; at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms, a quantum of 480 up to another 11 ms (see PipeWire details).
+- Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that (the de-esser added 1 ms to the chain since); at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms, a quantum of 480 up to another 11 ms (see PipeWire details).
 - Echo cancellation: PipeWire module first, our own process as a TODO (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
 
@@ -170,9 +176,20 @@ The biggest risk is latency: all stages together must stay live.
 
 Four phases, each usable on its own. Each phase ends with a latency and listening test.
 
-1. **Base:** vendor `deep-filter-rt`, PipeWire node, DeepFilterNet3, offline mode for WAV tests, latency measurement per stage.
-2. **Voice:** DSP chain (high-pass, EQ, de-esser, compressor, AGC, limiter), presets, D-Bus interface and GNOME app; the attenuation limit of DeepFilterNet3 (`--atten-lim` so far) as one of the first runtime settings.
-3. **Echo:** integrate the echo-cancel module. Other voices (Hush with Full and Gate modes, or a personalized model) are postponed.
-4. **Restoration:** evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage.
+1. **Base** – done
+   - [x] vendor `deep-filter-rt`
+   - [x] PipeWire node with DeepFilterNet3
+   - [x] offline mode for WAV tests
+   - [x] latency measurement per stage
+2. **Voice** – in progress
+   - [x] high-pass, EQ, de-esser, AGC, compressor, limiter
+   - [ ] presets
+   - [x] D-Bus interface and GNOME app
+   - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
+3. **Echo**
+   - [ ] integrate the echo-cancel module
+   - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
+4. **Restoration**
+   - [ ] evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage
 
 After that: a package for Arch (AUR).
