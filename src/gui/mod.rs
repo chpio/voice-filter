@@ -2,6 +2,7 @@
 //! `voice-filter run` and its status, over its control interface on the session bus. A process of
 //! its own, so closing or crashing it never touches the audio.
 
+mod help;
 mod proxy;
 mod window;
 

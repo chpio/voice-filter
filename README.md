@@ -126,6 +126,8 @@ never interrupts the audio. In the app you can:
   or the frequency of the high-pass
 - watch the **latency**, the processing time per frame and dropouts
 
+The info button on a row explains what the stage, the setting or the status value means.
+
 ### Offline mode
 
 ```bash

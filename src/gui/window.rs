@@ -6,10 +6,11 @@ use ::adw::prelude::*;
 use ::gtk::glib;
 use ::zbus::proxy::CacheProperties;
 
+use super::help;
 use super::proxy::{Parameter, Status, VoiceFilterProxy};
 
 /// The stages the window shows: name in the chain and title; what they do is in the descriptions
-/// of their groups, so the rows stay short.
+/// of their groups and behind the info button of their row ([`help`]), so the rows stay short.
 const STAGES: [(&str, &str); 9] = [
     ("echo", "Echo Cancellation"),
     ("denoise", "Noise Suppression"),
@@ -111,6 +112,12 @@ struct Widgets {
 
 pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let row = |title: &str| adw::ActionRow::builder().title(title).build();
+    // a status row with an info button
+    let status_row = |title: &str, text: &str| {
+        let row = row(title);
+        row.add_suffix(&help::button(text));
+        row
+    };
     let widgets = Rc::new(Widgets {
         stack: gtk::Stack::new(),
         missing: adw::StatusPage::builder()
@@ -149,9 +156,9 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .title("Listen")
             .subtitle("Plays it on the default output, use headphones")
             .build(),
-        latency: row("Latency"),
-        processing: row("Processing Time"),
-        dropouts: row("Dropouts Since the Start"),
+        latency: status_row("Latency", help::LATENCY),
+        processing: status_row("Processing Time", help::PROCESSING),
+        dropouts: status_row("Dropouts Since the Start", help::DROPOUTS),
         updating: Cell::new(false),
         proxy: RefCell::new(None),
     });
@@ -378,6 +385,9 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
             // the echo cancellation expands to its output device, even without parameters
             let row = if params.is_empty() && *name != "echo" {
                 let row = adw::SwitchRow::builder().title(title).build();
+                if let Some(text) = help::stage(name) {
+                    row.add_suffix(&help::button(text));
+                }
                 let (weak, name) = (weak.clone(), *name);
                 row.connect_active_notify(move |row| send_enabled(&weak, name, row.is_active()));
                 StageRow::Switch(row)
@@ -386,12 +396,18 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                     .title(title)
                     .show_enable_switch(true)
                     .build();
+                if let Some(text) = help::stage(name) {
+                    row.add_suffix(&help::button(text));
+                }
                 let scales = params
                     .iter()
                     .map(|param| {
                         let scale = scale(&weak, param);
                         let param_row = adw::ActionRow::builder().title(&param.title).build();
                         param_row.add_suffix(&scale);
+                        if let Some(text) = help::param(name, &param.name) {
+                            param_row.add_suffix(&help::button(text));
+                        }
                         row.add_row(&param_row);
                         (param.name.clone(), scale)
                     })
