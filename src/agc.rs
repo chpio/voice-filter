@@ -6,11 +6,22 @@ use crate::{FRAME_LEN, SAMPLE_RATE};
 
 /// Automatic gain control: brings the speech to a constant level, whatever the microphone and the
 /// distance to it. It follows the level of the speech only, so it keeps its gain in the pauses
-/// instead of pulling up the remaining noise.
+/// instead of pulling up the remaining noise: a frame is speech if it's above the gate and
+/// [`SPEECH_ABOVE_FLOOR_DB`] above the noise floor, the quietest frame of the last 2 s, for at
+/// least [`MIN_SPEECH_FRAMES`] in a row. Steady noise such as mains hum sits at the floor, speech
+/// dips to it between syllables; keystrokes are shorter than syllables.
 pub struct Agc {
     /// The smoothed level of the speech, in dBFS (RMS).
     level_db: f32,
     gain_db: f32,
+    /// The quietest frame level of each block of [`FLOOR_BLOCK_FRAMES`], in dBFS; the oldest one is
+    /// overwritten by the next block. Infinite until a block had a frame.
+    floor_blocks: [f32; FLOOR_BLOCKS],
+    /// The block the current frame goes into, and the frames it has so far.
+    floor_block: usize,
+    floor_block_frames: usize,
+    /// The frames in a row that were loud enough for speech, up to [`MIN_SPEECH_FRAMES`].
+    loud_frames: usize,
     target: Param,
     max_gain: Param,
 }
@@ -23,6 +34,18 @@ pub const GATE_DB: f32 = -55.;
 /// The most it raises by default.
 pub const MAX_GAIN_DB: f32 = 30.;
 pub const MIN_GAIN_DB: f32 = -12.;
+/// A frame this far above the noise floor is speech, in dB. Steady noise varies by a few dB from
+/// frame to frame, speech is 20 dB and more above the floor.
+pub const SPEECH_ABOVE_FLOOR_DB: f32 = 10.;
+/// The frames in a row (80 ms) that have to be loud enough before they count as speech: a syllable
+/// lasts 100 ms and more, a keystroke 10 to 50 ms. Without it, the residue of typing raised the
+/// gain to its maximum within 20 s, and with it the hum the noise suppression left.
+pub const MIN_SPEECH_FRAMES: usize = 8;
+/// The noise floor is the lowest frame level of the last `FLOOR_BLOCKS` blocks of
+/// `FLOOR_BLOCK_FRAMES` frames, 2 s: longer than a syllable or word, so speech always dips to it,
+/// short enough that it follows when the noise gets louder.
+const FLOOR_BLOCKS: usize = 20;
+const FLOOR_BLOCK_FRAMES: usize = 10;
 /// The time constant of the measured level, in seconds.
 const LEVEL_TAU: f32 = 0.3;
 /// How fast the gain may rise and fall, in dB per second: slow up, so it doesn't pump, faster
@@ -38,6 +61,10 @@ impl Agc {
         Self {
             level_db: TARGET_DB,
             gain_db: 0.,
+            floor_blocks: [f32::INFINITY; FLOOR_BLOCKS],
+            floor_block: 0,
+            floor_block_frames: 0,
+            loud_frames: 0,
             target: Param::new(
                 "target",
                 "Target Level",
@@ -57,6 +84,26 @@ impl Agc {
     /// The current gain, in dB.
     pub fn gain_db(&self) -> f32 {
         self.gain_db
+    }
+
+    /// Adds the level of a frame to the noise floor and returns the floor.
+    fn noise_floor(&mut self, frame_db: f32) -> f32 {
+        let block = &mut self.floor_blocks[self.floor_block];
+        // a new block replaces the oldest one
+        *block = if self.floor_block_frames == 0 {
+            frame_db
+        } else {
+            block.min(frame_db)
+        };
+        self.floor_block_frames += 1;
+        if self.floor_block_frames == FLOOR_BLOCK_FRAMES {
+            self.floor_block_frames = 0;
+            self.floor_block = (self.floor_block + 1) % FLOOR_BLOCKS;
+        }
+        self.floor_blocks
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min)
     }
 }
 
@@ -82,7 +129,14 @@ impl Stage for Agc {
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let power = frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
         let frame_db = 10. * (power + 1e-12).log10();
-        if frame_db > GATE_DB {
+        let floor_db = self.noise_floor(frame_db);
+        let loud = frame_db > GATE_DB && frame_db > floor_db + SPEECH_ABOVE_FLOOR_DB;
+        self.loud_frames = if loud {
+            (self.loud_frames + 1).min(MIN_SPEECH_FRAMES)
+        } else {
+            0
+        };
+        if self.loud_frames == MIN_SPEECH_FRAMES {
             let alpha = 1. - (-FRAME_S / LEVEL_TAU).exp();
             self.level_db += (frame_db - self.level_db) * alpha;
         }

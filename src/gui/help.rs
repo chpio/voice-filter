@@ -36,7 +36,8 @@ const STAGES: [(&str, &str); 9] = [
         "agc",
         "Brings the voice to a constant level, whether you speak softly or loudly, close to the \
          microphone or farther away. It adjusts over seconds (up by at most 6 dB per second, \
-         down faster) and keeps the gain in speech pauses, so it doesn't raise the noise there.",
+         down faster) and keeps the gain in speech pauses in steady noise such as hum and \
+         while you type, so it doesn't raise them.",
     ),
     (
         "compressor",
