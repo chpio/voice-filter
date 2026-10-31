@@ -41,10 +41,10 @@ There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates
 
 **DeepFilterNet3 vendored as `deep-filter-rt`:** the Rust crate of DeepFilterNet (`deep_filter`, folder `libDF`) is only usable from git: the last release on crates.io (0.2.5, July 2022) has neither DeepFilterNet3 nor the real-time inference, and the upstream repo has been dormant since September 2024. crates.io doesn't accept packages with git dependencies, so voice-filter couldn't be published that way. Instead we vendor it as the workspace crate `crates/deep-filter-rt` and publish it ourselves:
 
-- Filtered with `git filter-repo` to `libDF`, the licenses (MIT/Apache) and the DeepFilterNet3 model, moved to `crates/deep-filter-rt` and merged into this repo, so the history of these files stays with authors and dates; the Python training, demo, LADSPA plugin and other models are dropped. A separate repo has no advantage after filtering: the rewritten commits can't be merged with upstream anyway, and in the workspace a change of its API and the caller go into one commit. It can still be split off later the same way.
-- The model is a plain git object, not Git LFS: it's a single file that hardly ever changes, and LFS would break builds from clones without git-lfs (`include_bytes!` would embed the pointer file) and every mirror would need LFS.
+- Copied without its history from upstream commit `d375b2d` (2024-10-17): `libDF` and the DeepFilterNet3 model, into `crates/deep-filter-rt`; its `NOTICE.md` names the origin. The upstream history stays available on GitHub; taking it over would have brought about 470 foreign, unsigned commits without conventional commit prefixes and an older model version (8 MB) into this repo, while the code gets reworked heavily anyway. In the workspace a change of its API and the caller go into one commit; it can still be split off into a repo of its own later.
+- The model is stored unpacked in `models/DeepFilterNet3/` (three ONNX files and `config.ini`) instead of upstream's `DeepFilterNet3_onnx.tar.gz`: the weights barely compress (gzip saves 7 %, zstd, xz or brotli at most 1 % more), git and crates.io compress anyway, `config.ini` stays readable in diffs and the crates for unpacking the archive can go. Not in Git LFS: the files hardly ever change, and LFS would break builds from clones without git-lfs (`include_bytes!` would embed the pointer files) and every mirror would need LFS.
 - Reduced to the inference: core, `tract` inference, transforms (about 90 KB of code). The training and dataset code goes, the dependencies (`tract` above all) get updated.
-- The model (`DeepFilterNet3_onnx.tar.gz`, 8 MB) stays embedded and fits the 10 MB limit of crates.io. The low-latency variant (36 MB) doesn't; if we need it, it has to be loaded at runtime.
+- The model (8.6 MB) stays embedded and fits the 10 MB limit of crates.io. The low-latency variant (36 MB) doesn't; if we need it, it has to be loaded at runtime (or shrunk, see the open questions).
 
 ## Echo cancellation
 
@@ -142,6 +142,7 @@ The biggest risk is latency: all stages together must stay live.
 - [ ] Presets for voice enhancement (e.g. "Call", "Stream", "Podcast")?
 - [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
+- [ ] Can the weights be stored as fp16 or quantized to int8 (about half or a quarter of the size) without audible loss, and does `tract` support it for all operators?
 
 ## Roadmap
 
