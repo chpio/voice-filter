@@ -122,7 +122,9 @@ never interrupts the audio. In the app you can:
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
   there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the
   delay of their echo
-- turn on **Listen** to hear yourself through the filter on the default output (use headphones)
+- turn on **Listen** to hear yourself through the filter on the default output (use headphones),
+  at a volume of its own; **Keep Listening** turns it on again after a restart, e.g. to keep
+  listening quietly (the microphone stays in use then)
 - switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
   suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
   or the frequency of the high-pass; a stage's settings go back to their defaults with its
@@ -161,6 +163,8 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                                                           |
 | `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output                                              |
 | `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                                                            |
+| `KeepListen`      | `b`, read/write      | keeps `Listen` for the next runs (off by default)                                                                   |
+| `ListenVolume`    | `d`, read/write      | the volume of `Listen` in dB, −40 to 0, kept for the next runs                                                      |
 | `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name, kept for the next runs                                                          |
 | `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value                                              |
 | `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range, kept for the next runs                            |

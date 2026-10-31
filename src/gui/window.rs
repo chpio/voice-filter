@@ -113,7 +113,10 @@ struct Widgets {
     echo_status: adw::ActionRow,
     /// The frame counters of the echo cancellation at the last poll, to see whether they move.
     echo_frames: Cell<(f64, f64)>,
-    listen: adw::SwitchRow,
+    /// Its switch switches listening, it expands to its volume and whether it's kept.
+    listen: adw::ExpanderRow,
+    listen_volume: gtk::Scale,
+    keep_listen: adw::SwitchRow,
     /// The meters of the microphone (its noise floor in the subtitle) and of the output.
     input_level: (adw::ActionRow, gtk::LevelBar),
     output_level: (adw::ActionRow, gtk::LevelBar),
@@ -174,9 +177,18 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         output_names: RefCell::new(Vec::new()),
         echo_status: row("Status"),
         echo_frames: Cell::new((0., 0.)),
-        listen: adw::SwitchRow::builder()
+        listen: adw::ExpanderRow::builder()
             .title("Listen")
             .subtitle("Plays it on the default output, use headphones")
+            .show_enable_switch(true)
+            .build(),
+        listen_volume: slider(&listen_volume()),
+        keep_listen: adw::SwitchRow::builder()
+            .title("Keep Listening")
+            .subtitle(
+                "Listens again after a restart. The microphone stays in use and the filter runs \
+                 all the time.",
+            )
             .build(),
         input_level: meter_row("Microphone", help::INPUT_LEVEL),
         output_level: meter_row("Voice Filter", help::OUTPUT_LEVEL),
@@ -199,6 +211,10 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         }
         group
     };
+    let volume_row = adw::ActionRow::builder().title("Volume").build();
+    volume_row.add_suffix(&widgets.listen_volume);
+    widgets.listen.add_row(&volume_row);
+    widgets.listen.add_row(&widgets.keep_listen);
     let page = adw::PreferencesPage::new();
     page.add(&group(
         "Input",
@@ -324,14 +340,38 @@ fn show_levels(widgets: &Widgets, status: &Status) {
 /// Sends what the user changes to the filter.
 fn connect_controls(widgets: &Rc<Widgets>) {
     let weak = Rc::downgrade(widgets);
-    widgets.listen.connect_active_notify(move |row| {
+    widgets.listen.connect_enable_expansion_notify(move |row| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
-        let on = row.is_active();
+        let on = row.enables_expansion();
         glib::spawn_future_local(async move {
             if let Err(err) = proxy.set_listen(on).await {
                 eprintln!("Could not switch listening: {err}");
+            }
+        });
+    });
+    let weak = Rc::downgrade(widgets);
+    widgets.listen_volume.connect_value_changed(move |scale| {
+        let Some(proxy) = sendable(&weak) else {
+            return;
+        };
+        let db = scale.value();
+        glib::spawn_future_local(async move {
+            if let Err(err) = proxy.set_listen_volume(db).await {
+                eprintln!("Could not set the volume of listening: {err}");
+            }
+        });
+    });
+    let weak = Rc::downgrade(widgets);
+    widgets.keep_listen.connect_active_notify(move |row| {
+        let Some(proxy) = sendable(&weak) else {
+            return;
+        };
+        let keep = row.is_active();
+        glib::spawn_future_local(async move {
+            if let Err(err) = proxy.set_keep_listen(keep).await {
+                eprintln!("Could not keep listening: {err}");
             }
         });
     });
@@ -477,8 +517,24 @@ fn format_value(value: f64, digits: u32, unit: &str) -> String {
     format!("{value:.digits$}{space}{unit}")
 }
 
-/// The slider of a parameter, the default marked, sending what the user sets.
-fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
+/// The volume of Listen as a parameter for [`slider`], as the daemon has it.
+fn listen_volume() -> Parameter {
+    let param = crate::volume::param();
+    Parameter {
+        stage: "listen".to_owned(),
+        name: param.name.to_owned(),
+        title: param.title.to_owned(),
+        unit: param.unit.to_owned(),
+        min: param.min as f64,
+        max: param.max as f64,
+        step: param.step as f64,
+        default: param.default as f64,
+        value: param.get() as f64,
+    }
+}
+
+/// The slider of a parameter, the default marked.
+fn slider(param: &Parameter) -> gtk::Scale {
     let scale = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
         param.min,
@@ -496,6 +552,12 @@ fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
     scale.set_hexpand(true);
     scale.set_valign(gtk::Align::Center);
     scale.set_value(param.value);
+    scale
+}
+
+/// The slider of a parameter of a stage, sending what the user sets.
+fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
+    let scale = slider(param);
     let (stage, name) = (param.stage.clone(), param.name.clone());
     let weak = widgets.clone();
     scale.connect_value_changed(move |scale| {
@@ -776,7 +838,12 @@ fn show(widgets: &Widgets, status: &Status) {
     show_devices(widgets, Device::Output, status);
     show_echo(widgets, status);
     show_levels(widgets, status);
-    widgets.listen.set_active(status.listen);
+    widgets.listen.set_enable_expansion(status.listen);
+    widgets.keep_listen.set_active(status.keep_listen);
+    let volume = &widgets.listen_volume;
+    if (volume.value() - status.listen_volume).abs() >= 0.5 && !volume.has_focus() {
+        volume.set_value(status.listen_volume);
+    }
     widgets.updating.set(false);
 
     let ms = |part: &str| status.latency.get(part).copied().unwrap_or_default();

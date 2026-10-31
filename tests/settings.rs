@@ -120,3 +120,26 @@ fn skips_what_doesnt_fit_the_chain() {
     assert_eq!(params[1].1.get(), -18.);
     assert_eq!(params[2].1.get(), 20.);
 }
+
+#[test]
+fn keeps_listen_and_its_volume() {
+    let dir = ::tempfile::tempdir().unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), None);
+    // forgetting what isn't kept is fine
+    settings::save_listen(dir.path(), None).unwrap();
+    settings::save_listen(dir.path(), Some(true)).unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), Some(true));
+    settings::save_listen(dir.path(), Some(false)).unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), Some(false));
+    settings::save_listen(dir.path(), None).unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), None);
+
+    assert_eq!(settings::load_listen_volume(dir.path()).unwrap(), None);
+    settings::save_listen_volume(dir.path(), -12.5).unwrap();
+    assert_eq!(
+        settings::load_listen_volume(dir.path()).unwrap(),
+        Some(-12.5)
+    );
+    ::std::fs::write(dir.path().join("listen-volume"), "loud\n").unwrap();
+    assert!(settings::load_listen_volume(dir.path()).is_err());
+}

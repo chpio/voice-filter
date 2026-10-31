@@ -25,6 +25,7 @@ pub mod offline;
 pub mod param;
 pub mod settings;
 pub mod stage;
+pub mod volume;
 
 /// The sample rate of the whole chain.
 pub const SAMPLE_RATE: u32 = 48000;

@@ -56,12 +56,25 @@ pub struct Service {
     pub send: Box<dyn Fn(Control) -> Result<()> + Send + Sync>,
     /// Whether the output is played on the default output, see [`Control::SetListen`].
     pub listening: bool,
+    /// Whether `listening` is kept for the next runs.
+    pub keep_listen: bool,
+    /// The volume of Listen, in dB, see [`crate::volume`].
+    pub listen_volume: Param,
     /// Where a chosen microphone and output device, the stages switched on or off and the
     /// parameters are kept for the next runs.
     pub settings_dir: Option<PathBuf>,
 }
 
 impl Service {
+    /// Keeps whether Listen is on, if [`Self::keep_listen`], or forgets it.
+    fn save_listen(&self) -> fdo::Result<()> {
+        let Some(dir) = &self.settings_dir else {
+            return Ok(());
+        };
+        settings::save_listen(dir, self.keep_listen.then_some(self.listening))
+            .map_err(|err| fdo::Error::Failed(format!("{err:#}")))
+    }
+
     /// Keeps the stages and parameters as they are now for the next runs.
     fn save_chain(&self) -> fdo::Result<()> {
         let Some(dir) = &self.settings_dir else {
@@ -138,7 +151,7 @@ impl Service {
 
     /// Whether what "Voice Filter" outputs is played on the default output, to hear the filter
     /// while tuning it; with headphones, speakers feed back into the microphone. It's off at the
-    /// start.
+    /// start, unless [`Self::keep_listen`] kept it on.
     #[zbus(property)]
     pub fn listen(&self) -> bool {
         self.listening
@@ -148,6 +161,40 @@ impl Service {
     pub fn set_listen(&mut self, on: bool) -> fdo::Result<()> {
         (self.send)(Control::SetListen(on)).map_err(|err| fdo::Error::Failed(err.to_string()))?;
         self.listening = on;
+        if self.keep_listen {
+            self.save_listen()?;
+        }
+        Ok(())
+    }
+
+    /// Whether [`Self::listen`] is kept for the next runs. Off by default: while listening, the
+    /// filter runs and the microphone is in use all the time.
+    #[zbus(property)]
+    pub fn keep_listen(&self) -> bool {
+        self.keep_listen
+    }
+
+    #[zbus(property)]
+    pub fn set_keep_listen(&mut self, keep: bool) -> fdo::Result<()> {
+        self.keep_listen = keep;
+        self.save_listen()
+    }
+
+    /// The volume of Listen in dB, −40 to 0. Kept for the next runs.
+    #[zbus(property)]
+    pub fn listen_volume(&self) -> f64 {
+        self.listen_volume.get() as f64
+    }
+
+    #[zbus(property)]
+    pub fn set_listen_volume(&mut self, db: f64) -> fdo::Result<()> {
+        self.listen_volume
+            .set(db as f32)
+            .map_err(|err| fdo::Error::InvalidArgs(err.to_string()))?;
+        if let Some(dir) = &self.settings_dir {
+            settings::save_listen_volume(dir, db as f32)
+                .map_err(|err| fdo::Error::Failed(format!("{err:#}")))?;
+        }
         Ok(())
     }
 

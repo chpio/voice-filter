@@ -21,6 +21,14 @@ pub trait VoiceFilter {
     fn listen(&self) -> ::zbus::Result<bool>;
     #[zbus(property)]
     fn set_listen(&self, on: bool) -> ::zbus::Result<()>;
+    #[zbus(property)]
+    fn keep_listen(&self) -> ::zbus::Result<bool>;
+    #[zbus(property)]
+    fn set_keep_listen(&self, keep: bool) -> ::zbus::Result<()>;
+    #[zbus(property)]
+    fn listen_volume(&self) -> ::zbus::Result<f64>;
+    #[zbus(property)]
+    fn set_listen_volume(&self, db: f64) -> ::zbus::Result<()>;
 
     #[zbus(property)]
     fn stages(&self) -> ::zbus::Result<Vec<(String, bool)>>;
@@ -87,6 +95,9 @@ impl From<ParameterTuple> for Parameter {
 /// Everything the window shows, read in one go.
 pub struct Status {
     pub listen: bool,
+    pub keep_listen: bool,
+    /// In dB.
+    pub listen_volume: f64,
     pub stages: Vec<(String, bool)>,
     /// In the order of the chain.
     pub parameters: Vec<Parameter>,
@@ -110,6 +121,8 @@ impl VoiceFilterProxy<'_> {
     pub async fn status(&self) -> ::zbus::Result<Status> {
         Ok(Status {
             listen: self.listen().await?,
+            keep_listen: self.keep_listen().await?,
+            listen_volume: self.listen_volume().await?,
             stages: self.stages().await?,
             parameters: self
                 .parameters()

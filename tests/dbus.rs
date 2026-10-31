@@ -57,6 +57,8 @@ fn service_with(
             Ok(())
         }),
         listening: false,
+        keep_listen: false,
+        listen_volume: ::voice_filter::volume::param(),
         settings_dir,
     }
 }
@@ -269,4 +271,47 @@ fn reports_the_levels() {
     assert_eq!(levels["input"], -40.);
     assert_eq!(levels["output"], -18.);
     assert_eq!(levels["input-floor"], -62.5);
+}
+
+#[test]
+fn keeps_listen_only_when_asked_to() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let sent = Arc::<Mutex<Vec<Control>>>::default();
+    let mut service = service_with(sent.clone(), Some(dir.path().to_owned()));
+    service.set_listen(true).unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), None);
+
+    // keeping it saves the current state, and every change after
+    service.set_keep_listen(true).unwrap();
+    assert!(service.keep_listen());
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), Some(true));
+    service.set_listen(false).unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), Some(false));
+
+    // not keeping it forgets it
+    service.set_listen(true).unwrap();
+    service.set_keep_listen(false).unwrap();
+    assert_eq!(settings::load_listen(dir.path()).unwrap(), None);
+    assert!(service.listen());
+}
+
+#[test]
+fn sets_and_keeps_the_volume_of_listen() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let mut service = service_with(Arc::default(), Some(dir.path().to_owned()));
+    assert_eq!(service.listen_volume(), 0.);
+    service.set_listen_volume(-20.).unwrap();
+    assert_eq!(service.listen_volume(), -20.);
+    assert_eq!(
+        settings::load_listen_volume(dir.path()).unwrap(),
+        Some(-20.)
+    );
+    // out of range: refused, nothing changes
+    assert!(service.set_listen_volume(-50.).is_err());
+    assert!(service.set_listen_volume(3.).is_err());
+    assert_eq!(service.listen_volume(), -20.);
+    assert_eq!(
+        settings::load_listen_volume(dir.path()).unwrap(),
+        Some(-20.)
+    );
 }

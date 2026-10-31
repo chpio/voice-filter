@@ -23,6 +23,9 @@ use crate::bridge::{Capture, Playback, Stats, bridge};
 use crate::chain::Chain;
 use crate::dbus::{self, Control, Service};
 use crate::echo::Reference;
+use crate::param::Param;
+use crate::settings;
+use crate::volume::{self, Volume};
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
 const NODE_NAME: &str = "voice-filter";
@@ -47,7 +50,9 @@ pub struct Devices<'a> {
 }
 
 /// Runs until SIGINT or SIGTERM. `reference` feeds the echo canceller of the chain with what the
-/// output device plays. The control interface keeps the devices chosen there in `settings_dir`.
+/// output device plays. The control interface keeps the devices chosen there in `settings_dir`,
+/// and Listen: its volume, and whether it was on if the user chose to keep that, which starts it
+/// again here.
 pub fn run(
     chain: Chain,
     mut reference: Reference,
@@ -66,6 +71,21 @@ pub fn run(
         output: output_device,
     } = devices;
     let (commands, command_receiver) = pw::channel::channel();
+    let listen_volume = volume::param();
+    let mut keep_listen = None;
+    if let Some(dir) = &settings_dir {
+        match settings::load_listen_volume(dir) {
+            Ok(Some(db)) => {
+                if let Err(err) = listen_volume.set(db) {
+                    eprintln!("Skipped the saved volume of Listen: {err}");
+                }
+            }
+            Ok(None) => {}
+            Err(err) => eprintln!("Skipped the saved volume of Listen: {err:#}"),
+        }
+        keep_listen = settings::load_listen(dir)?;
+    }
+    let listen_on = keep_listen == Some(true);
     // first, so a second instance stops before it creates nodes
     dbus::serve(Service {
         switches,
@@ -82,7 +102,9 @@ pub fn run(
                 .send(control)
                 .map_err(|_| anyhow!("the PipeWire loop is gone"))
         }),
-        listening: false,
+        listening: listen_on,
+        keep_listen: keep_listen.is_some(),
+        listen_volume: listen_volume.clone(),
         settings_dir,
     })?;
 
@@ -196,11 +218,24 @@ pub fn run(
         [input.clone(), reference_stream.clone()],
     );
 
+    let listening = Rc::new(RefCell::new(None));
+    let start_listening = {
+        let (core, listening) = (core.clone(), listening.clone());
+        move || {
+            if listening.borrow().is_some() {
+                return;
+            }
+            match Listen::start(&core, listen_volume.clone()) {
+                Ok(listen) => drop(listening.replace(Some(listen))),
+                Err(err) => eprintln!("Could not start listening: {err}"),
+            }
+        }
+    };
     let _commands = command_receiver.attach(mainloop.loop_(), {
         let input = input.clone();
         let reference_stream = reference_stream.clone();
-        let core = core.clone();
-        let listening = RefCell::new(None);
+        let listening = listening.clone();
+        let start_listening = start_listening.clone();
         move |control| match control {
             Control::SetInput(name) => {
                 if let Err(err) = set_target(&input, &name) {
@@ -213,13 +248,7 @@ pub fn run(
                 }
             }
             Control::SetListen(false) => drop(listening.take()),
-            Control::SetListen(true) if listening.borrow().is_none() => {
-                match Listen::start(&core) {
-                    Ok(listen) => drop(listening.replace(Some(listen))),
-                    Err(err) => eprintln!("Could not start listening: {err}"),
-                }
-            }
-            Control::SetListen(true) => {}
+            Control::SetListen(true) => start_listening(),
         }
     });
 
@@ -230,6 +259,10 @@ pub fn run(
         StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
         &mut [Pod::from_bytes(&format).unwrap()],
     )?;
+    // after "Voice Filter" exists, though Listen never falls back to another source anyway
+    if listen_on {
+        start_listening();
+    }
 
     let quit = |mainloop: &pw::main_loop::MainLoopRc| {
         let mainloop = mainloop.clone();
@@ -257,8 +290,9 @@ const LISTEN_NODE_NAME: &str = "voice-filter-listen";
 const LISTEN_GROUP: &str = "voice-filter-listen";
 
 /// Plays what "Voice Filter" outputs on the default output while it lives: a capture stream from
-/// it and a playback stream, with a bridge without stages between them. As it records from "Voice
-/// Filter" like an app, the filter runs while listening even if no app records.
+/// it and a playback stream, with a bridge between them whose only stage is the [`Volume`]. As it
+/// records from "Voice Filter" like an app, the filter runs while listening even if no app
+/// records.
 struct Listen {
     _capture: StreamRc,
     _playback: StreamRc,
@@ -267,8 +301,9 @@ struct Listen {
 }
 
 impl Listen {
-    fn start(core: &pw::core::CoreRc) -> Result<Self> {
-        let (mut capture, mut playback, _) = bridge(Chain::new(vec![]));
+    fn start(core: &pw::core::CoreRc, volume: Param) -> Result<Self> {
+        let (mut capture, mut playback, _) =
+            bridge(Chain::new(vec![Box::new(Volume::new(volume))]));
         let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
         let capture_stream = StreamRc::new(
             core.clone(),
@@ -279,6 +314,9 @@ impl Listen {
                 *pw::keys::NODE_NAME => LISTEN_NODE_NAME,
                 *pw::keys::NODE_DESCRIPTION => "Voice Filter (listening)",
                 *pw::keys::TARGET_OBJECT => NODE_NAME,
+                // without "Voice Filter" WirePlumber would link the default source, i.e. play
+                // the unfiltered microphone
+                "node.dont-fallback" => "true",
                 *pw::keys::NODE_LATENCY => latency.as_str(),
                 *pw::keys::NODE_GROUP => LISTEN_GROUP,
                 *pw::keys::NODE_LINK_GROUP => LISTEN_GROUP,

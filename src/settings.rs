@@ -24,6 +24,8 @@ pub fn dir() -> Option<PathBuf> {
 const INPUT: &str = "input";
 const OUTPUT: &str = "output";
 const CHAIN: &str = "chain";
+const LISTEN: &str = "listen";
+const LISTEN_VOLUME: &str = "listen-volume";
 
 /// The microphone chosen last, the `node.name` of a PipeWire source.
 pub fn load_input(dir: &Path) -> Result<Option<String>> {
@@ -42,6 +44,34 @@ pub fn load_output(dir: &Path) -> Result<Option<String>> {
 
 pub fn save_output(dir: &Path, name: &str) -> Result<()> {
     save(dir, OUTPUT, name)
+}
+
+/// Whether Listen is kept for the next runs, and if so whether it was on: `None` if it isn't.
+pub fn load_listen(dir: &Path) -> Result<Option<bool>> {
+    Ok(load(dir, LISTEN)?.map(|listen| listen == "on"))
+}
+
+/// Keeps whether Listen is on for the next runs, or with `None` forgets it, so it starts off.
+pub fn save_listen(dir: &Path, on: Option<bool>) -> Result<()> {
+    match on {
+        Some(on) => save(dir, LISTEN, if on { "on" } else { "off" }),
+        None => remove(dir, LISTEN),
+    }
+}
+
+/// The volume of Listen chosen last, in dB.
+pub fn load_listen_volume(dir: &Path) -> Result<Option<f32>> {
+    load(dir, LISTEN_VOLUME)?
+        .map(|volume| {
+            volume
+                .parse()
+                .with_context(|| format!("{volume} isn't a number"))
+        })
+        .transpose()
+}
+
+pub fn save_listen_volume(dir: &Path, db: f32) -> Result<()> {
+    save(dir, LISTEN_VOLUME, &db.to_string())
 }
 
 /// Keeps what differs from the defaults: the stages switched off (`denoise off`) and the
@@ -130,6 +160,16 @@ fn load(dir: &Path, name: &str) -> Result<Option<String>> {
         Ok(name) => Ok(Some(name.trim().to_owned()).filter(|name| !name.is_empty())),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).with_context(|| format!("Could not read {}", path.display())),
+    }
+}
+
+fn remove(dir: &Path, name: &str) -> Result<()> {
+    let path = dir.join(name);
+    match fs::remove_file(&path) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => {
+            Err(err).with_context(|| format!("Could not remove {}", path.display()))
+        }
+        _ => Ok(()),
     }
 }
 
