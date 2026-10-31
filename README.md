@@ -27,18 +27,20 @@ microphone given with `--input` is kept for the next runs; without one so far, i
 input, which doesn't work once "Voice Filter" is the default itself. The microphone is only in use
 while an app records from "Voice Filter".
 
-While it runs, it can be controlled over D-Bus, e.g. with `busctl`:
+While it runs, the GNOME app (`voice-filter-gtk`) switches its stages, sets the attenuation limit
+and shows its latency. Or over D-Bus, e.g. with `busctl`:
 
 ```bash
-busctl --user introspect net.b128.VoiceFilter /net/b128/VoiceFilter net.b128.VoiceFilter1
-busctl --user set-property net.b128.VoiceFilter /net/b128/VoiceFilter net.b128.VoiceFilter1 AttenuationLimit d 12
-busctl --user call net.b128.VoiceFilter /net/b128/VoiceFilter net.b128.VoiceFilter1 SetStageEnabled sb agc false
+busctl --user introspect net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1
+busctl --user set-property net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 AttenuationLimit d 12
+busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetStageEnabled sb agc false
 ```
 
 ## Building
 
 Needs Rust, the PipeWire development files (`pipewire` on Arch, `libpipewire-0.3-dev` on
-Debian/Ubuntu) and clang.
+Debian/Ubuntu), clang, and for the GNOME app GTK 4 and libadwaita (`gtk4` and `libadwaita` on Arch,
+`libgtk-4-dev` and `libadwaita-1-dev` on Debian/Ubuntu).
 
 ```bash
 cargo build --release

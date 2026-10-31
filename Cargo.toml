@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/deep-filter-rt"]
+members = ["crates/deep-filter-rt", "crates/voice-filter-gtk"]
 
 [workspace.package]
 edition = "2024"

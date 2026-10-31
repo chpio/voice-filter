@@ -22,6 +22,11 @@ semver_check = false
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
+# the GNOME app, shipped with the package of voice-filter, not released on its own
+[[package]]
+name = "voice-filter-gtk"
+release = false
+
 # its tags and releases keep the default deep-filter-rt-vX.Y.Z, its API is public and gets the semver
 # check against the last release
 [[package]]

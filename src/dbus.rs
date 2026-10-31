@@ -16,7 +16,8 @@ use crate::denoise::UNLIMITED;
 
 /// The well-known name; only one process can own it, so it also keeps a second instance from
 /// running.
-pub const NAME: &str = "net.b128.VoiceFilter";
+/// It isn't `net.b128.VoiceFilter`: that's the ID of the GNOME app, which owns its ID as a bus name.
+pub const NAME: &str = "net.b128.VoiceFilter.Daemon";
 pub const PATH: &str = "/net/b128/VoiceFilter";
 
 pub struct Service {
