@@ -21,7 +21,7 @@ A live voice filter for Linux that shows up in PipeWire as a virtual microphone.
 The signal passes through all stages in a fixed order. Echo comes first, because otherwise the other stages treat the echo as speech.
 
 1. **Microphone** – hardware input, 48 kHz mono
-2. **Remove echo** – WebRTC AEC3 via the PipeWire module (see [Echo cancellation](#echo-cancellation))
+2. **Remove echo** – WebRTC AEC3 in our own process, with the speakers' monitor as the reference (see [Echo cancellation](#echo-cancellation))
 3. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter)
 4. **Suppress other voices** (optional, postponed) – Hush, modes Off · Full · Gate, about 11 ms more
 5. **Enhance the voice** – high-pass, EQ, de-esser, AGC, compressor, limiter
@@ -54,9 +54,16 @@ There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates
 
 Echo cancellation needs the signal the speakers are playing as a reference: an adaptive filter learns how the room changes the sound on its way from the speakers to the microphone, predicts the echo from the reference and subtracts it; a second step suppresses the residual echo. With headphones there's no echo, the stage can stay off.
 
-We start with PipeWire's `libpipewire-module-echo-cancel` (WebRTC AEC3). It creates a sink, through which the playback goes and which gives it the reference (or, with `monitor.mode`, it listens to the default sink's monitor), and a source with the echo-cancelled microphone, which voice-filter reads instead of the microphone. Its own noise suppression and gain control must be off, so they don't interfere with DeepFilterNet3.
+**Planned: in our own process.** Besides the microphone, voice-filter records the monitor of an output device, chosen in the app like the microphone (the default output by default), as the reference, and runs AEC3 as the first stage of the chain. It works on 10 ms frames at 48 kHz, our frames. Against PipeWire's `libpipewire-module-echo-cancel` (the same WebRTC AEC3): the speakers are chosen in the app and switched at runtime, nothing to configure and no playback to reroute (the module either creates a sink the playback has to go through, or with `monitor.mode` listens to the default output only, and changing it means editing its config and restarting PipeWire), no extra nodes with their own buffers, and the stage switches, has parameters and status like the others. The cost is more code (a second capture stream with a bridge into the audio path, the choice of the output) and the clocks of microphone and speakers, which drift against each other (AEC3 keeps estimating the delay; to be measured live).
 
-- [ ] TODO: evaluate echo cancellation in our own process (monitor of the output device plus microphone, WebRTC AEC3 through a Rust binding): one node less in the graph and full control over latency and order, but more code. Decide after measuring the module's latency in phase 3.
+AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause), a pure Rust port of WebRTC's audio processing (M145 plus later fixes, passes the C++ test suite), so no C++ library: only its echo canceller, its noise suppression and AGC2 stay off. The alternatives: [webrtc-audio-processing](https://github.com/tonarino/webrtc-audio-processing) wraps the C++ library (system package or built with meson); [aec3-rs](https://github.com/RubyBit/aec3-rs) is a less verified port with an API still changing; [DTLN-aec](https://github.com/breizhn/DTLN-aec) is a neural model at 16 kHz.
+
+**Spike** (2026-10-31, sonora 0.2.0, AEC3 only, a recording of the USB microphone and of the speakers' monitor, playback for 24 s with the speaker talking into it from 7 s, then the speaker alone):
+
+- Echo alone: 28–34 dB removed. The speaker alone, without playback: unchanged.
+- Talking into the playback: the level of the output no longer follows the playback (correlation 0.04, the microphone 0.37). But DeepFilterNet3 alone did as well in this recording (0.00); in an earlier test it let speech from a phone through, so a test with only speech played back is still to do.
+- 60 µs per frame on average, at most 0.6 ms; flushing denormals changed nothing here. About 40 allocations per frame, which have to go first (see `TODO.md`).
+- AGC2 against our AGC, compressor and limiter, on another recording: 6 dB quieter with its defaults, the same spread between quiet and loud speech, pauses 5 dB further below the speech, peaks up to 0 dBFS. Not better enough to give up our adjustable chain; the expander would bring the quieter pauses.
 
 ## Suppressing other voices
 
@@ -187,7 +194,8 @@ Four phases, each usable on its own. Each phase ends with a latency and listenin
    - [x] D-Bus interface and GNOME app
    - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
 3. **Echo**
-   - [ ] integrate the echo-cancel module
+   - [x] spike: AEC3 from sonora on a recording (see [Echo cancellation](#echo-cancellation))
+   - [ ] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app
    - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
 4. **Restoration**
    - [ ] evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage

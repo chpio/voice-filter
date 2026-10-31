@@ -14,8 +14,9 @@ your voice with the background noise removed and a clearer, even tone.
 - **Test offline** with WAV files: the same chain, with the latency and processing time of every
   stage
 
-> **Status:** early and not released yet. Noise suppression and voice enhancement work. Echo
-> cancellation and presets are next, see the [roadmap](docs/concept.md#roadmap).
+> **Status:** early and not released yet. Noise suppression and voice enhancement work. Next are
+> echo cancellation, for calls over speakers (WebRTC's AEC3 in the same process, with the speakers
+> chosen in the app), and presets, see the [roadmap](docs/concept.md#roadmap).
 
 ## How it works
 
@@ -33,7 +34,7 @@ plays the result into the virtual microphone:
 | `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)       | `low-mid`, `presence`, `presence-freq` |       – |
 | `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates | `freq`, `threshold`                    |    1 ms |
 | `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses      | `target`, `max-gain`                   |       – |
-| `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                 | `threshold`, `ratio`, `target`         |       – |
+| `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                 | `threshold`, `ratio`                   |       – |
 | `limiter`    | Keeps the peaks below −1 dBFS                                            | `ceiling`, `release`                   |    1 ms |
 
 The values above are the defaults. The settings change them while it runs, but aren't kept for
