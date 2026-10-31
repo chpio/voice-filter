@@ -3,7 +3,7 @@ use ::std::rc::Rc;
 use ::std::time::Duration;
 
 use ::adw::prelude::*;
-use ::gtk::glib;
+use ::gtk::{gio, glib};
 use ::zbus::proxy::CacheProperties;
 
 use super::help;
@@ -72,6 +72,8 @@ enum StageRow {
         row: adw::ExpanderRow,
         /// Parameter name and its scale.
         scales: Vec<(String, gtk::Scale)>,
+        /// Sets the parameters to their defaults, if it has any.
+        reset: Option<gtk::Button>,
     },
 }
 
@@ -126,6 +128,8 @@ struct Widgets {
     /// Set while the window shows values it read, so the handlers don't send them back.
     updating: Cell<bool>,
     proxy: RefCell<Option<VoiceFilterProxy<'static>>>,
+    /// Stage, name and default of every parameter, for resetting all of them.
+    defaults: RefCell<Vec<(String, String, f64)>>,
 }
 
 pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
@@ -184,6 +188,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         dropouts: status_row("Dropouts Since the Start", help::DROPOUTS),
         updating: Cell::new(false),
         proxy: RefCell::new(None),
+        defaults: RefCell::new(Vec::new()),
     });
 
     let group = |title: &str, description: Option<&str>, rows: &[&gtk::Widget]| {
@@ -225,7 +230,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     widgets.stack.set_visible_child_name("missing");
 
     let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&adw::HeaderBar::new());
+    let header = adw::HeaderBar::new();
+    toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&widgets.stack));
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -234,6 +240,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         .default_height(720)
         .content(&toolbar)
         .build();
+    header.pack_end(&main_menu(&widgets, &window));
 
     connect_controls(&widgets);
     glib::spawn_future_local(poll_levels(widgets.clone()));
@@ -374,6 +381,75 @@ fn connect_device(widgets: &Rc<Widgets>, device: Device) {
             }
         });
     });
+}
+
+/// Switches `stages` on and sets the parameters, given as stage, name and default, to their
+/// defaults; the window shows it with the next poll.
+fn reset(
+    widgets: &::std::rc::Weak<Widgets>,
+    stages: Vec<String>,
+    defaults: Vec<(String, String, f64)>,
+) {
+    let Some(proxy) = sendable(widgets) else {
+        return;
+    };
+    glib::spawn_future_local(async move {
+        for stage in stages {
+            if let Err(err) = proxy.set_stage_enabled(&stage, true).await {
+                eprintln!("Could not switch {stage} on: {err}");
+            }
+        }
+        for (stage, name, default) in defaults {
+            if let Err(err) = proxy.set_parameter(&stage, &name, default).await {
+                eprintln!("Could not reset {name} of {stage}: {err}");
+            }
+        }
+    });
+}
+
+/// The main menu: resetting all stages and their settings, after asking.
+fn main_menu(widgets: &Rc<Widgets>, window: &adw::ApplicationWindow) -> gtk::MenuButton {
+    let action = gio::SimpleAction::new("reset", None);
+    let (weak, parent) = (Rc::downgrade(widgets), window.downgrade());
+    action.connect_activate(move |_, _| {
+        let dialog = adw::MessageDialog::new(
+            parent.upgrade().as_ref(),
+            Some("Reset the Filter?"),
+            Some(
+                "Switches all stages on and sets their settings to the defaults. The microphone \
+                 and the speakers stay as they are.",
+            ),
+        );
+        dialog.add_response("cancel", "_Cancel");
+        dialog.add_response("reset", "_Reset");
+        dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let weak = weak.clone();
+        dialog.connect_response(Some("reset"), move |_, _| {
+            let Some(widgets) = weak.upgrade() else {
+                return;
+            };
+            let stages = widgets
+                .layout
+                .borrow()
+                .iter()
+                .map(|(stage, _)| stage.clone())
+                .collect();
+            let defaults = widgets.defaults.borrow().clone();
+            reset(&weak, stages, defaults);
+        });
+        dialog.present();
+    });
+    window.add_action(&action);
+    let menu = gio::Menu::new();
+    menu.append(Some("_Reset the Filter…"), Some("win.reset"));
+    gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Main Menu")
+        .primary(true)
+        .menu_model(&menu)
+        .build()
 }
 
 /// Sends switching a stage on or off.
@@ -521,11 +597,27 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                     row.add_row(&widgets.output);
                     row.add_row(&widgets.echo_status);
                 }
+                let reset = (!params.is_empty()).then(|| {
+                    let defaults = params
+                        .iter()
+                        .map(|param| (name.to_string(), param.name.clone(), param.default))
+                        .collect::<Vec<_>>();
+                    let button = gtk::Button::builder()
+                        .label("Reset")
+                        .valign(gtk::Align::Center)
+                        .build();
+                    let weak = weak.clone();
+                    button.connect_clicked(move |_| reset(&weak, Vec::new(), defaults.clone()));
+                    let reset_row = adw::ActionRow::builder().title("Default Settings").build();
+                    reset_row.add_suffix(&button);
+                    row.add_row(&reset_row);
+                    button
+                });
                 let (weak, name) = (weak.clone(), *name);
                 row.connect_enable_expansion_notify(move |row| {
                     send_enabled(&weak, name, row.enables_expansion());
                 });
-                StageRow::Expander { row, scales }
+                StageRow::Expander { row, scales, reset }
             };
             group.add(row.widget());
             stages.push((name.to_string(), row, group.clone()));
@@ -533,6 +625,13 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
     }
     widgets.stages.replace(stages);
     widgets.layout.replace(layout);
+    widgets.defaults.replace(
+        status
+            .parameters
+            .iter()
+            .map(|param| (param.stage.clone(), param.name.clone(), param.default))
+            .collect(),
+    );
 }
 
 /// The proxy to send a change with, unless the change comes from showing a read value.
@@ -650,9 +749,15 @@ fn show(widgets: &Widgets, status: &Status) {
         if let Some((_, enabled)) = status.stages.iter().find(|(stage, _)| stage == name) {
             row.set_on(*enabled);
         }
-        let StageRow::Expander { scales, .. } = row else {
+        let StageRow::Expander { scales, reset, .. } = row else {
             continue;
         };
+        if let Some(reset) = reset {
+            let changed = status.parameters.iter().any(|param| {
+                param.stage == *name && (param.value - param.default).abs() >= param.step / 2.
+            });
+            reset.set_sensitive(changed);
+        }
         for (param_name, scale) in scales {
             let Some(param) = status
                 .parameters

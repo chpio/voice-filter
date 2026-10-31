@@ -125,7 +125,8 @@ never interrupts the audio. In the app you can:
 - turn on **Listen** to hear yourself through the filter on the default output (use headphones)
 - switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
   suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
-  or the frequency of the high-pass
+  or the frequency of the high-pass; a stage's settings go back to their defaults with its
+  **Reset** button, everything with **Reset the Filter…** in the main menu
 - watch the **levels** of the microphone and of Voice Filter, and the background noise of the
   microphone: above −45 dBFS the app points out that it's too noisy
 - watch the **latency**, the processing time per frame and dropouts
