@@ -3,7 +3,9 @@
 //! from the monitor of an output device as the reference of the echo canceller.
 
 use ::std::cell::RefCell;
+use ::std::collections::HashSet;
 use ::std::path::PathBuf;
+use ::std::rc::Rc;
 use ::std::sync::atomic::Ordering;
 use ::std::sync::{Arc, Mutex};
 use ::std::time::Duration;
@@ -182,32 +184,17 @@ pub fn run(
                 .playback_delay
                 .store(delay, Ordering::Relaxed);
         })
-        // The capture streams only exist while an app records from the filter. Just inactive, the
-        // microphone's would still count as recording, and GNOME would show it as in use.
-        .state_changed({
-            let input = input.clone();
-            let reference_stream = reference_stream.clone();
-            move |_, _, _, new| {
-                let result = match new {
-                    StreamState::Streaming => {
-                        connect_capture(&input).and_then(|()| connect_capture(&reference_stream))
-                    }
-                    StreamState::Paused => input
-                        .disconnect()
-                        .and_then(|()| reference_stream.disconnect())
-                        .map_err(Into::into),
-                    StreamState::Error(error) => {
-                        eprintln!("Voice Filter stream error: {error}");
-                        return;
-                    }
-                    _ => return,
-                };
-                if let Err(err) = result {
-                    eprintln!("Could not switch the capture streams: {err}");
-                }
+        .state_changed(|_, _, _, new| {
+            if let StreamState::Error(error) = new {
+                eprintln!("Voice Filter stream error: {error}");
             }
         })
         .register()?;
+    let _recorders_listener = capture_while_recorded(
+        &registry,
+        &output,
+        [input.clone(), reference_stream.clone()],
+    );
 
     let _commands = command_receiver.attach(mainloop.loop_(), {
         let input = input.clone();
@@ -451,6 +438,61 @@ fn connect_capture(input: &StreamRc) -> Result<()> {
         &mut [Pod::from_bytes(&format).unwrap()],
     )?;
     Ok(())
+}
+
+/// Connects the capture streams while something records from "Voice Filter" and disconnects them
+/// when the last one is gone, as long as the returned listener lives. Just inactive, the
+/// microphone's would still count as recording, and GNOME would show it as in use.
+///
+/// Something records while a link from the filter's node exists. Not the state of its stream: in
+/// a group with the capture stream, which the microphone drives, the node keeps running after the
+/// last app is gone, so the stream never pauses again.
+fn capture_while_recorded(
+    registry: &pw::registry::RegistryRc,
+    output: &StreamRc,
+    captures: [StreamRc; 2],
+) -> pw::registry::Listener {
+    let links = Rc::new(RefCell::new(HashSet::new()));
+    let switch = Rc::new(move |on: bool| {
+        for capture in &captures {
+            let result = if on {
+                connect_capture(capture)
+            } else {
+                capture.disconnect().map_err(Into::into)
+            };
+            if let Err(err) = result {
+                eprintln!("Could not switch the capture streams: {err}");
+            }
+        }
+    });
+    registry
+        .add_listener_local()
+        .global({
+            let links = links.clone();
+            let output = output.clone();
+            let switch = switch.clone();
+            move |global| {
+                let Some(props) = global.props else { return };
+                let from_output = props
+                    .get(*pw::keys::LINK_OUTPUT_NODE)
+                    .and_then(|node| node.parse::<u32>().ok())
+                    == Some(output.node_id());
+                if global.type_ != ObjectType::Link || !from_output {
+                    return;
+                }
+                let mut links = links.borrow_mut();
+                if links.insert(global.id) && links.len() == 1 {
+                    switch(true);
+                }
+            }
+        })
+        .global_remove(move |id| {
+            let mut links = links.borrow_mut();
+            if links.remove(&id) && links.is_empty() {
+                switch(false);
+            }
+        })
+        .register()
 }
 
 /// An audio device: a source the filter can read from, or an output device whose monitor is the
