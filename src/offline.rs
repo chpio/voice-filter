@@ -11,6 +11,7 @@ use ::anyhow::{Context as _, Result, ensure};
 use ::hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 
 use crate::chain::Chain;
+use crate::echo::Reference;
 use crate::stage::Frame;
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
@@ -157,8 +158,13 @@ fn set_mono_channel_mask(path: &Path) -> Result<()> {
 
 /// Runs `input` through `chain` frame by frame and times each stage. The output is shifted by the
 /// latency of the chain, so it lines up with the input and has the same length; the input is
-/// padded with silence for that.
-pub fn process(chain: &mut Chain, input: &[f32]) -> Result<(Vec<f32>, Report)> {
+/// padded with silence for that. With a reference (what the speakers played, for the echo
+/// canceller), its frame goes to it before each frame of the input, as it would live.
+pub fn process(
+    chain: &mut Chain,
+    input: &[f32],
+    mut reference: Option<(&mut Reference, &[f32])>,
+) -> Result<(Vec<f32>, Report)> {
     let latency = chain.latency();
     let frames = (input.len() + latency).div_ceil(FRAME_LEN);
     let mut output = Vec::with_capacity(frames * FRAME_LEN);
@@ -170,6 +176,13 @@ pub fn process(chain: &mut Chain, input: &[f32]) -> Result<(Vec<f32>, Report)> {
         let end = ((i + 1) * FRAME_LEN).min(input.len());
         frame.fill(0.);
         frame[..end - start].copy_from_slice(&input[start..end]);
+        if let Some((reference, samples)) = &mut reference {
+            let start = (i * FRAME_LEN).min(samples.len());
+            let end = ((i + 1) * FRAME_LEN).min(samples.len());
+            let mut played = [0.; FRAME_LEN];
+            played[..end - start].copy_from_slice(&samples[start..end]);
+            reference.push(&played);
+        }
         let mut total = Duration::ZERO;
         for (stage, (sum, stage_max)) in chain.stages_mut().zip(&mut times) {
             let started = Instant::now();
@@ -205,9 +218,20 @@ pub fn process(chain: &mut Chain, input: &[f32]) -> Result<(Vec<f32>, Report)> {
 }
 
 /// [`process`] from one WAV file into another, see [`read_wav`] and [`write_wav`].
-pub fn process_file(chain: &mut Chain, input: &Path, output: &Path) -> Result<Report> {
+/// [`process`] from a WAV file to one, with a reference from a WAV file too.
+pub fn process_file(
+    chain: &mut Chain,
+    input: &Path,
+    output: &Path,
+    reference: Option<(&mut Reference, &Path)>,
+) -> Result<Report> {
     let samples = read_wav(input)?;
-    let (processed, report) = process(chain, &samples)?;
+    let played = match &reference {
+        Some((_, path)) => Some(read_wav(path)?),
+        None => None,
+    };
+    let reference = reference.zip(played.as_deref()).map(|((r, _), p)| (r, p));
+    let (processed, report) = process(chain, &samples, reference)?;
     write_wav(output, &processed)?;
     Ok(report)
 }

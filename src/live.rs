@@ -1,5 +1,6 @@
 //! The live filter: a capture stream from the default microphone and the virtual microphone
-//! "Voice Filter", with the chain between them (see [`crate::bridge`]).
+//! "Voice Filter", with the chain between them (see [`crate::bridge`]), and a capture stream
+//! from the monitor of an output device as the reference of the echo canceller.
 
 use ::std::cell::RefCell;
 use ::std::path::PathBuf;
@@ -19,11 +20,13 @@ use ::pipewire::types::ObjectType;
 use crate::bridge::{Capture, Playback, Stats, bridge};
 use crate::chain::Chain;
 use crate::dbus::{self, Control, Service};
+use crate::echo::Reference;
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
 const NODE_NAME: &str = "voice-filter";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
-/// Both streams are in this group, so they run in the same cycle of the microphone's driver (a
+const REFERENCE_NODE_NAME: &str = "voice-filter-reference";
+/// The streams are in this group, so they run in the same cycle of the microphone's driver (a
 /// virtual source has no clock of its own), and in this link group, so the session manager never
 /// links the capture stream to the filter's own output.
 const GROUP: &str = "voice-filter";
@@ -31,16 +34,34 @@ const GROUP: &str = "voice-filter";
 const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
 
-/// Runs until SIGINT or SIGTERM. `input` is the `node.name` of the microphone, without it the
-/// session manager links the default input. The control interface keeps the microphone chosen
-/// there in `settings_dir`.
-pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> Result<()> {
+/// The devices to read from and to take the reference from.
+pub struct Devices<'a> {
+    /// The `node.name` of the microphone, without it the session manager links the default input.
+    pub input: Option<&'a str>,
+    /// The `node.name` of the output device whose monitor is the reference of the echo canceller,
+    /// without it the default output.
+    pub output: Option<&'a str>,
+}
+
+/// Runs until SIGINT or SIGTERM. `reference` feeds the echo canceller of the chain with what the
+/// output device plays. The control interface keeps the devices chosen there in `settings_dir`.
+pub fn run(
+    chain: Chain,
+    mut reference: Reference,
+    devices: Devices,
+    settings_dir: Option<PathBuf>,
+) -> Result<()> {
     pw::init();
     let switches = chain.switches();
     let params = chain.params();
     let (mut capture, mut playback, stats) = bridge(chain);
     let chain_latency = capture.latency();
     let inputs = Arc::new(Mutex::new(Vec::new()));
+    let outputs = Arc::new(Mutex::new(Vec::new()));
+    let Devices {
+        input,
+        output: output_device,
+    } = devices;
     let (commands, command_receiver) = pw::channel::channel();
     // first, so a second instance stops before it creates nodes
     dbus::serve(Service {
@@ -50,6 +71,8 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
         chain_latency,
         input: input.unwrap_or_default().to_owned(),
         inputs: inputs.clone(),
+        output: output_device.unwrap_or_default().to_owned(),
+        outputs: outputs.clone(),
         send: Box::new(move |control| {
             commands
                 .send(control)
@@ -65,7 +88,8 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
         .connect_rc(None)
         .context("Could not connect to PipeWire")?;
     let registry = core.get_registry_rc()?;
-    let _inputs_listener = watch_inputs(&registry, inputs);
+    let _inputs_listener = watch_devices(&registry, Direction::Input, inputs);
+    let _outputs_listener = watch_devices(&registry, Direction::Output, outputs);
     // the quantum the streams ask for, the graph may still run a smaller one
     let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
 
@@ -104,6 +128,24 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
     }
     let input = StreamRc::new(core.clone(), CAPTURE_NODE_NAME, capture_properties)?;
 
+    // What an output device plays, from its monitor, for the echo canceller. Without a target the
+    // session manager links the default output.
+    let mut reference_properties = properties! {
+        *pw::keys::MEDIA_TYPE => "Audio",
+        *pw::keys::MEDIA_CATEGORY => "Capture",
+        *pw::keys::NODE_NAME => REFERENCE_NODE_NAME,
+        *pw::keys::NODE_DESCRIPTION => "Voice Filter (speakers, for the echo cancellation)",
+        *pw::keys::NODE_LATENCY => latency.as_str(),
+        *pw::keys::NODE_GROUP => GROUP,
+        *pw::keys::NODE_LINK_GROUP => GROUP,
+        *pw::keys::AUDIO_CHANNELS => "1",
+        "stream.capture.sink" => "true",
+    };
+    if let Some(output_device) = output_device {
+        reference_properties.insert(*pw::keys::TARGET_OBJECT, output_device);
+    }
+    let reference_stream = StreamRc::new(core.clone(), REFERENCE_NODE_NAME, reference_properties)?;
+
     let mut samples = Vec::with_capacity(MAX_QUANTUM);
     let capture_stats = stats.clone();
     let _input_listener = input
@@ -111,6 +153,17 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
         .process(move |stream, _| {
             let delay = read_into(stream, &mut capture, &mut samples);
             capture_stats.capture_delay.store(delay, Ordering::Relaxed);
+        })
+        .register()?;
+
+    let mut played = Vec::with_capacity(MAX_QUANTUM);
+    let _reference_listener = reference_stream
+        .add_local_listener_with_user_data(())
+        .process(move |stream, _| {
+            // what doesn't fit while the echo canceller is off or behind gets dropped
+            if dequeue_samples(stream, &mut played) {
+                reference.push(&played);
+            }
         })
         .register()?;
 
@@ -124,14 +177,20 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
                 .playback_delay
                 .store(delay, Ordering::Relaxed);
         })
-        // The capture stream only exists while an app records from the filter. Just inactive, it
-        // would still count as recording, and GNOME would show the microphone as in use.
+        // The capture streams only exist while an app records from the filter. Just inactive, the
+        // microphone's would still count as recording, and GNOME would show it as in use.
         .state_changed({
             let input = input.clone();
+            let reference_stream = reference_stream.clone();
             move |_, _, _, new| {
                 let result = match new {
-                    StreamState::Streaming => connect_capture(&input),
-                    StreamState::Paused => input.disconnect().map_err(Into::into),
+                    StreamState::Streaming => {
+                        connect_capture(&input).and_then(|()| connect_capture(&reference_stream))
+                    }
+                    StreamState::Paused => input
+                        .disconnect()
+                        .and_then(|()| reference_stream.disconnect())
+                        .map_err(Into::into),
                     StreamState::Error(error) => {
                         eprintln!("Voice Filter stream error: {error}");
                         return;
@@ -139,7 +198,7 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
                     _ => return,
                 };
                 if let Err(err) = result {
-                    eprintln!("Could not switch the microphone stream: {err}");
+                    eprintln!("Could not switch the capture streams: {err}");
                 }
             }
         })
@@ -147,12 +206,18 @@ pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> 
 
     let _commands = command_receiver.attach(mainloop.loop_(), {
         let input = input.clone();
+        let reference_stream = reference_stream.clone();
         let core = core.clone();
         let listening = RefCell::new(None);
         move |control| match control {
             Control::SetInput(name) => {
                 if let Err(err) = set_target(&input, &name) {
                     eprintln!("Could not switch to {name}: {err}");
+                }
+            }
+            Control::SetOutput(name) => {
+                if let Err(err) = set_target(&reference_stream, &name) {
+                    eprintln!("Could not take the reference from {name}: {err}");
                 }
             }
             Control::SetListen(false) => drop(listening.take()),
@@ -283,14 +348,23 @@ impl Listen {
 /// them. Returns the delay from the device in samples.
 fn read_into(stream: &pw::stream::Stream, capture: &mut Capture, samples: &mut Vec<f32>) -> i64 {
     let (now, delay) = timing(stream);
+    if dequeue_samples(stream, samples) {
+        capture.push(samples, now);
+    }
+    delay
+}
+
+/// Takes the samples of the cycle from a capture stream into `samples`, a buffer with room for
+/// them; false if there's no buffer.
+fn dequeue_samples(stream: &pw::stream::Stream, samples: &mut Vec<f32>) -> bool {
     let Some(mut buffer) = stream.dequeue_buffer() else {
-        return delay;
+        return false;
     };
     let data = &mut buffer.datas_mut()[0];
     let offset = data.chunk().offset() as usize;
     let size = data.chunk().size() as usize;
     let Some(bytes) = data.data() else {
-        return delay;
+        return false;
     };
     let end = (offset + size).min(bytes.len());
     samples.clear();
@@ -301,8 +375,7 @@ fn read_into(stream: &pw::stream::Stream, capture: &mut Capture, samples: &mut V
             .iter()
             .map(|&b| f32::from_le_bytes(b)),
     );
-    capture.push(samples, now);
-    delay
+    true
 }
 
 /// Writes the samples of the cycle from `playback` into a playback stream, `pulled` is a buffer
@@ -342,8 +415,8 @@ fn write_from(stream: &pw::stream::Stream, playback: &mut Playback, pulled: &mut
     delay
 }
 
-/// Points the capture stream to the microphone `name`, the empty name for the default input. A
-/// connected stream only follows a new target when it connects again.
+/// Points a capture stream to the device `name`, the empty name for the default one. A connected
+/// stream only follows a new target when it connects again.
 fn set_target(input: &StreamRc, name: &str) -> Result<()> {
     let properties = properties! { *pw::keys::TARGET_OBJECT => name };
     // SAFETY: both pointers are valid during the call, which copies the properties
@@ -360,7 +433,7 @@ fn set_target(input: &StreamRc, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Connects the capture stream to the default microphone, unless it already is.
+/// Connects a capture stream to its target, unless it already is.
 fn connect_capture(input: &StreamRc) -> Result<()> {
     if !matches!(input.state(), StreamState::Unconnected) {
         return Ok(());
@@ -375,40 +448,53 @@ fn connect_capture(input: &StreamRc) -> Result<()> {
     Ok(())
 }
 
-/// An audio source the filter can read from.
+/// An audio device: a source the filter can read from, or an output device whose monitor is the
+/// reference of the echo canceller.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Input {
+pub struct Device {
     /// The id of its global in the registry.
     pub id: u32,
-    /// The `node.name`, for `--input`.
+    /// The `node.name`, for `--input` and `--output`.
     pub name: String,
     pub description: String,
     /// The session manager falls back to the highest one.
     pub priority: i32,
 }
 
-/// Keeps `inputs` up to date with the audio sources of the graph except the filter's own, the
-/// highest priority first, as long as the returned listener lives.
-fn watch_inputs(
+/// Microphones (audio sources) or output devices (audio sinks).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Direction {
+    Input,
+    Output,
+}
+
+/// Keeps `devices` up to date with the audio sources (except the filter's own) or sinks of the
+/// graph, the highest priority first, as long as the returned listener lives.
+fn watch_devices(
     registry: &pw::registry::RegistryRc,
-    inputs: Arc<Mutex<Vec<Input>>>,
+    direction: Direction,
+    devices: Arc<Mutex<Vec<Device>>>,
 ) -> pw::registry::Listener {
+    let class_prefix = match direction {
+        Direction::Input => "Audio/Source",
+        Direction::Output => "Audio/Sink",
+    };
     registry
         .add_listener_local()
         .global({
-            let inputs = inputs.clone();
+            let devices = devices.clone();
             move |global| {
                 let Some(props) = global.props else { return };
                 let class = props.get(*pw::keys::MEDIA_CLASS).unwrap_or_default();
                 let name = props.get(*pw::keys::NODE_NAME).unwrap_or_default();
                 if global.type_ != ObjectType::Node
-                    || !class.starts_with("Audio/Source")
+                    || !class.starts_with(class_prefix)
                     || name == NODE_NAME
                 {
                     return;
                 }
-                let mut inputs = inputs.lock().unwrap();
-                inputs.push(Input {
+                let mut devices = devices.lock().unwrap();
+                devices.push(Device {
                     id: global.id,
                     name: name.to_owned(),
                     description: props
@@ -420,15 +506,16 @@ fn watch_inputs(
                         .and_then(|priority| priority.parse().ok())
                         .unwrap_or(0),
                 });
-                inputs.sort_by_key(|input| ::std::cmp::Reverse(input.priority));
+                devices.sort_by_key(|device| ::std::cmp::Reverse(device.priority));
             }
         })
-        .global_remove(move |id| inputs.lock().unwrap().retain(|input| input.id != id))
+        .global_remove(move |id| devices.lock().unwrap().retain(|device| device.id != id))
         .register()
 }
 
-/// The audio sources of the graph except the filter's own, the highest priority first.
-pub fn inputs() -> Result<Vec<Input>> {
+/// The audio sources of the graph except the filter's own, or its sinks, the highest priority
+/// first.
+pub fn devices(direction: Direction) -> Result<Vec<Device>> {
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&mainloop, None)?;
@@ -436,8 +523,8 @@ pub fn inputs() -> Result<Vec<Input>> {
         .connect_rc(None)
         .context("Could not connect to PipeWire")?;
     let registry = core.get_registry_rc()?;
-    let inputs = Arc::new(Mutex::new(Vec::new()));
-    let _registry_listener = watch_inputs(&registry, inputs.clone());
+    let devices = Arc::new(Mutex::new(Vec::new()));
+    let _registry_listener = watch_devices(&registry, direction, devices.clone());
     // all globals are announced once the server answers the sync
     let pending = core.sync(0)?;
     let _core_listener = core
@@ -452,8 +539,8 @@ pub fn inputs() -> Result<Vec<Input>> {
         })
         .register();
     mainloop.run();
-    let inputs = inputs.lock().unwrap().clone();
-    Ok(inputs)
+    let devices = devices.lock().unwrap().clone();
+    Ok(devices)
 }
 
 /// The time of the graph cycle in nanoseconds and the delay to the device in samples (including
@@ -471,7 +558,8 @@ fn timing(stream: &pw::stream::Stream) -> (i64, i64) {
     (time.now(), delay + time.buffered() as i64)
 }
 
-/// Mono F32 at [`SAMPLE_RATE`] for both streams, PipeWire converts from and to the devices.
+/// Mono F32 at [`SAMPLE_RATE`] for all streams, PipeWire converts from and to the devices (and
+/// mixes the monitor of a stereo output down).
 fn format_param() -> Vec<u8> {
     let mut info = spa::param::audio::AudioInfoRaw::new();
     info.set_format(spa::param::audio::AudioFormat::F32LE);

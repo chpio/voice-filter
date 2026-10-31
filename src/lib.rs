@@ -12,6 +12,7 @@ pub mod compressor;
 pub mod dbus;
 pub mod deesser;
 pub mod denoise;
+pub mod echo;
 pub mod equalizer;
 #[cfg(feature = "gui")]
 pub mod gui;

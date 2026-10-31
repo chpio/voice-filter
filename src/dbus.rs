@@ -11,7 +11,7 @@ use ::zbus::{connection, fdo, interface};
 
 use crate::SAMPLE_RATE;
 use crate::bridge::Stats;
-use crate::live::Input;
+use crate::live::Device;
 use crate::param::Param;
 use crate::settings;
 
@@ -26,6 +26,9 @@ pub const PATH: &str = "/net/b128/VoiceFilter";
 pub enum Control {
     /// Reads from another microphone, the empty name for the default input.
     SetInput(String),
+    /// Takes the reference of the echo canceller from another output device, the empty name for
+    /// the default output.
+    SetOutput(String),
     /// Plays what "Voice Filter" outputs on the default output, or stops it.
     SetListen(bool),
 }
@@ -40,17 +43,38 @@ pub struct Service {
     /// The `node.name` of the microphone, empty for the default input.
     pub input: String,
     /// The microphones to choose from, kept up to date by the PipeWire loop.
-    pub inputs: Arc<Mutex<Vec<Input>>>,
+    pub inputs: Arc<Mutex<Vec<Device>>>,
+    /// The `node.name` of the output device whose monitor is the reference of the echo
+    /// canceller, empty for the default output.
+    pub output: String,
+    /// The output devices to choose from, kept up to date by the PipeWire loop.
+    pub outputs: Arc<Mutex<Vec<Device>>>,
     /// Sends a [`Control`] to the PipeWire loop.
     pub send: Box<dyn Fn(Control) -> Result<()> + Send + Sync>,
     /// Whether the output is played on the default output, see [`Control::SetListen`].
     pub listening: bool,
-    /// Where a chosen microphone is kept for the next runs.
+    /// Where a chosen microphone and output device are kept for the next runs.
     pub settings_dir: Option<PathBuf>,
 }
 
 /// A parameter on the bus: stage, name, title, unit, minimum, maximum, step, default and value.
 pub type Parameter = (String, String, String, String, f64, f64, f64, f64, f64);
+
+/// `node.name`, description and priority of the devices.
+fn listed(devices: &Mutex<Vec<Device>>) -> Vec<(String, String, i32)> {
+    devices
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|device| {
+            (
+                device.name.clone(),
+                device.description.clone(),
+                device.priority,
+            )
+        })
+        .collect()
+}
 
 fn ms(samples: i64) -> f64 {
     samples as f64 * 1e3 / SAMPLE_RATE as f64
@@ -162,18 +186,41 @@ impl Service {
     /// manager falls back to the highest one), the highest first.
     #[zbus(property(emits_changed_signal = "false"))]
     pub fn inputs(&self) -> Vec<(String, String, i32)> {
-        self.inputs
+        listed(&self.inputs)
+    }
+
+    /// The output device whose monitor is the reference of the echo canceller, its `node.name`,
+    /// empty for the default output. Setting it switches the reference and keeps it for the next
+    /// runs.
+    #[zbus(property)]
+    pub fn output(&self) -> String {
+        self.output.clone()
+    }
+
+    #[zbus(property)]
+    pub fn set_output(&mut self, name: String) -> fdo::Result<()> {
+        let known = self
+            .outputs
             .lock()
             .unwrap()
             .iter()
-            .map(|input| {
-                (
-                    input.name.clone(),
-                    input.description.clone(),
-                    input.priority,
-                )
-            })
-            .collect()
+            .any(|output| output.name == name);
+        if !name.is_empty() && !known {
+            return Err(fdo::Error::InvalidArgs(format!("no output {name}")));
+        }
+        (self.send)(Control::SetOutput(name.clone()))
+            .map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        if let Some(dir) = &self.settings_dir {
+            settings::save_output(dir, &name).map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        }
+        self.output = name;
+        Ok(())
+    }
+
+    /// The output devices to choose from, like [`Self::inputs`].
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn outputs(&self) -> Vec<(String, String, i32)> {
+        listed(&self.outputs)
     }
 
     /// The latency in ms from the microphone to the app: `total` and its parts `microphone`,

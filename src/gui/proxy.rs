@@ -31,6 +31,12 @@ pub trait VoiceFilter {
     #[zbus(property)]
     fn inputs(&self) -> ::zbus::Result<Vec<(String, String, i32)>>;
     #[zbus(property)]
+    fn output(&self) -> ::zbus::Result<String>;
+    #[zbus(property)]
+    fn set_output(&self, name: &str) -> ::zbus::Result<()>;
+    #[zbus(property)]
+    fn outputs(&self) -> ::zbus::Result<Vec<(String, String, i32)>>;
+    #[zbus(property)]
     fn latency(&self) -> ::zbus::Result<HashMap<String, f64>>;
     #[zbus(property)]
     fn quantum(&self) -> ::zbus::Result<u64>;
@@ -83,6 +89,9 @@ pub struct Status {
     pub input: String,
     /// `node.name`, description and priority.
     pub inputs: Vec<(String, String, i32)>,
+    /// The output device whose echo gets removed, like `input`.
+    pub output: String,
+    pub outputs: Vec<(String, String, i32)>,
     pub latency: HashMap<String, f64>,
     pub quantum: u64,
     pub max_frame_time: f64,
@@ -102,6 +111,8 @@ impl VoiceFilterProxy<'_> {
                 .collect(),
             input: self.input().await?,
             inputs: self.inputs().await?,
+            output: self.output().await?,
+            outputs: self.outputs().await?,
             latency: self.latency().await?,
             quantum: self.quantum().await?,
             max_frame_time: self.max_frame_time().await?,

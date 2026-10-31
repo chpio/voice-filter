@@ -45,7 +45,7 @@ fn process_lines_the_output_up_with_the_input() {
     // not a multiple of the frame length, and a delay over more than a frame
     let input = ramp(10 * FRAME_LEN + 123);
     let mut chain = Chain::new(vec![Box::new(Delay::new(FRAME_LEN + 17))]);
-    let (output, report) = offline::process(&mut chain, &input).unwrap();
+    let (output, report) = offline::process(&mut chain, &input, None).unwrap();
     assert_eq!(output, input);
     assert_eq!(report.latency(), FRAME_LEN + 17);
     assert_eq!(report.frames, 12);

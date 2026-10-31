@@ -54,7 +54,7 @@ There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates
 
 Echo cancellation needs the signal the speakers are playing as a reference: an adaptive filter learns how the room changes the sound on its way from the speakers to the microphone, predicts the echo from the reference and subtracts it; a second step suppresses the residual echo. With headphones there's no echo, the stage can stay off.
 
-**Planned: in our own process.** Besides the microphone, voice-filter records the monitor of an output device, chosen in the app like the microphone (the default output by default), as the reference, and runs AEC3 as the first stage of the chain. It works on 10 ms frames at 48 kHz, our frames. Against PipeWire's `libpipewire-module-echo-cancel` (the same WebRTC AEC3): the speakers are chosen in the app and switched at runtime, nothing to configure and no playback to reroute (the module either creates a sink the playback has to go through, or with `monitor.mode` listens to the default output only, and changing it means editing its config and restarting PipeWire), no extra nodes with their own buffers, and the stage switches, has parameters and status like the others. The cost is more code (a second capture stream with a bridge into the audio path, the choice of the output) and the clocks of microphone and speakers, which drift against each other (AEC3 keeps estimating the delay; to be measured live).
+**In our own process** (stage `echo`). Besides the microphone, voice-filter records the monitor of an output device, chosen in the app like the microphone (the default output by default), as the reference, and runs AEC3 as the first stage of the chain. It works on 10 ms frames at 48 kHz, our frames. Against PipeWire's `libpipewire-module-echo-cancel` (the same WebRTC AEC3): the speakers are chosen in the app and switched at runtime, nothing to configure and no playback to reroute (the module either creates a sink the playback has to go through, or with `monitor.mode` listens to the default output only, and changing it means editing its config and restarting PipeWire), no extra nodes with their own buffers, and the stage switches, has parameters and status like the others. The cost is more code (a second capture stream with a bridge into the audio path, the choice of the output) and the clocks of microphone and speakers, which drift against each other (AEC3 keeps estimating the delay; to be measured live).
 
 AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause), a pure Rust port of WebRTC's audio processing (M145 plus later fixes, passes the C++ test suite), so no C++ library: only its echo canceller, its noise suppression and AGC2 stay off. The alternatives: [webrtc-audio-processing](https://github.com/tonarino/webrtc-audio-processing) wraps the C++ library (system package or built with meson); [aec3-rs](https://github.com/RubyBit/aec3-rs) is a less verified port with an API still changing; [DTLN-aec](https://github.com/breizhn/DTLN-aec) is a neural model at 16 kHz.
 
@@ -106,14 +106,14 @@ Classic DSP brings the biggest audible gain and runs live with practically no CP
 
 **Level 1: classic DSP (part of the first version)**
 
-| Order | Stage      | Purpose                                 | Implemented as                                                                                                                                  |
-| ----: | ---------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-|     1 | High-pass  | Rumble, footfall noise, plosives        | 80 Hz, 4th order Butterworth (two biquads)                                                                                                      |
-|     2 | EQ         | Less muddiness, more presence           | −3 dB at 250 Hz, +3 dB at 3.5 kHz (peaking, Q 1)                                                                                                |
-|     3 | De-esser   | Harsh S sounds                          | band above 5 kHz turned down while its share of the energy is above −7 dB (ratio 4, at most 12 dB), split with a linear-phase FIR, 1 ms latency |
-|     4 | AGC        | A constant level, whatever the distance | −18 dBFS RMS, gain −12…+30 dB, rises 6 dB/s, falls 30 dB/s, holds below −55 dBFS                                                                |
-|     5 | Compressor | Even loudness within words              | 3:1 above −24 dBFS, soft knee 6 dB, attack 5 ms, release 120 ms                                                                                 |
-|     6 | Limiter    | No clipping                             | −1 dBFS, 1 ms lookahead, release 50 ms                                                                                                          |
+| Order | Stage      | Purpose                                 | Implemented as                                                                                                                                                    |
+| ----: | ---------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     1 | High-pass  | Rumble, footfall noise, plosives        | 80 Hz, 4th order Butterworth (two biquads)                                                                                                                        |
+|     2 | EQ         | Less muddiness, more presence           | −3 dB at 250 Hz, +3 dB at 3.5 kHz (peaking, Q 1)                                                                                                                  |
+|     3 | De-esser   | Harsh S sounds                          | band above 5 kHz turned down while its share of the energy is above −7 dB (ratio 4, at most 12 dB), split with a linear-phase FIR, 1 ms latency                   |
+|     4 | AGC        | A constant level, whatever the distance | −18 dBFS RMS, gain −12…+30 dB, rises 6 dB/s, falls 30 dB/s, holds below −55 dBFS                                                                                  |
+|     5 | Compressor | Even loudness within words              | 3:1 above −24 dBFS, soft knee 6 dB, attack 5 ms, release 120 ms                                                                                                   |
+|     6 | Limiter    | No clipping                             | −1 dBFS, 1 ms lookahead, release 50 ms                                                                                                                            |
 
 The AGC comes before the compressor (the first draft had it the other way round): the compressor then sees a known level, so its threshold and make-up gain can be fixed relative to the AGC's target. The de-esser goes after the EQ, whose presence boost brings out the S sounds, and before the AGC: it detects the S sounds relative to the total energy, so it doesn't depend on the level. The values are the defaults, each one adjustable at runtime from the GNOME app; presets are to follow.
 
@@ -195,7 +195,8 @@ Four phases, each usable on its own. Each phase ends with a latency and listenin
    - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
 3. **Echo**
    - [x] spike: AEC3 from sonora on a recording (see [Echo cancellation](#echo-cancellation))
-   - [ ] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app
+   - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; sonora patched to its allocation-free PR until a release)
+   - [ ] a test with only speech from the speakers, and live over a longer call
    - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
 4. **Restoration**
    - [ ] evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage

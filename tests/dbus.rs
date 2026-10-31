@@ -5,7 +5,7 @@ use ::std::sync::{Arc, Mutex};
 
 use ::voice_filter::bridge::Stats;
 use ::voice_filter::dbus::{Control, Service};
-use ::voice_filter::live::Input;
+use ::voice_filter::live::Device;
 use ::voice_filter::param::Param;
 use ::voice_filter::settings;
 
@@ -18,7 +18,7 @@ fn service_with(
     sent: Arc<Mutex<Vec<Control>>>,
     settings_dir: Option<::std::path::PathBuf>,
 ) -> Service {
-    let input = |id, name: &str, priority| Input {
+    let device = |id, name: &str, priority| Device {
         id,
         name: name.to_owned(),
         description: format!("{name} description"),
@@ -43,8 +43,13 @@ fn service_with(
         chain_latency: 1488,
         input: String::new(),
         inputs: Arc::new(Mutex::new(vec![
-            input(40, "usb-mic", 2100),
-            input(41, "webcam", 2009),
+            device(40, "usb-mic", 2100),
+            device(41, "webcam", 2009),
+        ])),
+        output: String::new(),
+        outputs: Arc::new(Mutex::new(vec![
+            device(50, "speakers", 1009),
+            device(51, "hdmi", 784),
         ])),
         send: Box::new(move |control| {
             sent.lock().unwrap().push(control);
@@ -159,5 +164,39 @@ fn switches_listening_on_and_off() {
     assert_eq!(
         *sent.lock().unwrap(),
         [Control::SetListen(true), Control::SetListen(false)]
+    );
+}
+
+#[test]
+fn switches_the_output_device_and_keeps_it() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let sent = Arc::<Mutex<Vec<Control>>>::default();
+    let mut service = service_with(sent.clone(), Some(dir.path().to_owned()));
+    assert_eq!(
+        service.outputs()[1],
+        ("hdmi".to_owned(), "hdmi description".to_owned(), 784)
+    );
+    assert_eq!(service.output(), "");
+
+    service.set_output("hdmi".to_owned()).unwrap();
+    assert_eq!(service.output(), "hdmi");
+    assert_eq!(
+        settings::load_output(dir.path()).unwrap().as_deref(),
+        Some("hdmi")
+    );
+    // a microphone isn't an output device
+    assert!(service.set_output("usb-mic".to_owned()).is_err());
+    assert_eq!(service.output(), "hdmi");
+
+    service.set_output(String::new()).unwrap();
+    assert_eq!(settings::load_output(dir.path()).unwrap(), None);
+    // the input is kept apart
+    assert_eq!(settings::load_input(dir.path()).unwrap(), None);
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [
+            Control::SetOutput("hdmi".to_owned()),
+            Control::SetOutput(String::new())
+        ]
     );
 }

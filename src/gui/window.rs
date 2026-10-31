@@ -10,7 +10,8 @@ use super::proxy::{Parameter, Status, VoiceFilterProxy};
 
 /// The stages the window shows: name in the chain and title; what they do is in the descriptions
 /// of their groups, so the rows stay short.
-const STAGES: [(&str, &str); 7] = [
+const STAGES: [(&str, &str); 8] = [
+    ("echo", "Echo Cancellation"),
     ("denoise", "Noise Suppression"),
     ("highpass", "High-Pass Filter"),
     ("eq", "Equalizer"),
@@ -21,7 +22,13 @@ const STAGES: [(&str, &str); 7] = [
 ];
 
 /// The groups of the stages: title, description and their stages.
-const GROUPS: [(&str, &str, &[&str]); 3] = [
+const GROUPS: [(&str, &str, &[&str]); 4] = [
+    (
+        "Echo Cancellation",
+        "Removes the echo of the speakers chosen here from the microphone, for calls without \
+         headphones.",
+        &["echo"],
+    ),
     (
         "Noise Suppression",
         "Removes background noise. The limit keeps part of it: lower sounds more natural, 100 dB \
@@ -84,6 +91,10 @@ struct Widgets {
     input: adw::ComboRow,
     /// The `node.name` per entry of `input`, the first is the default input (empty).
     input_names: RefCell<Vec<String>>,
+    /// The output device whose echo gets removed, in the row of the echo cancellation.
+    output: adw::ComboRow,
+    /// Like `input_names`.
+    output_names: RefCell<Vec<String>>,
     listen: adw::SwitchRow,
     latency: adw::ActionRow,
     processing: adw::ActionRow,
@@ -121,6 +132,12 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .model(&gtk::StringList::new(&[]))
             .build(),
         input_names: RefCell::new(Vec::new()),
+        output: adw::ComboRow::builder()
+            .title("Speakers")
+            .use_subtitle(true)
+            .model(&gtk::StringList::new(&[]))
+            .build(),
+        output_names: RefCell::new(Vec::new()),
         listen: adw::SwitchRow::builder()
             .title("Listen")
             .subtitle("Plays it on the default output, use headphones")
@@ -192,24 +209,48 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             }
         });
     });
+    connect_device(widgets, Device::Input);
+    connect_device(widgets, Device::Output);
+}
+
+/// The microphone or the output device.
+#[derive(Clone, Copy)]
+enum Device {
+    Input,
+    Output,
+}
+
+impl Device {
+    /// Its row and the `node.name` per entry.
+    fn picker(self, widgets: &Widgets) -> (&adw::ComboRow, &RefCell<Vec<String>>) {
+        match self {
+            Self::Input => (&widgets.input, &widgets.input_names),
+            Self::Output => (&widgets.output, &widgets.output_names),
+        }
+    }
+}
+
+/// Sends the device the user picks.
+fn connect_device(widgets: &Rc<Widgets>, device: Device) {
     let weak = Rc::downgrade(widgets);
-    widgets.input.connect_selected_notify(move |row| {
+    let (row, _) = device.picker(widgets);
+    row.connect_selected_notify(move |row| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
         let Some(widgets) = weak.upgrade() else {
             return;
         };
-        let Some(name) = widgets
-            .input_names
-            .borrow()
-            .get(row.selected() as usize)
-            .cloned()
-        else {
+        let (_, names) = device.picker(&widgets);
+        let Some(name) = names.borrow().get(row.selected() as usize).cloned() else {
             return;
         };
         glib::spawn_future_local(async move {
-            if let Err(err) = proxy.set_input(&name).await {
+            let result = match device {
+                Device::Input => proxy.set_input(&name).await,
+                Device::Output => proxy.set_output(&name).await,
+            };
+            if let Err(err) = result {
                 eprintln!("Could not switch to {name}: {err}");
             }
         });
@@ -298,6 +339,13 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
     }
     let weak = Rc::downgrade(widgets);
     for (_, row, group) in widgets.stages.take() {
+        // the row of the output device moves to the new row of the echo cancellation
+        if let StageRow::Expander { row, .. } = &row
+            && widgets.output.parent().is_some()
+            && widgets.output.is_ancestor(row)
+        {
+            row.remove(&widgets.output);
+        }
         group.remove(row.widget());
     }
     let mut stages = Vec::new();
@@ -315,7 +363,8 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                 .iter()
                 .filter(|param| param.stage == *name)
                 .collect();
-            let row = if params.is_empty() {
+            // the echo cancellation expands to its output device, even without parameters
+            let row = if params.is_empty() && *name != "echo" {
                 let row = adw::SwitchRow::builder().title(title).build();
                 let (weak, name) = (weak.clone(), *name);
                 row.connect_active_notify(move |row| send_enabled(&weak, name, row.is_active()));
@@ -335,6 +384,9 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                         (param.name.clone(), scale)
                     })
                     .collect();
+                if *name == "echo" {
+                    row.add_row(&widgets.output);
+                }
                 let (weak, name) = (weak.clone(), *name);
                 row.connect_enable_expansion_notify(move |row| {
                     send_enabled(&weak, name, row.enables_expansion());
@@ -399,32 +451,35 @@ async fn poll(widgets: Rc<Widgets>) {
     }
 }
 
-/// The microphones to choose from, the chosen one selected; one that's unplugged stays in the
-/// list, so the row shows what the filter waits for.
-fn show_inputs(widgets: &Widgets, status: &Status) {
+/// The devices to choose from, the chosen one selected; one that's unplugged stays in the list,
+/// so the row shows what the filter waits for.
+fn show_devices(widgets: &Widgets, device: Device, status: &Status) {
+    let (devices, chosen, default) = match device {
+        Device::Input => (&status.inputs, &status.input, "Default Input"),
+        Device::Output => (&status.outputs, &status.output, "Default Output"),
+    };
+    let (row, known) = device.picker(widgets);
     let mut names = vec![String::new()];
-    let mut labels = vec!["Default Input".to_owned()];
-    for (name, description, _) in &status.inputs {
+    let mut labels = vec![default.to_owned()];
+    for (name, description, _) in devices {
         names.push(name.clone());
         labels.push(description.clone());
     }
-    if !names.contains(&status.input) {
-        names.push(status.input.clone());
-        labels.push(format!("{} (unplugged)", status.input));
+    if !names.contains(chosen) {
+        names.push(chosen.clone());
+        labels.push(format!("{chosen} (unplugged)"));
     }
-    if *widgets.input_names.borrow() != names {
+    if *known.borrow() != names {
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-        widgets
-            .input
-            .set_model(Some(&gtk::StringList::new(&labels)));
-        widgets.input_names.replace(names.clone());
+        row.set_model(Some(&gtk::StringList::new(&labels)));
+        known.replace(names.clone());
     }
     let selected = names
         .iter()
-        .position(|name| *name == status.input)
+        .position(|name| name == chosen)
         .unwrap_or_default() as u32;
-    if widgets.input.selected() != selected {
-        widgets.input.set_selected(selected);
+    if row.selected() != selected {
+        row.set_selected(selected);
     }
 }
 
@@ -451,7 +506,8 @@ fn show(widgets: &Widgets, status: &Status) {
             }
         }
     }
-    show_inputs(widgets, status);
+    show_devices(widgets, Device::Input, status);
+    show_devices(widgets, Device::Output, status);
     widgets.listen.set_active(status.listen);
     widgets.updating.set(false);
 

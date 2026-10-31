@@ -4,6 +4,8 @@
 _Voice Filter_. Any app (Discord, the browser, OBS) can use it like a regular microphone and gets
 your voice with the background noise removed and a clearer, even tone.
 
+- **Removes the echo of your speakers** with WebRTC's echo canceller (AEC3), so calls work
+  without headphones; it takes what the speakers play as a reference
 - **Removes background noise** with [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet), a
   neural network that keeps the full 48 kHz range
 - **Enhances the voice** with classic DSP: high-pass, EQ, de-esser, automatic gain control,
@@ -14,9 +16,8 @@ your voice with the background noise removed and a clearer, even tone.
 - **Test offline** with WAV files: the same chain, with the latency and processing time of every
   stage
 
-> **Status:** early and not released yet. Noise suppression and voice enhancement work. Next are
-> echo cancellation, for calls over speakers (WebRTC's AEC3 in the same process, with the speakers
-> chosen in the app), and presets, see the [roadmap](docs/concept.md#roadmap).
+> **Status:** early and not released yet. Echo cancellation, noise suppression and voice
+> enhancement work. Presets are next, see the [roadmap](docs/concept.md#roadmap).
 
 ## How it works
 
@@ -24,18 +25,21 @@ A single process reads the microphone, runs it through a chain of stages in 10 m
 plays the result into the virtual microphone:
 
 ```text
- Microphone ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──▶ agc ──▶ compressor ──▶ limiter ──▶ "Voice Filter" ──▶ apps
+ Microphone ──▶ echo ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──▶ agc ──▶ compressor ──▶ limiter ──▶ "Voice Filter" ──▶ apps
+                ▲
+ Speakers ──────┘ (what they play, as the reference)
 ```
 
-| Stage        | What it does                                                             | Settings                               | Latency |
-| ------------ | ------------------------------------------------------------------------ | -------------------------------------- | ------: |
-| `denoise`    | Removes background noise (DeepFilterNet3)                                | `limit`                                |   30 ms |
-| `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz                  | `freq`                                 |       – |
-| `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)       | `low-mid`, `presence`, `presence-freq` |       – |
-| `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates | `freq`, `threshold`                    |    1 ms |
-| `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses      | `target`, `max-gain`                   |       – |
-| `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                 | `threshold`, `ratio`                   |       – |
-| `limiter`    | Keeps the peaks below −1 dBFS                                            | `ceiling`, `release`                   |    1 ms |
+| Stage        | What it does                                                                      | Settings                               | Latency |
+| ------------ | --------------------------------------------------------------------------------- | -------------------------------------- | ------: |
+| `echo`       | Removes the echo of the speakers (AEC3, from what they play)                      | the speakers                           |    5 ms |
+| `denoise`    | Removes background noise (DeepFilterNet3)                                         | `limit`                                |   30 ms |
+| `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz                           | `freq`                                 |       – |
+| `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)                | `low-mid`, `presence`, `presence-freq` |       – |
+| `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates          | `freq`, `threshold`                    |    1 ms |
+| `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses               | `target`, `max-gain`                   |       – |
+| `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                          | `threshold`, `ratio`                   |       – |
+| `limiter`    | Keeps the peaks below −1 dBFS                                                     | `ceiling`, `release`                   |    1 ms |
 
 The values above are the defaults. The settings change them while it runs, but aren't kept for
 the next run yet.
@@ -44,9 +48,9 @@ Every stage can be switched off while it runs. A stage that is off is skipped (i
 its input plays instead, delayed by the stage's latency, so the total latency never changes.
 Switching crossfades over one frame, so there are no clicks.
 
-**Latency.** Measured live with a USB microphone: about 51 ms from the microphone to the app.
-That's 8 ms microphone, 11 ms for turning PipeWire's blocks into 10 ms frames and 32 ms for the
-chain. Most of it is DeepFilterNet3's lookahead. The GNOME app shows the current value.
+**Latency.** About 56 ms from the microphone to the app with a USB microphone: 8 ms microphone,
+11 ms for turning PipeWire's blocks into 10 ms frames (both measured live) and 37 ms for the chain.
+Most of it is DeepFilterNet3's lookahead. The GNOME app shows the current value.
 
 ## Installation
 
@@ -68,15 +72,17 @@ cargo install --path . --no-default-features    # without the GNOME app, no GTK 
 
 ```bash
 voice-filter inputs                   # lists the microphones, the chosen one marked with *
-voice-filter run --input <name>       # provides "Voice Filter", until Ctrl+C
+voice-filter outputs                  # lists the output devices (speakers), the same way
+voice-filter run --input <name> --output <name>   # provides "Voice Filter", until Ctrl+C
 voice-filter ui                       # opens the GNOME app for a running `voice-filter run`
 ```
 
 1. Start `voice-filter run`. Without `--input` it reads the default input. A microphone given with
-   `--input` is kept for the next runs.
+   `--input` is kept for the next runs. `--output` names the speakers whose echo gets removed,
+   kept the same way; without one it's the default output.
 2. Select **Voice Filter** as the microphone in your app (or as the default input of the system).
-3. Open `voice-filter ui` to choose the microphone, switch stages on and off or adjust their
-   settings.
+3. Open `voice-filter ui` to choose the microphone and the speakers, switch stages on and off or
+   adjust their settings.
 
 The microphone is only in use while an app records from Voice Filter. If Voice Filter is the
 default input, set the microphone with `--input` or in the app; otherwise it falls back to the
@@ -91,6 +97,8 @@ already running".
 never interrupts the audio. In the app you can:
 
 - choose the **microphone**, switched while the filter keeps running
+- choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
+  there's no echo, it can be off
 - turn on **Listen** to hear yourself through the filter on the default output (use headphones)
 - switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
   suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
@@ -101,11 +109,18 @@ never interrupts the audio. In the app you can:
 
 ```bash
 voice-filter process in.wav out.wav
+voice-filter process in.wav out.wav --reference played.wav   # with what the speakers played
 ```
 
 Runs a WAV file (48 kHz, mixed down to mono) through the same chain and writes the result, lined
 up with the input. It prints the latency and the processing time of every stage. Use it to compare
-settings, e.g. `--atten-lim 12` for a limit of 12 dB (the option works for `run` too).
+settings, e.g. `--atten-lim 12` for a limit of 12 dB (the option works for `run` too). For the echo
+cancellation, record the microphone and the monitor of the speakers at the same time, e.g.:
+
+```bash
+pw-record --target <microphone> --rate 48000 --channels 1 in.wav &
+pw-record --target <speakers> -P '{ stream.capture.sink = true }' --rate 48000 --channels 1 played.wav &
+```
 
 ### D-Bus
 
@@ -115,12 +130,14 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | Member            | Type                 | Description                                                            |
 | ----------------- | -------------------- | ---------------------------------------------------------------------- |
 | `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input              |
+| `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output |
 | `Listen`          | `b`, read/write      | plays Voice Filter on the default output                               |
 | `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                     |
 | `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value |
 | `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range       |
 | `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                             |
 | `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                           |
+| `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                       |
 | `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms              |
 | `Quantum`         | `t`, read            | samples per PipeWire cycle                                             |
 | `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms           |
@@ -161,3 +178,5 @@ at your option.
 
 The noise suppression is [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) by Hendrik
 Schröter (MIT or Apache-2.0), see [crates/deep-filter-rt/NOTICE.md](crates/deep-filter-rt/NOTICE.md).
+The echo cancellation is WebRTC's AEC3 as ported to Rust by
+[sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause).
