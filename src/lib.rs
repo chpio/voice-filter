@@ -7,6 +7,7 @@ pub mod agc;
 pub mod atomic;
 pub mod bridge;
 pub mod chain;
+pub mod dbus;
 pub mod denoise;
 pub mod limiter;
 pub mod live;

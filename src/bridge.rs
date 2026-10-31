@@ -30,6 +30,8 @@ pub struct Stats {
     pub dropped: AtomicU64,
     /// The longest processing time of a frame in nanoseconds, reset by the reader.
     pub max_frame_ns: AtomicU64,
+    /// `max_frame_ns` as the reader saw it before resetting it, for other readers.
+    pub last_max_frame_ns: AtomicU64,
     /// The delay through the bridge at the last pull, in samples: from the capture of a sample to
     /// its playback, without the latency of the chain.
     pub bridge_delay: AtomicI64,

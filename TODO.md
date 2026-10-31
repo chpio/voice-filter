@@ -16,8 +16,3 @@ Work items that don't change the design; the open design questions and TODOs are
 - [ ] Before the first release: check the release PR title `chore: bump version (v{{ version }})` in
   `release-plz.toml` with two packages. If one PR releases voice-filter and deep-filter-rt with
   different versions, release-plz probably can't fill in `version`.
-
-## Live mode
-
-- [ ] Refuse to start a second instance with a clear message: two running instances record from each
-  other's "Voice Filter" and keep each other running.

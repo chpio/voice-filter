@@ -16,8 +16,10 @@ use ::pipewire::spa::pod::Pod;
 use ::pipewire::stream::{StreamFlags, StreamRc, StreamState};
 use ::pipewire::types::ObjectType;
 
+use crate::atomic::AtomicF32;
 use crate::bridge::{Stats, bridge};
 use crate::chain::Chain;
+use crate::dbus::{self, Service};
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
 const NODE_NAME: &str = "voice-filter";
@@ -31,16 +33,27 @@ const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
 
 /// Runs until SIGINT or SIGTERM. `input` is the `node.name` of the microphone, without it the
-/// session manager links the default input.
-pub fn run(chain: Chain, input: Option<&str>) -> Result<()> {
+/// session manager links the default input. `atten_lim` is the denoise stage's, for the control
+/// interface.
+pub fn run(chain: Chain, input: Option<&str>, atten_lim: Arc<AtomicF32>) -> Result<()> {
+    let switches = chain.switches();
+    let (mut capture, mut playback, stats) = bridge(chain);
+    let chain_latency = capture.latency();
+    // first, so a second instance stops before it creates nodes
+    dbus::serve(Service {
+        switches,
+        atten_lim,
+        stats: stats.clone(),
+        chain_latency,
+        input: input.unwrap_or_default().to_owned(),
+    })?;
+
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&mainloop, None)?;
     let core = context
         .connect_rc(None)
         .context("Could not connect to PipeWire")?;
-    let (mut capture, mut playback, stats) = bridge(chain);
-    let chain_latency = capture.latency();
     // the quantum the streams ask for, the graph may still run a smaller one
     let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
 
@@ -324,7 +337,9 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
                 stats.dropped.load(Ordering::Relaxed),
                 stats.errors.load(Ordering::Relaxed),
             ];
-            let max_ms = stats.max_frame_ns.swap(0, Ordering::Relaxed) as f64 / 1e6;
+            let max_ns = stats.max_frame_ns.swap(0, Ordering::Relaxed);
+            stats.last_max_frame_ns.store(max_ns, Ordering::Relaxed);
+            let max_ms = max_ns as f64 / 1e6;
             if now[0] != last[0] {
                 let capture = stats.capture_delay.load(Ordering::Relaxed);
                 let bridge = stats.bridge_delay.load(Ordering::Relaxed);

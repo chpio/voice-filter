@@ -1,8 +1,10 @@
 use ::std::path::PathBuf;
+use ::std::sync::Arc;
 
 use ::anyhow::Result;
 use ::clap::{Parser, Subcommand};
 use ::voice_filter::agc::Agc;
+use ::voice_filter::atomic::AtomicF32;
 use ::voice_filter::chain::Chain;
 use ::voice_filter::denoise::Denoise;
 use ::voice_filter::limiter::Limiter;
@@ -40,13 +42,16 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     let settings_dir = settings::dir();
-    let chain = || -> Result<Chain> {
+    // the chain and the attenuation limit of its denoise stage, for the control interface
+    let chain = || -> Result<(Chain, Arc<AtomicF32>)> {
         let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
-        Ok(Chain::new(vec![
+        let atten_lim = denoise.atten_lim();
+        let chain = Chain::new(vec![
             Box::new(denoise),
             Box::new(Agc::new()),
             Box::new(Limiter::new()),
-        ]))
+        ]);
+        Ok((chain, atten_lim))
     };
     match args.command {
         Command::Run { input } => {
@@ -63,7 +68,8 @@ fn main() -> Result<()> {
                 Some(input) => eprintln!("Reading from {input}"),
                 None => eprintln!("Reading from the default input"),
             }
-            live::run(chain()?, input.as_deref())?;
+            let (chain, atten_lim) = chain()?;
+            live::run(chain, input.as_deref(), atten_lim)?;
         }
         Command::Inputs => {
             let saved = match &settings_dir {
@@ -83,7 +89,7 @@ fn main() -> Result<()> {
             }
         }
         Command::Process { input, output } => {
-            let report = offline::process_file(&mut chain()?, &input, &output)?;
+            let report = offline::process_file(&mut chain()?.0, &input, &output)?;
             println!("{report}");
         }
     }
