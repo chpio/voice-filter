@@ -19,6 +19,11 @@ pub trait VoiceFilter {
     fn set_attenuation_limit(&self, db: f64) -> ::zbus::Result<()>;
 
     #[zbus(property)]
+    fn listen(&self) -> ::zbus::Result<bool>;
+    #[zbus(property)]
+    fn set_listen(&self, on: bool) -> ::zbus::Result<()>;
+
+    #[zbus(property)]
     fn stages(&self) -> ::zbus::Result<Vec<(String, bool)>>;
     #[zbus(property)]
     fn input(&self) -> ::zbus::Result<String>;
@@ -38,6 +43,7 @@ pub trait VoiceFilter {
 
 /// Everything the window shows, read in one go.
 pub struct Status {
+    pub listen: bool,
     pub stages: Vec<(String, bool)>,
     pub attenuation_limit: f64,
     pub input: String,
@@ -52,6 +58,7 @@ pub struct Status {
 impl VoiceFilterProxy<'_> {
     pub async fn status(&self) -> ::zbus::Result<Status> {
         Ok(Status {
+            listen: self.listen().await?,
             stages: self.stages().await?,
             attenuation_limit: self.attenuation_limit().await?,
             input: self.input().await?,

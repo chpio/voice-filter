@@ -1,6 +1,7 @@
 //! The live filter: a capture stream from the default microphone and the virtual microphone
 //! "Voice Filter", with the chain between them (see [`crate::bridge`]).
 
+use ::std::cell::RefCell;
 use ::std::path::PathBuf;
 use ::std::sync::atomic::Ordering;
 use ::std::sync::{Arc, Mutex};
@@ -16,9 +17,9 @@ use ::pipewire::stream::{StreamFlags, StreamRc, StreamState};
 use ::pipewire::types::ObjectType;
 
 use crate::atomic::AtomicF32;
-use crate::bridge::{Stats, bridge};
+use crate::bridge::{Capture, Playback, Stats, bridge};
 use crate::chain::Chain;
-use crate::dbus::{self, Service};
+use crate::dbus::{self, Control, Service};
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
 const NODE_NAME: &str = "voice-filter";
@@ -30,12 +31,6 @@ const GROUP: &str = "voice-filter";
 /// The largest quantum the callbacks are prepared for without allocating.
 const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
-
-/// What the control interface asks the PipeWire loop to do, it owns the streams.
-enum Command {
-    /// Reads from another microphone, the empty name for the default input.
-    SetInput(String),
-}
 
 /// Runs until SIGINT or SIGTERM. `input` is the `node.name` of the microphone, without it the
 /// session manager links the default input. `atten_lim` is the denoise stage's, for the control
@@ -60,11 +55,12 @@ pub fn run(
         chain_latency,
         input: input.unwrap_or_default().to_owned(),
         inputs: inputs.clone(),
-        select_input: Box::new(move |name| {
+        send: Box::new(move |control| {
             commands
-                .send(Command::SetInput(name))
+                .send(control)
                 .map_err(|_| anyhow!("the PipeWire loop is gone"))
         }),
+        listening: false,
         settings_dir,
     })?;
 
@@ -118,25 +114,8 @@ pub fn run(
     let _input_listener = input
         .add_local_listener_with_user_data(())
         .process(move |stream, _| {
-            let (now, delay) = timing(stream);
+            let delay = read_into(stream, &mut capture, &mut samples);
             capture_stats.capture_delay.store(delay, Ordering::Relaxed);
-            let Some(mut buffer) = stream.dequeue_buffer() else {
-                return;
-            };
-            let data = &mut buffer.datas_mut()[0];
-            let offset = data.chunk().offset() as usize;
-            let size = data.chunk().size() as usize;
-            let Some(bytes) = data.data() else { return };
-            let end = (offset + size).min(bytes.len());
-            samples.clear();
-            samples.extend(
-                bytes[offset.min(end)..end]
-                    .as_chunks::<SAMPLE_SIZE>()
-                    .0
-                    .iter()
-                    .map(|&b| f32::from_le_bytes(b)),
-            );
-            capture.push(&samples, now);
         })
         .register()?;
 
@@ -145,38 +124,10 @@ pub fn run(
     let _output_listener = output
         .add_local_listener_with_user_data(())
         .process(move |stream, _| {
-            let (now, delay) = timing(stream);
+            let delay = write_from(stream, &mut playback, &mut pulled);
             playback_stats
                 .playback_delay
                 .store(delay, Ordering::Relaxed);
-            let Some(mut buffer) = stream.dequeue_buffer() else {
-                return;
-            };
-            // the samples the graph wants this cycle, not the size of the buffer, which would
-            // add its whole length as latency
-            let requested = match buffer.requested() as usize {
-                0 => FRAME_LEN,
-                n => n,
-            };
-            let data = &mut buffer.datas_mut()[0];
-            let n = {
-                let Some(bytes) = data.data() else { return };
-                let n = requested.min(bytes.len() / SAMPLE_SIZE).min(MAX_QUANTUM);
-                playback.pull(&mut pulled[..n], now);
-                for (b, sample) in bytes
-                    .as_chunks_mut::<SAMPLE_SIZE>()
-                    .0
-                    .iter_mut()
-                    .zip(&pulled[..n])
-                {
-                    *b = sample.to_le_bytes();
-                }
-                n
-            };
-            let chunk = data.chunk_mut();
-            *chunk.offset_mut() = 0;
-            *chunk.stride_mut() = SAMPLE_SIZE as _;
-            *chunk.size_mut() = (n * SAMPLE_SIZE) as _;
         })
         // The capture stream only exists while an app records from the filter. Just inactive, it
         // would still count as recording, and GNOME would show the microphone as in use.
@@ -201,12 +152,22 @@ pub fn run(
 
     let _commands = command_receiver.attach(mainloop.loop_(), {
         let input = input.clone();
-        move |command| match command {
-            Command::SetInput(name) => {
+        let core = core.clone();
+        let listening = RefCell::new(None);
+        move |control| match control {
+            Control::SetInput(name) => {
                 if let Err(err) = set_target(&input, &name) {
                     eprintln!("Could not switch to {name}: {err}");
                 }
             }
+            Control::SetListen(false) => drop(listening.take()),
+            Control::SetListen(true) if listening.borrow().is_none() => {
+                match Listen::start(&core) {
+                    Ok(listen) => drop(listening.replace(Some(listen))),
+                    Err(err) => eprintln!("Could not start listening: {err}"),
+                }
+            }
+            Control::SetListen(true) => {}
         }
     });
 
@@ -236,6 +197,154 @@ pub fn run(
     report_periodically(stats, chain_latency);
     mainloop.run();
     Ok(())
+}
+
+const LISTEN_NODE_NAME: &str = "voice-filter-listen";
+/// Its own group, so its streams run in one cycle, and its own link group, so the session manager
+/// may link it to "Voice Filter" (it never links within a link group).
+const LISTEN_GROUP: &str = "voice-filter-listen";
+
+/// Plays what "Voice Filter" outputs on the default output while it lives: a capture stream from
+/// it and a playback stream, with a bridge without stages between them. As it records from "Voice
+/// Filter" like an app, the filter runs while listening even if no app records.
+struct Listen {
+    _capture: StreamRc,
+    _playback: StreamRc,
+    _capture_listener: pw::stream::StreamListener<()>,
+    _playback_listener: pw::stream::StreamListener<()>,
+}
+
+impl Listen {
+    fn start(core: &pw::core::CoreRc) -> Result<Self> {
+        let (mut capture, mut playback, _) = bridge(Chain::new(vec![]));
+        let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
+        let capture_stream = StreamRc::new(
+            core.clone(),
+            LISTEN_NODE_NAME,
+            properties! {
+                *pw::keys::MEDIA_TYPE => "Audio",
+                *pw::keys::MEDIA_CATEGORY => "Capture",
+                *pw::keys::NODE_NAME => LISTEN_NODE_NAME,
+                *pw::keys::NODE_DESCRIPTION => "Voice Filter (listening)",
+                *pw::keys::TARGET_OBJECT => NODE_NAME,
+                *pw::keys::NODE_LATENCY => latency.as_str(),
+                *pw::keys::NODE_GROUP => LISTEN_GROUP,
+                *pw::keys::NODE_LINK_GROUP => LISTEN_GROUP,
+                *pw::keys::AUDIO_CHANNELS => "1",
+            },
+        )?;
+        let playback_stream = StreamRc::new(
+            core.clone(),
+            LISTEN_NODE_NAME,
+            properties! {
+                *pw::keys::MEDIA_TYPE => "Audio",
+                *pw::keys::MEDIA_CATEGORY => "Playback",
+                *pw::keys::NODE_NAME => LISTEN_NODE_NAME,
+                *pw::keys::NODE_DESCRIPTION => "Voice Filter (listening)",
+                *pw::keys::NODE_LATENCY => latency.as_str(),
+                *pw::keys::NODE_GROUP => LISTEN_GROUP,
+                *pw::keys::NODE_LINK_GROUP => LISTEN_GROUP,
+                *pw::keys::AUDIO_CHANNELS => "1",
+            },
+        )?;
+        let mut samples = Vec::with_capacity(MAX_QUANTUM);
+        let capture_listener = capture_stream
+            .add_local_listener_with_user_data(())
+            .process(move |stream, _| {
+                read_into(stream, &mut capture, &mut samples);
+            })
+            .register()?;
+        let mut pulled = vec![0.; MAX_QUANTUM];
+        let playback_listener = playback_stream
+            .add_local_listener_with_user_data(())
+            .process(move |stream, _| {
+                write_from(stream, &mut playback, &mut pulled);
+            })
+            .register()?;
+        let flags = StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS;
+        let format = format_param();
+        capture_stream.connect(
+            spa::utils::Direction::Input,
+            None,
+            flags,
+            &mut [Pod::from_bytes(&format).unwrap()],
+        )?;
+        playback_stream.connect(
+            spa::utils::Direction::Output,
+            None,
+            flags,
+            &mut [Pod::from_bytes(&format).unwrap()],
+        )?;
+        Ok(Self {
+            _capture: capture_stream,
+            _playback: playback_stream,
+            _capture_listener: capture_listener,
+            _playback_listener: playback_listener,
+        })
+    }
+}
+
+/// Reads the samples of the cycle from a capture stream into `capture`, `samples` is a buffer for
+/// them. Returns the delay from the device in samples.
+fn read_into(stream: &pw::stream::Stream, capture: &mut Capture, samples: &mut Vec<f32>) -> i64 {
+    let (now, delay) = timing(stream);
+    let Some(mut buffer) = stream.dequeue_buffer() else {
+        return delay;
+    };
+    let data = &mut buffer.datas_mut()[0];
+    let offset = data.chunk().offset() as usize;
+    let size = data.chunk().size() as usize;
+    let Some(bytes) = data.data() else {
+        return delay;
+    };
+    let end = (offset + size).min(bytes.len());
+    samples.clear();
+    samples.extend(
+        bytes[offset.min(end)..end]
+            .as_chunks::<SAMPLE_SIZE>()
+            .0
+            .iter()
+            .map(|&b| f32::from_le_bytes(b)),
+    );
+    capture.push(samples, now);
+    delay
+}
+
+/// Writes the samples of the cycle from `playback` into a playback stream, `pulled` is a buffer
+/// for them. Returns the delay to the device in samples.
+fn write_from(stream: &pw::stream::Stream, playback: &mut Playback, pulled: &mut [f32]) -> i64 {
+    let (now, delay) = timing(stream);
+    let Some(mut buffer) = stream.dequeue_buffer() else {
+        return delay;
+    };
+    // the samples the graph wants this cycle, not the size of the buffer, which would add its
+    // whole length as latency
+    let requested = match buffer.requested() as usize {
+        0 => FRAME_LEN,
+        n => n,
+    };
+    let data = &mut buffer.datas_mut()[0];
+    let n = {
+        let Some(bytes) = data.data() else {
+            return delay;
+        };
+        let n = requested.min(bytes.len() / SAMPLE_SIZE).min(pulled.len());
+        playback.pull(&mut pulled[..n], now);
+        for (b, sample) in bytes
+            .as_chunks_mut::<SAMPLE_SIZE>()
+            .0
+            .iter_mut()
+            .zip(&pulled[..n])
+        {
+            *b = sample.to_le_bytes();
+        }
+        n
+    };
+    let chunk = data.chunk_mut();
+    *chunk.offset_mut() = 0;
+    *chunk.stride_mut() = SAMPLE_SIZE as _;
+    *chunk.size_mut() = (n * SAMPLE_SIZE) as _;
+    delay
 }
 
 /// Points the capture stream to the microphone `name`, the empty name for the default input. A

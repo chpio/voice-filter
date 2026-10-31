@@ -27,6 +27,7 @@ struct Widgets {
     input: adw::ComboRow,
     /// The `node.name` per entry of `input`, the first is the default input (empty).
     input_names: RefCell<Vec<String>>,
+    listen: adw::SwitchRow,
     latency: adw::ActionRow,
     processing: adw::ActionRow,
     dropouts: adw::ActionRow,
@@ -65,6 +66,10 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .model(&gtk::StringList::new(&[]))
             .build(),
         input_names: RefCell::new(Vec::new()),
+        listen: adw::SwitchRow::builder()
+            .title("Listen")
+            .subtitle("Plays it on the default output, use headphones")
+            .build(),
         latency: row("Latency"),
         processing: row("Processing Time"),
         dropouts: row("Dropouts Since the Start"),
@@ -87,7 +92,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     page.add(&group(
         "Input",
         Some("The filter reads from this microphone, apps read from “Voice Filter”."),
-        &[widgets.input.upcast_ref()],
+        &[widgets.input.upcast_ref(), widgets.listen.upcast_ref()],
     ));
     page.add(&group(
         "Noise Suppression",
@@ -154,6 +159,18 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             });
         });
     }
+    let weak = Rc::downgrade(widgets);
+    widgets.listen.connect_active_notify(move |row| {
+        let Some(proxy) = sendable(&weak) else {
+            return;
+        };
+        let on = row.is_active();
+        glib::spawn_future_local(async move {
+            if let Err(err) = proxy.set_listen(on).await {
+                eprintln!("Could not switch listening: {err}");
+            }
+        });
+    });
     let weak = Rc::downgrade(widgets);
     widgets.input.connect_selected_notify(move |row| {
         let Some(proxy) = sendable(&weak) else {
@@ -280,6 +297,7 @@ fn show(widgets: &Widgets, status: &Status) {
         widgets.atten_lim.set_value(status.attenuation_limit);
     }
     show_inputs(widgets, status);
+    widgets.listen.set_active(status.listen);
     widgets.updating.set(false);
 
     let ms = |part: &str| status.latency.get(part).copied().unwrap_or_default();

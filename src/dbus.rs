@@ -22,6 +22,15 @@ use crate::settings;
 pub const NAME: &str = "net.b128.VoiceFilter.Daemon";
 pub const PATH: &str = "/net/b128/VoiceFilter";
 
+/// What the control interface asks the PipeWire loop to do, which owns the streams.
+#[derive(Debug, PartialEq)]
+pub enum Control {
+    /// Reads from another microphone, the empty name for the default input.
+    SetInput(String),
+    /// Plays what "Voice Filter" outputs on the default output, or stops it.
+    SetListen(bool),
+}
+
 pub struct Service {
     pub switches: Vec<(&'static str, Arc<AtomicBool>)>,
     pub atten_lim: Arc<AtomicF32>,
@@ -32,8 +41,10 @@ pub struct Service {
     pub input: String,
     /// The microphones to choose from, kept up to date by the PipeWire loop.
     pub inputs: Arc<Mutex<Vec<Input>>>,
-    /// Switches the live filter to another microphone.
-    pub select_input: Box<dyn Fn(String) -> Result<()> + Send + Sync>,
+    /// Sends a [`Control`] to the PipeWire loop.
+    pub send: Box<dyn Fn(Control) -> Result<()> + Send + Sync>,
+    /// Whether the output is played on the default output, see [`Control::SetListen`].
+    pub listening: bool,
     /// Where a chosen microphone is kept for the next runs.
     pub settings_dir: Option<PathBuf>,
 }
@@ -60,6 +71,21 @@ impl Service {
             )));
         }
         self.atten_lim.store(db as f32);
+        Ok(())
+    }
+
+    /// Whether what "Voice Filter" outputs is played on the default output, to hear the filter
+    /// while tuning it; with headphones, speakers feed back into the microphone. It's off at the
+    /// start.
+    #[zbus(property)]
+    pub fn listen(&self) -> bool {
+        self.listening
+    }
+
+    #[zbus(property)]
+    pub fn set_listen(&mut self, on: bool) -> fdo::Result<()> {
+        (self.send)(Control::SetListen(on)).map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        self.listening = on;
         Ok(())
     }
 
@@ -101,7 +127,8 @@ impl Service {
         if !name.is_empty() && !known {
             return Err(fdo::Error::InvalidArgs(format!("no input {name}")));
         }
-        (self.select_input)(name.clone()).map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        (self.send)(Control::SetInput(name.clone()))
+            .map_err(|err| fdo::Error::Failed(err.to_string()))?;
         if let Some(dir) = &self.settings_dir {
             settings::save_input(dir, &name).map_err(|err| fdo::Error::Failed(err.to_string()))?;
         }

@@ -5,7 +5,7 @@ use ::std::sync::{Arc, Mutex};
 
 use ::voice_filter::atomic::AtomicF32;
 use ::voice_filter::bridge::Stats;
-use ::voice_filter::dbus::Service;
+use ::voice_filter::dbus::{Control, Service};
 use ::voice_filter::live::Input;
 use ::voice_filter::settings;
 
@@ -13,9 +13,9 @@ fn service() -> Service {
     service_with(Arc::default(), None)
 }
 
-/// A service whose `select_input` records the names in `selected`.
+/// A service that records what it sends in `sent`.
 fn service_with(
-    selected: Arc<Mutex<Vec<String>>>,
+    sent: Arc<Mutex<Vec<Control>>>,
     settings_dir: Option<::std::path::PathBuf>,
 ) -> Service {
     let input = |id, name: &str, priority| Input {
@@ -37,10 +37,11 @@ fn service_with(
             input(40, "usb-mic", 2100),
             input(41, "webcam", 2009),
         ])),
-        select_input: Box::new(move |name| {
-            selected.lock().unwrap().push(name);
+        send: Box::new(move |control| {
+            sent.lock().unwrap().push(control);
             Ok(())
         }),
+        listening: false,
         settings_dir,
     }
 }
@@ -84,8 +85,8 @@ fn sums_the_latency_in_ms() {
 #[test]
 fn switches_to_known_inputs_and_keeps_them() {
     let dir = ::tempfile::tempdir().unwrap();
-    let selected = Arc::<Mutex<Vec<String>>>::default();
-    let mut service = service_with(selected.clone(), Some(dir.path().to_owned()));
+    let sent = Arc::<Mutex<Vec<Control>>>::default();
+    let mut service = service_with(sent.clone(), Some(dir.path().to_owned()));
     assert_eq!(
         service.inputs()[0],
         ("usb-mic".to_owned(), "usb-mic description".to_owned(), 2100)
@@ -105,5 +106,25 @@ fn switches_to_known_inputs_and_keeps_them() {
     // the empty name is the default input, and forgets the chosen one
     service.set_input(String::new()).unwrap();
     assert_eq!(settings::load_input(dir.path()).unwrap(), None);
-    assert_eq!(*selected.lock().unwrap(), ["webcam", ""]);
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [
+            Control::SetInput("webcam".to_owned()),
+            Control::SetInput(String::new())
+        ]
+    );
+}
+
+#[test]
+fn switches_listening_on_and_off() {
+    let sent = Arc::<Mutex<Vec<Control>>>::default();
+    let mut service = service_with(sent.clone(), None);
+    assert!(!service.listen());
+    service.set_listen(true).unwrap();
+    assert!(service.listen());
+    service.set_listen(false).unwrap();
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [Control::SetListen(true), Control::SetListen(false)]
+    );
 }
