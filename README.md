@@ -11,8 +11,8 @@ Planned:
 - runs entirely on the CPU, with a total latency below 40 ms
 - stages and modes can be switched at runtime without clicks
 
-The project is at an early stage, nothing of this works yet. The design is described (in
-German) in [docs/konzept.md](docs/konzept.md).
+The project is at an early stage, nothing of this works yet. The design is described in
+[docs/concept.md](docs/concept.md).
 
 ## License
 
