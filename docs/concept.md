@@ -7,7 +7,7 @@ Started as the German document [Konzept: Live-Sprachfilter für Linux](https://c
 A live voice filter for Linux that shows up in PipeWire as a virtual microphone. Any app (Discord, browser, OBS) uses it like a regular microphone.
 
 - **Live:** total latency below 40 ms if possible, so conversations stay natural.
-- **Features:** remove echo, remove noise, optionally suppress other voices, enhance the voice.
+- **Features:** remove echo, remove noise, enhance the voice; optionally suppress other voices (postponed, see [Suppressing other voices](#suppressing-other-voices)).
 - **Hardware:** runs entirely on the CPU. The GPU is only an optional accelerator for heavy add-on stages.
 - **Platform:** Arch Linux, GNOME on Wayland, PipeWire.
 - **Operation:** stages and modes can be switched at runtime, without clicks.
@@ -19,7 +19,7 @@ The signal passes through all stages in a fixed order. Echo comes first, because
 1. **Microphone** – hardware input, 48 kHz mono
 2. **Remove echo** – WebRTC AEC3 via the PipeWire module (see [Echo cancellation](#echo-cancellation))
 3. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter)
-4. **Suppress other voices** (optional) – Hush, modes Off · Full · Gate, about 11 ms more
+4. **Suppress other voices** (optional, postponed) – Hush, modes Off · Full · Gate, about 11 ms more
 5. **Enhance the voice** – high-pass, EQ, de-esser, compressor, AGC, limiter
 6. **Restoration** (optional, later) – ML model such as Stream.FM, GPU required
 7. **Virtual microphone "Voice Filter"** – selected in Discord, the browser or OBS
@@ -28,12 +28,12 @@ Voice enhancement comes after denoising, so the compressor doesn't bring up the 
 
 ## Model choice
 
-DeepFilterNet3 is the main filter. It's the strongest open live option with the full frequency range. Hush only complements it for other voices. There's no independent comparison of all models for 2026; Hush's placement on the Hugging Face leaderboard comes from its maker.
+DeepFilterNet3 is the main filter. It's the strongest open live option with the full frequency range. Hush was meant to complement it for other voices, but is postponed after a first test (see [Suppressing other voices](#suppressing-other-voices)). There's no independent comparison of all models for 2026; Hush's placement on the Hugging Face leaderboard comes from its maker.
 
 | Model                                                       | Sample rate | Strength                                                 | Weakness                           | Role                       |
 | ----------------------------------------------------------- | ----------- | -------------------------------------------------------- | ---------------------------------- | -------------------------- |
 | [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet) | 48 kHz      | Best live quality, core in Rust, LADSPA plugin available | 30 ms latency, somewhat more CPU   | Main filter                |
-| [Hush](https://huggingface.co/Aliados/hush)                 | 16 kHz      | Also suppresses other voices, 8 MB, under 1 ms per frame | Sounds like a phone, young project | Optional                   |
+| [Hush](https://huggingface.co/Aliados/hush)                 | 16 kHz      | Also suppresses other voices, 8 MB, under 1 ms per frame | Sounds like a phone, young project | Postponed                  |
 | [GTCRN](https://github.com/sherryyu33/gtcrn)                | 16 kHz      | Extremely small, 23.7 K parameters                       | Narrowband                         | Fallback for weak hardware |
 | RNNoise                                                     | 48 kHz      | Minimal CPU usage                                        | Clearly worse quality              | Not planned                |
 
@@ -56,6 +56,8 @@ We start with PipeWire's `libpipewire-module-echo-cancel` (WebRTC AEC3). It crea
 
 ## Suppressing other voices
 
+**Postponed** (2026-10-31): in a first test Hush didn't separate the voices, DeepFilterNet3 alone did better (see [Test](#test) below). The plan as it was:
+
 The feature can be enabled at runtime and offers two modes. Hush costs no license fees (Apache 2.0); the costs are latency, sound and maintenance.
 
 | Mode | How it works                                                                 | Advantage                                         | Disadvantage                                               |
@@ -72,6 +74,20 @@ The feature can be enabled at runtime and offers two modes. Hush costs no licens
 - **Maintenance:** a project of a company with a different core business, version 2 announced. The model format may change.
 
 If you never need the feature, leave the stage out entirely and save the 11 ms.
+
+### Test
+
+A recording from the USB microphone (speech at about −36 dBFS RMS, rather quiet): first the speaker alone, then a video with speech from a phone about a meter away, both at once. Run offline through DeepFilterNet3, hush-vani 0.1.2 (Full, and Gate with a gain per 10 ms from Hush's output against its input) and combinations, compared by ear and by the level per second against the input:
+
+- DeepFilterNet3 alone keeps the speaker (−2 to −8 dB) and lets the video through while it plays alone; while the speaker talks, it suppresses the video by itself, and sounds good.
+- Hush after DeepFilterNet3 swallowed the speaker alone (−27 to −65 dB). Hush depends on the level: 10 dB more before it keeps the speaker (still 5–10 dB below DeepFilterNet3 alone), but then attenuates speaker and video alike. With AGC and limiter before it (Hush last) it attenuates everything by 12–15 dB, again without separating: the AGC evens out the level difference Hush seems to rely on.
+- Before trying again: a recording with the microphone close (speech peaks around −10 dBFS), which also helps every other stage. Hush alone at the original level separated as little.
+
+Separating by the speaker's own voice (target speaker extraction or personalized speech enhancement, conditioned on an enrollment of a few seconds of the voice) would be the actual solution. Open options as of 2026-10:
+
+- [VoxLock](https://github.com/arbazsiddiqui/voxlock): a 27 M parameter causal band-split RNN (from the REAL-TSE baseline), ONNX, 16 kHz, 24 ms plus chunk latency; but 60–110 % of a core by its own numbers (DeepFilterNet3 needs 2.5 %), and no license stated for the weights.
+- Personalized DeepFilterNet2 ([arXiv 2404.08022](https://arxiv.org/abs/2404.08022)), Personalized PercepNet, pDCCRN: papers without released weights. DeepFilterNet3 with a speaker embedding would fit the chain best, but means training it ourselves.
+- [WeSep](https://github.com/wenet-e2e/wesep): a toolkit for target speaker extraction, no pretrained models released yet.
 
 ## Voice enhancement
 
@@ -147,6 +163,7 @@ The biggest risk is latency: all stages together must stay live.
 - [ ] Default attenuation limit of DeepFilterNet3, to be chosen by listening in the GNOME app (it can change at runtime). Unlimited (the model's default) sounds dull: in a first test recording the speech above 1 kHz lost about 20 dB, with a limit of 12 dB about 11 dB, while the pauses lost 13 and 8 dB. That recording clipped (0.16 % of the samples), which may account for part of it.
 - [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
+- [ ] Personalized denoising that keeps only the user's voice: wait for an open model that runs in real time on little CPU, or train DeepFilterNet3 with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
 - [ ] Can the weights be stored as fp16 or quantized to int8 (about half or a quarter of the size) without audible loss, and does `tract` support it for all operators?
 
 ## Roadmap
@@ -155,7 +172,7 @@ Four phases, each usable on its own. Each phase ends with a latency and listenin
 
 1. **Base:** vendor `deep-filter-rt`, PipeWire node, DeepFilterNet3, offline mode for WAV tests, latency measurement per stage.
 2. **Voice:** DSP chain (high-pass, EQ, de-esser, compressor, AGC, limiter), presets, D-Bus interface and GNOME app; the attenuation limit of DeepFilterNet3 (`--atten-lim` so far) as one of the first runtime settings.
-3. **Echo and other voices:** integrate the echo-cancel module, Hush with Full and Gate modes, click-free switching.
+3. **Echo:** integrate the echo-cancel module. Other voices (Hush with Full and Gate modes, or a personalized model) are postponed.
 4. **Restoration:** evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage.
 
 After that: a package for Arch (AUR).

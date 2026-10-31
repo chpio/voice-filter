@@ -6,7 +6,7 @@ _Voice Filter_, so any app (Discord, the browser, OBS) can use it like a regular
 Planned:
 
 - removes echo and background noise (_DeepFilterNet3_)
-- optionally suppresses other voices (_Hush_)
+- maybe later: suppresses other voices
 - enhances the voice with classic DSP: high-pass, EQ, de-esser, compressor, AGC and limiter
 - runs entirely on the CPU, with a total latency below 40 ms
 - stages and modes can be switched at runtime without clicks, from a GNOME app
