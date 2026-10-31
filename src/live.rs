@@ -1,6 +1,8 @@
 //! The live filter: a capture stream from the default microphone and the virtual microphone
 //! "Voice Filter", with the chain between them (see [`crate::bridge`]).
 
+use ::std::cell::RefCell;
+use ::std::rc::Rc;
 use ::std::sync::Arc;
 use ::std::sync::atomic::Ordering;
 use ::std::time::Duration;
@@ -12,6 +14,7 @@ use ::pipewire::properties::properties;
 use ::pipewire::spa;
 use ::pipewire::spa::pod::Pod;
 use ::pipewire::stream::{StreamFlags, StreamRc, StreamState};
+use ::pipewire::types::ObjectType;
 
 use crate::bridge::{Stats, bridge};
 use crate::chain::Chain;
@@ -27,8 +30,9 @@ const GROUP: &str = "voice-filter";
 const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
 
-/// Runs until SIGINT or SIGTERM.
-pub fn run(chain: Chain) -> Result<()> {
+/// Runs until SIGINT or SIGTERM. `input` is the `node.name` of the microphone, without it the
+/// session manager links the default input.
+pub fn run(chain: Chain, input: Option<&str>) -> Result<()> {
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&mainloop, None)?;
@@ -56,21 +60,24 @@ pub fn run(chain: Chain) -> Result<()> {
             *pw::keys::AUDIO_CHANNELS => "1",
         },
     )?;
-    let input = StreamRc::new(
-        core.clone(),
-        CAPTURE_NODE_NAME,
-        properties! {
-            *pw::keys::MEDIA_TYPE => "Audio",
-            *pw::keys::MEDIA_CATEGORY => "Capture",
-            *pw::keys::MEDIA_ROLE => "Communication",
-            *pw::keys::NODE_NAME => CAPTURE_NODE_NAME,
-            *pw::keys::NODE_DESCRIPTION => "Voice Filter (microphone)",
-            *pw::keys::NODE_LATENCY => latency.as_str(),
-            *pw::keys::NODE_GROUP => GROUP,
-            *pw::keys::NODE_LINK_GROUP => GROUP,
-            *pw::keys::AUDIO_CHANNELS => "1",
-        },
-    )?;
+    let mut capture_properties = properties! {
+        *pw::keys::MEDIA_TYPE => "Audio",
+        *pw::keys::MEDIA_CATEGORY => "Capture",
+        *pw::keys::MEDIA_ROLE => "Communication",
+        *pw::keys::NODE_NAME => CAPTURE_NODE_NAME,
+        *pw::keys::NODE_DESCRIPTION => "Voice Filter (microphone)",
+        *pw::keys::NODE_LATENCY => latency.as_str(),
+        *pw::keys::NODE_GROUP => GROUP,
+        *pw::keys::NODE_LINK_GROUP => GROUP,
+        *pw::keys::AUDIO_CHANNELS => "1",
+    };
+    // Without a target, the session manager links the default input; if that's "Voice Filter"
+    // itself, the link group rules it out and it falls back to the source with the highest
+    // priority, whichever that is.
+    if let Some(input) = input {
+        capture_properties.insert(*pw::keys::TARGET_OBJECT, input);
+    }
+    let input = StreamRc::new(core.clone(), CAPTURE_NODE_NAME, capture_properties)?;
 
     let mut samples = Vec::with_capacity(MAX_QUANTUM);
     let capture_stats = stats.clone();
@@ -199,6 +206,72 @@ fn connect_capture(input: &StreamRc) -> Result<()> {
         &mut [Pod::from_bytes(&format).unwrap()],
     )?;
     Ok(())
+}
+
+/// An audio source the filter can read from.
+pub struct Input {
+    /// The `node.name`, for `--input`.
+    pub name: String,
+    pub description: String,
+    /// The session manager falls back to the highest one.
+    pub priority: i32,
+}
+
+/// The audio sources of the graph except the filter's own, the highest priority first.
+pub fn inputs() -> Result<Vec<Input>> {
+    pw::init();
+    let mainloop = pw::main_loop::MainLoopRc::new(None)?;
+    let context = pw::context::ContextRc::new(&mainloop, None)?;
+    let core = context
+        .connect_rc(None)
+        .context("Could not connect to PipeWire")?;
+    let registry = core.get_registry_rc()?;
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let _registry_listener = registry
+        .add_listener_local()
+        .global({
+            let inputs = inputs.clone();
+            move |global| {
+                let Some(props) = global.props else { return };
+                let class = props.get(*pw::keys::MEDIA_CLASS).unwrap_or_default();
+                let name = props.get(*pw::keys::NODE_NAME).unwrap_or_default();
+                if global.type_ != ObjectType::Node
+                    || !class.starts_with("Audio/Source")
+                    || name == NODE_NAME
+                {
+                    return;
+                }
+                inputs.borrow_mut().push(Input {
+                    name: name.to_owned(),
+                    description: props
+                        .get(*pw::keys::NODE_DESCRIPTION)
+                        .unwrap_or(name)
+                        .to_owned(),
+                    priority: props
+                        .get(*pw::keys::PRIORITY_SESSION)
+                        .and_then(|priority| priority.parse().ok())
+                        .unwrap_or(0),
+                });
+            }
+        })
+        .register();
+    // all globals are announced once the server answers the sync
+    let pending = core.sync(0)?;
+    let _core_listener = core
+        .add_listener_local()
+        .done({
+            let mainloop = mainloop.clone();
+            move |id, seq| {
+                if id == pw::core::PW_ID_CORE && seq == pending {
+                    mainloop.quit();
+                }
+            }
+        })
+        .register();
+    mainloop.run();
+    let mut inputs = inputs.take();
+    inputs.sort_by_key(|input| ::std::cmp::Reverse(input.priority));
+    Ok(inputs)
 }
 
 /// The time of the graph cycle in nanoseconds and the delay to the device in samples (including

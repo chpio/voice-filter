@@ -17,12 +17,15 @@ The project is at an early stage: so far it only removes noise. The design is de
 ## Usage
 
 ```bash
-voice-filter run                      # provides "Voice Filter", until Ctrl+C
+voice-filter inputs                   # lists the microphones
+voice-filter run --input <name>       # provides "Voice Filter", until Ctrl+C
 voice-filter process in.wav out.wav   # filters a 48 kHz WAV file, prints latency and timing
 ```
 
-Select "Voice Filter" as the microphone in the app. The real microphone is the default input of
-the system, it's only in use while an app records from "Voice Filter".
+Select "Voice Filter" as the microphone in the app, or as the default input of the system. The
+microphone given with `--input` is kept for the next runs; without one so far, it's the default
+input, which doesn't work once "Voice Filter" is the default itself. The microphone is only in use
+while an app records from "Voice Filter".
 
 ## Building
 

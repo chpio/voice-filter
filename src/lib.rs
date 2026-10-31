@@ -8,6 +8,7 @@ pub mod chain;
 pub mod denoise;
 pub mod live;
 pub mod offline;
+pub mod settings;
 pub mod stage;
 
 /// The sample rate of the whole chain.

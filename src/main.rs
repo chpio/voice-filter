@@ -4,7 +4,7 @@ use ::anyhow::Result;
 use ::clap::{Parser, Subcommand};
 use ::voice_filter::chain::Chain;
 use ::voice_filter::denoise::Denoise;
-use ::voice_filter::{live, offline};
+use ::voice_filter::{live, offline, settings};
 
 /// Live voice filter for PipeWire.
 #[derive(Parser)]
@@ -20,9 +20,16 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Provides the virtual microphone "Voice Filter": the default microphone through the chain.
-    /// Runs until Ctrl+C.
-    Run,
+    /// Provides the virtual microphone "Voice Filter": the microphone through the chain. Runs
+    /// until Ctrl+C.
+    Run {
+        /// The microphone, a name from `voice-filter inputs`; kept for the next runs. Without
+        /// one so far, the default input.
+        #[arg(long)]
+        input: Option<String>,
+    },
+    /// Lists the microphones (and other audio sources) for `run --input`.
+    Inputs,
     /// Runs a WAV file (48 kHz, mixed down to mono) through the chain and writes the result, lined
     /// up with the input; prints the latency and processing time of every stage.
     Process { input: PathBuf, output: PathBuf },
@@ -30,13 +37,47 @@ enum Command {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
-    let chain = Chain::new(vec![Box::new(denoise)]);
+    let settings_dir = settings::dir();
+    let chain = || -> Result<Chain> {
+        let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
+        Ok(Chain::new(vec![Box::new(denoise)]))
+    };
     match args.command {
-        Command::Run => live::run(chain)?,
+        Command::Run { input } => {
+            let input = match (input, &settings_dir) {
+                (Some(input), Some(dir)) => {
+                    settings::save_input(dir, &input)?;
+                    Some(input)
+                }
+                (Some(input), None) => Some(input),
+                (None, Some(dir)) => settings::load_input(dir)?,
+                (None, None) => None,
+            };
+            match &input {
+                Some(input) => eprintln!("Reading from {input}"),
+                None => eprintln!("Reading from the default input"),
+            }
+            live::run(chain()?, input.as_deref())?;
+        }
+        Command::Inputs => {
+            let saved = match &settings_dir {
+                Some(dir) => settings::load_input(dir)?,
+                None => None,
+            };
+            for input in live::inputs()? {
+                let mark = if saved.as_deref() == Some(&input.name) {
+                    "*"
+                } else {
+                    " "
+                };
+                println!(
+                    "{mark} {}  ({}, priority {})",
+                    input.name, input.description, input.priority
+                );
+            }
+        }
         Command::Process { input, output } => {
-            let mut chain = chain;
-            let report = offline::process_file(&mut chain, &input, &output)?;
+            let report = offline::process_file(&mut chain()?, &input, &output)?;
             println!("{report}");
         }
     }
