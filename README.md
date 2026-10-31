@@ -38,7 +38,7 @@ plays the result into the virtual microphone:
 | `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz                           | `freq`                                 |       – |
 | `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)                | `low-mid`, `presence`, `presence-freq` |       – |
 | `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates          | `freq`, `threshold`                    |    1 ms |
-| `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses, hum, typing  | `target`, `max-gain`                   |       – |
+| `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses, hum, typing  | `target`, `max-gain`, `threshold`      |       – |
 | `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                          | `threshold`, `ratio`                   |       – |
 | `expander`   | Turns the speech pauses down by 20 dB, opens for speech (level or DeepFilterNet3) | `range`, `threshold`, `hold`, `level`  |       – |
 | `limiter`    | Keeps the peaks below −1 dBFS                                                     | `ceiling`, `release`                   |    1 ms |

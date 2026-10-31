@@ -1,6 +1,8 @@
 use ::std::f32::consts::TAU;
+use ::std::sync::Arc;
 
 use ::voice_filter::agc::{self, Agc};
+use ::voice_filter::denoise::Speech;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
 
@@ -131,7 +133,7 @@ fn follows_its_target_and_maximum_gain() {
     let mut agc = Agc::new();
     let params = agc.params();
     let names: Vec<_> = params.iter().map(|param| param.name).collect();
-    assert_eq!(names, ["target", "max-gain"]);
+    assert_eq!(names, ["target", "max-gain", "threshold"]);
     params[0].set(-24.).unwrap();
     let mut last = 0.;
     for mut frame in syllables(-40., 1000) {
@@ -147,4 +149,79 @@ fn follows_its_target_and_maximum_gain() {
         agc.process(&mut frame).unwrap();
     }
     assert_eq!(agc.gain_db(), 10.);
+}
+
+/// Runs the frames through the AGC as after the noise suppression: before every frame it gets the
+/// estimate `snr_db` gives for the frame `ahead` frames later, as the noise suppression does.
+fn listened(
+    agc: &mut Agc,
+    speech: &Speech,
+    frames: Vec<Frame>,
+    ahead: usize,
+    snr_db: impl Fn(usize) -> f32,
+) {
+    for (f, mut frame) in frames.into_iter().enumerate() {
+        speech.update(snr_db(f + ahead));
+        agc.process(&mut frame).unwrap();
+    }
+}
+
+fn listening(ahead: usize) -> (Agc, Arc<Speech>) {
+    let speech = Arc::new(Speech::new());
+    let agc = Agc::new().listening(speech.clone(), ahead).unwrap();
+    (agc, speech)
+}
+
+#[test]
+fn counts_only_what_the_noise_suppression_hears_as_speech() {
+    // speech at -30 dBFS for 10 s the noise suppression doesn't hear as speech: the gain stays
+    let (mut agc, speech) = listening(3);
+    listened(&mut agc, &speech, syllables(-30., 1000), 3, |_| -5.);
+    assert_eq!(agc.gain_db(), 0.);
+    // and the same heard as speech: brought to the target
+    listened(&mut agc, &speech, syllables(-30., 1000), 3, |_| 10.);
+    assert!((agc.gain_db() - 12.).abs() < 1., "{} dB", agc.gain_db());
+}
+
+#[test]
+fn holds_the_estimate_back_until_its_audio_comes() {
+    // syllables just long enough to count, the estimate 3 frames ahead of them: held back by 3
+    // frames it matches every frame, not held back it misses the first 3 and none counts
+    let on = agc::MIN_SPEECH_FRAMES;
+    let heard = |f: usize| if f % 40 < on { 10. } else { -15. };
+    for (held, expected) in [(3, 12.), (0, 0.)] {
+        let (mut agc, speech) = listening(held);
+        listened(&mut agc, &speech, bursts(-30., on, 40 - on, 4000), 3, heard);
+        assert!(
+            (agc.gain_db() - expected).abs() < 1.,
+            "held back {held}: {} dB",
+            agc.gain_db()
+        );
+    }
+}
+
+#[test]
+fn goes_by_the_level_while_the_noise_suppression_doesnt_run() {
+    // listening, but the estimate never changes (switched off): as without it
+    let (mut agc, _speech) = listening(3);
+    for mut frame in syllables(-30., 1000) {
+        agc.process(&mut frame).unwrap();
+    }
+    assert!((agc.gain_db() - 12.).abs() < 1., "{} dB", agc.gain_db());
+}
+
+#[test]
+fn goes_by_the_level_at_the_lowest_threshold() {
+    let (mut agc, speech) = listening(3);
+    agc.params()[2].set(agc::SNR_OFF_DB).unwrap();
+    // the lowest estimate the model gives
+    listened(&mut agc, &speech, syllables(-30., 1000), 3, |_| -15.);
+    assert!((agc.gain_db() - 12.).abs() < 1., "{} dB", agc.gain_db());
+}
+
+#[test]
+fn takes_an_estimate_at_most_max_ahead_frames_ahead() {
+    let speech = Arc::new(Speech::new());
+    assert!(Agc::new().listening(speech.clone(), agc::MAX_AHEAD).is_ok());
+    assert!(Agc::new().listening(speech, agc::MAX_AHEAD + 1).is_err());
 }

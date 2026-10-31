@@ -13,7 +13,8 @@ use ::voice_filter::equalizer::Equalizer;
 use ::voice_filter::expander::Expander;
 use ::voice_filter::highpass::HighPass;
 use ::voice_filter::limiter::Limiter;
-use ::voice_filter::{live, offline, settings};
+use ::voice_filter::stage::Stage;
+use ::voice_filter::{FRAME_LEN, live, offline, settings};
 
 /// Live voice filter for PipeWire.
 #[derive(Parser)]
@@ -106,7 +107,8 @@ fn main() -> Result<ExitCode> {
             Some(db) => denoise.with_atten_lim(db),
             None => denoise,
         };
-        let agc = Agc::new();
+        // the estimate of the noise suppression comes its latency ahead of the audio
+        let agc = Agc::new().listening(denoise.speech(), denoise.latency() / FRAME_LEN)?;
         let compressor = Compressor::new().following(agc.target());
         let expander = Expander::new().listening(denoise.speech());
         let chain = Chain::new(vec![

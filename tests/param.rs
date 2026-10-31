@@ -39,6 +39,7 @@ fn the_chain_lists_the_parameters_of_its_stages_in_order() {
         [
             ("agc", "target"),
             ("agc", "max-gain"),
+            ("agc", "threshold"),
             ("compressor", "threshold"),
             ("compressor", "ratio"),
             ("limiter", "ceiling"),

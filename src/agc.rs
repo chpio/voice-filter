@@ -1,5 +1,8 @@
-use ::anyhow::Result;
+use ::std::sync::Arc;
 
+use ::anyhow::{Result, ensure};
+
+use crate::denoise::Speech;
 use crate::level::{self, NoiseFloor};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
@@ -11,15 +14,34 @@ use crate::{FRAME_LEN, SAMPLE_RATE};
 /// [`SPEECH_ABOVE_FLOOR_DB`] above the noise floor, the quietest frame of the last 2 s, for at
 /// least [`MIN_SPEECH_FRAMES`] in a row. Steady noise such as mains hum sits at the floor, speech
 /// dips to it between syllables; keystrokes are shorter than syllables.
+///
+/// With [`Self::listening`] a frame also has to be what DeepFilterNet3 hears as speech (its local
+/// SNR above the threshold, [`SPEECH_SNR_DB`] by default), so louder noise the floor and the run
+/// let through, such as a cough, a click or a door, doesn't count either. While the noise
+/// suppression doesn't run (switched off), only the level counts. Measured on two recordings, the
+/// estimate drops below 0 dB within words too (143 of the 160 frames it took away on a live
+/// recording, some at −13 dBFS), which lowered the gain by 1 dB on average and up to 9 dB, while
+/// it took only 17 frames in 89 s that weren't next to speech. [`SNR_OFF_DB`] turns it off.
 pub struct Agc {
     /// The smoothed level of the speech, in dBFS (RMS).
     level_db: f32,
     gain_db: f32,
     floor: NoiseFloor,
-    /// The frames in a row that were loud enough for speech, up to [`MIN_SPEECH_FRAMES`].
+    /// The frames in a row that were speech (loud enough and, if it listens, heard as speech), up
+    /// to [`MIN_SPEECH_FRAMES`].
     loud_frames: usize,
+    speech: Arc<Speech>,
+    /// The frames of `speech` at the last frame, to see whether it still runs.
+    speech_frames: u64,
+    /// The estimates of `speech` of the last frames (`None` while it didn't run), the next one
+    /// goes to `estimate`: the noise suppression estimates the newest frame, the AGC gets it
+    /// `ahead` frames later.
+    estimates: [Option<f32>; MAX_AHEAD + 1],
+    estimate: usize,
+    ahead: usize,
     target: Param,
     max_gain: Param,
+    threshold: Param,
 }
 
 /// The level the speech is brought to by default, in dBFS (RMS): loud enough for calls, with headroom for
@@ -37,6 +59,14 @@ pub const SPEECH_ABOVE_FLOOR_DB: f32 = 10.;
 /// lasts 100 ms and more, a keystroke 10 to 50 ms. Without it, the residue of typing raised the
 /// gain to its maximum within 20 s, and with it the hum the noise suppression left.
 pub const MIN_SPEECH_FRAMES: usize = 8;
+/// The local SNR (DeepFilterNet3's estimate, dB) above which a frame is speech by default, as the
+/// expander's default.
+pub const SPEECH_SNR_DB: f32 = 0.;
+/// The lowest threshold, below the lowest estimate (−15 dB): every frame passes, only the level
+/// counts.
+pub const SNR_OFF_DB: f32 = -20.;
+/// The most frames the estimate of the noise suppression may come ahead of the audio.
+pub const MAX_AHEAD: usize = 8;
 /// The time constant of the measured level, in seconds.
 const LEVEL_TAU: f32 = 0.3;
 /// How fast the gain may rise and fall, in dB per second: slow up, so it doesn't pump, faster
@@ -54,6 +84,11 @@ impl Agc {
             gain_db: 0.,
             floor: NoiseFloor::new(),
             loud_frames: 0,
+            speech: Arc::new(Speech::new()),
+            speech_frames: 0,
+            estimates: [None; MAX_AHEAD + 1],
+            estimate: 0,
+            ahead: 0,
             target: Param::new(
                 "target",
                 "Target Level",
@@ -62,7 +97,42 @@ impl Agc {
                 TARGET_DB,
             ),
             max_gain: Param::new("max-gain", "Maximum Gain", "dB", (0., 40., 1.), MAX_GAIN_DB),
+            threshold: Param::new(
+                "threshold",
+                "Speech Threshold",
+                "dB",
+                (SNR_OFF_DB, 20., 0.5),
+                SPEECH_SNR_DB,
+            ),
         }
+    }
+
+    /// Counts only what the noise suppression hears as speech
+    /// ([`crate::denoise::Denoise::speech`]). Its estimate comes `ahead` frames before the audio
+    /// it belongs to (the latency of the noise suppression in frames, at most [`MAX_AHEAD`]),
+    /// the AGC holds it back that long.
+    pub fn listening(self, speech: Arc<Speech>, ahead: usize) -> Result<Self> {
+        ensure!(
+            ahead <= MAX_AHEAD,
+            "the estimate comes {ahead} frames ahead, at most {MAX_AHEAD} are supported"
+        );
+        Ok(Self {
+            speech,
+            ahead,
+            ..self
+        })
+    }
+
+    /// Whether the noise suppression hears speech in the frame, `None` while it doesn't run.
+    fn hears_speech(&mut self) -> Option<bool> {
+        let frames = self.speech.frames();
+        let running = frames != self.speech_frames;
+        self.speech_frames = frames;
+        self.estimates[self.estimate] = running.then(|| self.speech.snr_db());
+        let len = self.estimates.len();
+        let belonging = self.estimates[(self.estimate + len - self.ahead) % len];
+        self.estimate = (self.estimate + 1) % len;
+        belonging.map(|snr_db| snr_db > self.threshold.get())
     }
 
     /// The level it brings the speech to, for the compressor, whose make-up gain depends on it.
@@ -92,14 +162,21 @@ impl Stage for Agc {
     }
 
     fn params(&self) -> Vec<Param> {
-        vec![self.target.clone(), self.max_gain.clone()]
+        vec![
+            self.target.clone(),
+            self.max_gain.clone(),
+            self.threshold.clone(),
+        ]
     }
 
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let frame_db = level::frame_db(frame);
         let floor_db = self.floor.push(frame_db);
         let loud = frame_db > GATE_DB && frame_db > floor_db + SPEECH_ABOVE_FLOOR_DB;
-        self.loud_frames = if loud {
+        // every frame, so its estimates keep in step
+        let heard = self.hears_speech().unwrap_or(true);
+        let speech = loud && heard;
+        self.loud_frames = if speech {
             (self.loud_frames + 1).min(MIN_SPEECH_FRAMES)
         } else {
             0

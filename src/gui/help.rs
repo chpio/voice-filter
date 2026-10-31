@@ -60,7 +60,7 @@ const STAGES: [(&str, &str); 9] = [
 ];
 
 /// What each parameter changes, by stage and parameter name.
-const PARAMS: [(&str, &str, &str); 17] = [
+const PARAMS: [(&str, &str, &str); 18] = [
     (
         "denoise",
         "limit",
@@ -114,6 +114,14 @@ const PARAMS: [(&str, &str, &str); 17] = [
         "max-gain",
         "The most it raises a quiet voice. Higher reaches quieter speech or a microphone farther \
          away, but raises its noise as well.",
+    ),
+    (
+        "agc",
+        "threshold",
+        "How sure the noise suppression must be that it hears speech (its signal-to-noise \
+         ratio) for the gain control to measure it. Higher leaves out more noise, but quieter \
+         parts of words too, so it raises the voice less; −20 dB leaves it to the level alone, \
+         as with the noise suppression off.",
     ),
     (
         "compressor",
