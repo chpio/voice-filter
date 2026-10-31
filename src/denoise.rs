@@ -64,6 +64,13 @@ impl Stage for Denoise {
         self.df.delay()
     }
 
+    /// Its latency plus the frames the deep filter reaches back (`df_order - df_lookahead`), 6 for
+    /// DeepFilterNet3. Measured the same with speech before a pause and silence after it: 3 frames
+    /// still from before it, then 3 fading out (up to -31 dBFS).
+    fn resume_frames(&self) -> usize {
+        self.df.delay().div_ceil(FRAME_LEN) + self.df.df_order - self.df.df_lookahead
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let atten_lim = self.atten_lim.load();
         if atten_lim != self.applied_atten_lim {

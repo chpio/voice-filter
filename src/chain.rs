@@ -7,9 +7,10 @@ use crate::FRAME_LEN;
 use crate::stage::{Frame, Stage};
 
 /// The stages in the order the signal runs through them. Each one can be switched off at runtime
-/// (see [`Chain::switches`]) without changing the latency: a switched off stage keeps processing,
-/// so its state stays current, but its input is played instead, delayed by its latency, and
-/// switching crossfades over a frame.
+/// (see [`Chain::switches`]) without changing the latency: its input is played instead, delayed by
+/// its latency, and switching crossfades over a frame. A switched off stage doesn't process, so it
+/// costs nothing; switched on again, it resumes from its state before, first for
+/// [`Stage::resume_frames`] without being played, so nothing from before the pause is heard.
 pub struct Chain {
     slots: Vec<Slot>,
 }
@@ -21,6 +22,10 @@ struct Slot {
     mix: f32,
     /// The stage's input of the last `latency` samples, followed by room for a frame.
     dry: Vec<f32>,
+    /// The stage didn't process the last frame.
+    paused: bool,
+    /// The frames the stage still runs without being played, after a pause.
+    resuming: usize,
 }
 
 impl Chain {
@@ -32,6 +37,8 @@ impl Chain {
                 stage,
                 enabled: Arc::new(AtomicBool::new(true)),
                 mix: 1.,
+                paused: false,
+                resuming: 0,
             })
             .collect();
         Self { slots }
@@ -71,25 +78,37 @@ impl Chain {
 
 impl Slot {
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
-        let target = if self.enabled.load(Ordering::Relaxed) {
-            1.
-        } else {
-            0.
-        };
+        let enabled = self.enabled.load(Ordering::Relaxed);
+        if enabled && self.paused {
+            self.paused = false;
+            self.resuming = self.stage.resume_frames();
+        }
         // the input delayed by the stage's latency is the oldest FRAME_LEN of the kept samples;
         // kept while the stage is on too, so switching it off plays the right samples
         let latency = self.dry.len() - FRAME_LEN;
         self.dry[latency..].copy_from_slice(frame);
-        self.stage.process(frame)?;
-        if target != 1. || self.mix != 1. {
-            let from = self.mix;
-            for (i, (wet, dry)) in frame.iter_mut().zip(&self.dry).enumerate() {
-                let mix = from + (target - from) * (i + 1) as f32 / FRAME_LEN as f32;
-                *wet = *wet * mix + dry * (1. - mix);
+        // off, it still runs for the frame that fades it out
+        if enabled || self.mix > 0. {
+            self.stage.process(frame)?;
+            let target = if enabled && self.resuming == 0 {
+                1.
+            } else {
+                0.
+            };
+            self.resuming = self.resuming.saturating_sub(1);
+            if target != 1. || self.mix != 1. {
+                let from = self.mix;
+                for (i, (wet, dry)) in frame.iter_mut().zip(&self.dry).enumerate() {
+                    let mix = from + (target - from) * (i + 1) as f32 / FRAME_LEN as f32;
+                    *wet = *wet * mix + dry * (1. - mix);
+                }
             }
+            self.mix = target;
+        } else {
+            self.paused = true;
+            frame.copy_from_slice(&self.dry[..FRAME_LEN]);
         }
         self.dry.copy_within(FRAME_LEN.., 0);
-        self.mix = target;
         Ok(())
     }
 }

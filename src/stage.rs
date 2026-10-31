@@ -14,4 +14,10 @@ pub trait Stage: Send {
     fn latency(&self) -> usize;
     /// Processes one frame in place.
     fn process(&mut self, frame: &mut Frame) -> Result<()>;
+    /// The frames the stage still plays from before a pause: a switched off stage doesn't
+    /// process, so after switching it on again the chain runs it that many frames before playing
+    /// it. By default its latency, rounded up to frames.
+    fn resume_frames(&self) -> usize {
+        self.latency().div_ceil(FRAME_LEN)
+    }
 }

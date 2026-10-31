@@ -60,3 +60,37 @@ fn changes_the_attenuation_limit_at_runtime() {
     let unlimited = ratio_db(&mut denoise);
     assert!(unlimited < -20., "{unlimited} dB");
 }
+
+#[test]
+fn plays_nothing_from_before_a_pause() {
+    use ::std::sync::atomic::Ordering;
+    use ::voice_filter::chain::Chain;
+
+    // white noise it lets through, limited to 6 dB, then off and silence
+    let mut chain = Chain::new(vec![Box::new(Denoise::new().unwrap().with_atten_lim(6.))]);
+    let enabled = chain.switches()[0].1.clone();
+    let mut state = 0x2545_f491u32;
+    for _ in 0..100 {
+        let mut frame = [0.; FRAME_LEN];
+        for sample in &mut frame {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *sample = (state as f32 / u32::MAX as f32 * 2. - 1.) * 0.1;
+        }
+        chain.process(&mut frame).unwrap();
+    }
+    enabled.store(false, Ordering::Relaxed);
+    for _ in 0..10 {
+        chain.process(&mut [0.; FRAME_LEN]).unwrap();
+    }
+    // on again with silence: the noise it still holds within its latency must not come out (the
+    // frames the deep filter reaches back on top only show with speech, see resume_frames)
+    enabled.store(true, Ordering::Relaxed);
+    for i in 0..20 {
+        let mut frame = [0.; FRAME_LEN];
+        chain.process(&mut frame).unwrap();
+        let peak = frame.iter().fold(0f32, |peak, x| peak.max(x.abs()));
+        assert!(peak < 1e-4, "frame {i}: peak {peak}");
+    }
+}
