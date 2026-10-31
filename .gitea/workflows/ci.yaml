@@ -1,0 +1,111 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # the fast checks that don't compile, in parallel to the test job. Each runs even if one before
+  # failed, so a run reports all of them.
+  check:
+    runs-on: ubuntu-latest
+    # built in the git/images repo, meant to float like in the test job
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo fmt --check
+      - if: ${{ !cancelled() }}
+        run: cargo deny --locked check
+      - if: ${{ !cancelled() }}
+        run: cargo machete
+      - if: ${{ !cancelled() }}
+        run: typos
+      # both only look into .github/workflows on their own
+      - if: ${{ !cancelled() }}
+        run: actionlint .gitea/workflows/*.yaml
+      - if: ${{ !cancelled() }}
+        run: zizmor --offline .gitea/workflows/*.yaml
+
+  test:
+    runs-on: ubuntu-latest
+    # built in the git/images repo
+    # The image runs rustc through sccache. Its storage (SCCACHE_REDIS_ENDPOINT and
+    # SCCACHE_REDIS_PASSWORD) comes from the runner for every job; don't set it here, an empty
+    # value would override it. The image is meant to float: it's rebuilt with the current toolchain
+    # and tools every week.
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo doc --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # the msrv toolchain comes with the image, the version is read from Cargo.toml. Only the
+      # library and binary, the dev-dependencies may need a newer rust.
+      - run: cargo "+$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" check --locked
+      - run: cargo test --locked
+      - run: sccache --show-stats
+        if: always()
+
+  # Releases the version in Cargo.toml if it isn't on crates.io yet, i.e. after the release PR got
+  # merged: `cargo publish`, then the tag `vX.Y.Z` and the Gitea release (both through the API).
+  # Does nothing on the other pushes, and nothing at all while release-plz.toml has
+  # `release = false`.
+  release:
+    needs: [check, test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # built in the git/images repo, meant to float like in the test job
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: release-plz release --forge gitea
+        env:
+          # Past the registry proxy the image replaces crates.io with (in $CARGO_HOME/config.toml):
+          # after `cargo publish`, release-plz waits until the version shows up in the index, and
+          # the proxy caches the index files for about 30 minutes, as long as the default timeout.
+          CARGO_HOME: /tmp/cargo-home
+          GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Opens or updates the release PR with the version bump and the changelog entry, from the feat:
+  # and fix: commits since the last release. After the release job, so it sees the new release.
+  release-pr:
+    needs: [release]
+    runs-on: ubuntu-latest
+    # built in the git/images repo, meant to float like in the test job
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Release-plz pushes the PR branch with git, from a copy of the repo in a temp dir, which
+      # doesn't get the credentials checkout persists (they're only included for the checkout's
+      # path). So git gets the token from the environment through a credential helper, it doesn't
+      # end up in a file. Not the built-in token, the ci wouldn't run on the PR with it.
+      - run: |
+          # shellcheck disable=SC2016 # expanded by the shell git runs the helper in
+          git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GIT_TOKEN"; }; f'
+          release-plz release-pr --forge gitea
+        env:
+          # past the registry proxy like in the release job, its cached index wouldn't have the
+          # version that job just released yet
+          CARGO_HOME: /tmp/cargo-home
+          GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          # the release commit is made with git, which needs an identity
+          GIT_AUTHOR_NAME: release-plz
+          GIT_AUTHOR_EMAIL: release-plz@noreply.invalid
+          GIT_COMMITTER_NAME: release-plz
+          GIT_COMMITTER_EMAIL: release-plz@noreply.invalid

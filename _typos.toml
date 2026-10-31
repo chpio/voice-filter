@@ -1,0 +1,5 @@
+# typos config (https://github.com/crate-ci/typos), run in CI by `typos`
+
+[files]
+# the concept is written in German, which typos only knows as misspelled English
+extend-exclude = ["docs/konzept.md"]

@@ -1,0 +1,18 @@
+# cargo-deny config (https://embarkstudios.github.io/cargo-deny/), run in CI by `cargo deny check`
+
+[advisories]
+# the defaults: vulnerabilities, unmaintained and unsound crates fail, yanked crates warn
+
+[licenses]
+# extend the list when a new dependency brings in another license
+allow = ["MIT", "Apache-2.0"]
+
+[bans]
+# several versions of one crate are often unavoidable, so they only warn
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+# DeepFilterNet's realtime part is only usable from git (the crates.io release is outdated), its
+# repo gets allowed here once it's added as a dependency
+unknown-git = "deny"
