@@ -1,13 +1,12 @@
 //! The live filter: a capture stream from the default microphone and the virtual microphone
 //! "Voice Filter", with the chain between them (see [`crate::bridge`]).
 
-use ::std::cell::RefCell;
-use ::std::rc::Rc;
-use ::std::sync::Arc;
+use ::std::path::PathBuf;
 use ::std::sync::atomic::Ordering;
+use ::std::sync::{Arc, Mutex};
 use ::std::time::Duration;
 
-use ::anyhow::{Context as _, Result};
+use ::anyhow::{Context as _, Result, anyhow, bail};
 use ::pipewire as pw;
 use ::pipewire::loop_::Signal;
 use ::pipewire::properties::properties;
@@ -32,13 +31,27 @@ const GROUP: &str = "voice-filter";
 const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
 
+/// What the control interface asks the PipeWire loop to do, it owns the streams.
+enum Command {
+    /// Reads from another microphone, the empty name for the default input.
+    SetInput(String),
+}
+
 /// Runs until SIGINT or SIGTERM. `input` is the `node.name` of the microphone, without it the
 /// session manager links the default input. `atten_lim` is the denoise stage's, for the control
-/// interface.
-pub fn run(chain: Chain, input: Option<&str>, atten_lim: Arc<AtomicF32>) -> Result<()> {
+/// interface, which keeps the microphone chosen there in `settings_dir`.
+pub fn run(
+    chain: Chain,
+    input: Option<&str>,
+    atten_lim: Arc<AtomicF32>,
+    settings_dir: Option<PathBuf>,
+) -> Result<()> {
+    pw::init();
     let switches = chain.switches();
     let (mut capture, mut playback, stats) = bridge(chain);
     let chain_latency = capture.latency();
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let (commands, command_receiver) = pw::channel::channel();
     // first, so a second instance stops before it creates nodes
     dbus::serve(Service {
         switches,
@@ -46,14 +59,22 @@ pub fn run(chain: Chain, input: Option<&str>, atten_lim: Arc<AtomicF32>) -> Resu
         stats: stats.clone(),
         chain_latency,
         input: input.unwrap_or_default().to_owned(),
+        inputs: inputs.clone(),
+        select_input: Box::new(move |name| {
+            commands
+                .send(Command::SetInput(name))
+                .map_err(|_| anyhow!("the PipeWire loop is gone"))
+        }),
+        settings_dir,
     })?;
 
-    pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&mainloop, None)?;
     let core = context
         .connect_rc(None)
         .context("Could not connect to PipeWire")?;
+    let registry = core.get_registry_rc()?;
+    let _inputs_listener = watch_inputs(&registry, inputs);
     // the quantum the streams ask for, the graph may still run a smaller one
     let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
 
@@ -178,6 +199,17 @@ pub fn run(chain: Chain, input: Option<&str>, atten_lim: Arc<AtomicF32>) -> Resu
         })
         .register()?;
 
+    let _commands = command_receiver.attach(mainloop.loop_(), {
+        let input = input.clone();
+        move |command| match command {
+            Command::SetInput(name) => {
+                if let Err(err) = set_target(&input, &name) {
+                    eprintln!("Could not switch to {name}: {err}");
+                }
+            }
+        }
+    });
+
     let format = format_param();
     output.connect(
         spa::utils::Direction::Output,
@@ -206,6 +238,24 @@ pub fn run(chain: Chain, input: Option<&str>, atten_lim: Arc<AtomicF32>) -> Resu
     Ok(())
 }
 
+/// Points the capture stream to the microphone `name`, the empty name for the default input. A
+/// connected stream only follows a new target when it connects again.
+fn set_target(input: &StreamRc, name: &str) -> Result<()> {
+    let properties = properties! { *pw::keys::TARGET_OBJECT => name };
+    // SAFETY: both pointers are valid during the call, which copies the properties
+    let result = unsafe {
+        pw::sys::pw_stream_update_properties(input.as_raw_ptr(), &(*properties.as_raw_ptr()).dict)
+    };
+    if result < 0 {
+        bail!("pw_stream_update_properties failed with {result}");
+    }
+    if !matches!(input.state(), StreamState::Unconnected) {
+        input.disconnect()?;
+        connect_capture(input)?;
+    }
+    Ok(())
+}
+
 /// Connects the capture stream to the default microphone, unless it already is.
 fn connect_capture(input: &StreamRc) -> Result<()> {
     if !matches!(input.state(), StreamState::Unconnected) {
@@ -222,7 +272,10 @@ fn connect_capture(input: &StreamRc) -> Result<()> {
 }
 
 /// An audio source the filter can read from.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Input {
+    /// The id of its global in the registry.
+    pub id: u32,
     /// The `node.name`, for `--input`.
     pub name: String,
     pub description: String,
@@ -230,17 +283,13 @@ pub struct Input {
     pub priority: i32,
 }
 
-/// The audio sources of the graph except the filter's own, the highest priority first.
-pub fn inputs() -> Result<Vec<Input>> {
-    pw::init();
-    let mainloop = pw::main_loop::MainLoopRc::new(None)?;
-    let context = pw::context::ContextRc::new(&mainloop, None)?;
-    let core = context
-        .connect_rc(None)
-        .context("Could not connect to PipeWire")?;
-    let registry = core.get_registry_rc()?;
-    let inputs = Rc::new(RefCell::new(Vec::new()));
-    let _registry_listener = registry
+/// Keeps `inputs` up to date with the audio sources of the graph except the filter's own, the
+/// highest priority first, as long as the returned listener lives.
+fn watch_inputs(
+    registry: &pw::registry::RegistryRc,
+    inputs: Arc<Mutex<Vec<Input>>>,
+) -> pw::registry::Listener {
+    registry
         .add_listener_local()
         .global({
             let inputs = inputs.clone();
@@ -254,7 +303,9 @@ pub fn inputs() -> Result<Vec<Input>> {
                 {
                     return;
                 }
-                inputs.borrow_mut().push(Input {
+                let mut inputs = inputs.lock().unwrap();
+                inputs.push(Input {
+                    id: global.id,
                     name: name.to_owned(),
                     description: props
                         .get(*pw::keys::NODE_DESCRIPTION)
@@ -265,9 +316,24 @@ pub fn inputs() -> Result<Vec<Input>> {
                         .and_then(|priority| priority.parse().ok())
                         .unwrap_or(0),
                 });
+                inputs.sort_by_key(|input| ::std::cmp::Reverse(input.priority));
             }
         })
-        .register();
+        .global_remove(move |id| inputs.lock().unwrap().retain(|input| input.id != id))
+        .register()
+}
+
+/// The audio sources of the graph except the filter's own, the highest priority first.
+pub fn inputs() -> Result<Vec<Input>> {
+    pw::init();
+    let mainloop = pw::main_loop::MainLoopRc::new(None)?;
+    let context = pw::context::ContextRc::new(&mainloop, None)?;
+    let core = context
+        .connect_rc(None)
+        .context("Could not connect to PipeWire")?;
+    let registry = core.get_registry_rc()?;
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let _registry_listener = watch_inputs(&registry, inputs.clone());
     // all globals are announced once the server answers the sync
     let pending = core.sync(0)?;
     let _core_listener = core
@@ -282,8 +348,7 @@ pub fn inputs() -> Result<Vec<Input>> {
         })
         .register();
     mainloop.run();
-    let mut inputs = inputs.take();
-    inputs.sort_by_key(|input| ::std::cmp::Reverse(input.priority));
+    let inputs = inputs.lock().unwrap().clone();
     Ok(inputs)
 }
 

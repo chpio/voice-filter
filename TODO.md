@@ -16,3 +16,9 @@ Work items that don't change the design; the open design questions and TODOs are
 - [ ] Before the first release: check the release PR title `chore: bump version (v{{ version }})` in
   `release-plz.toml` with two packages. If one PR releases voice-filter and deep-filter-rt with
   different versions, release-plz probably can't fill in `version`.
+
+## Live mode
+
+- [ ] A "Listen" switch in the app: a third stream that plays what "Voice Filter" outputs on the
+  default output (headphones, speakers feed back into the microphone), to hear the filter while
+  tuning it. Until then: `pw-loopback --capture-props='target.object=voice-filter'`.

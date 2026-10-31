@@ -69,7 +69,7 @@ fn main() -> Result<()> {
                 None => eprintln!("Reading from the default input"),
             }
             let (chain, atten_lim) = chain()?;
-            live::run(chain, input.as_deref(), atten_lim)?;
+            live::run(chain, input.as_deref(), atten_lim, settings_dir)?;
         }
         Command::Inputs => {
             let saved = match &settings_dir {

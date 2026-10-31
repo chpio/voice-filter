@@ -23,6 +23,10 @@ pub trait VoiceFilter {
     #[zbus(property)]
     fn input(&self) -> ::zbus::Result<String>;
     #[zbus(property)]
+    fn set_input(&self, name: &str) -> ::zbus::Result<()>;
+    #[zbus(property)]
+    fn inputs(&self) -> ::zbus::Result<Vec<(String, String, i32)>>;
+    #[zbus(property)]
     fn latency(&self) -> ::zbus::Result<HashMap<String, f64>>;
     #[zbus(property)]
     fn quantum(&self) -> ::zbus::Result<u64>;
@@ -37,6 +41,8 @@ pub struct Status {
     pub stages: Vec<(String, bool)>,
     pub attenuation_limit: f64,
     pub input: String,
+    /// `node.name`, description and priority.
+    pub inputs: Vec<(String, String, i32)>,
     pub latency: HashMap<String, f64>,
     pub quantum: u64,
     pub max_frame_time: f64,
@@ -49,6 +55,7 @@ impl VoiceFilterProxy<'_> {
             stages: self.stages().await?,
             attenuation_limit: self.attenuation_limit().await?,
             input: self.input().await?,
+            inputs: self.inputs().await?,
             latency: self.latency().await?,
             quantum: self.quantum().await?,
             max_frame_time: self.max_frame_time().await?,

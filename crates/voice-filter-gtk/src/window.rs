@@ -31,7 +31,9 @@ struct Widgets {
     missing: adw::StatusPage,
     switches: Vec<(&'static str, adw::SwitchRow)>,
     atten_lim: gtk::Scale,
-    input: adw::ActionRow,
+    input: adw::ComboRow,
+    /// The `node.name` per entry of `input`, the first is the default input (empty).
+    input_names: RefCell<Vec<String>>,
     latency: adw::ActionRow,
     processing: adw::ActionRow,
     dropouts: adw::ActionRow,
@@ -66,7 +68,12 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             })
             .collect(),
         atten_lim,
-        input: row("Microphone"),
+        input: adw::ComboRow::builder()
+            .title("Microphone")
+            .subtitle("The filter reads from it, apps read from \"Voice Filter\"")
+            .model(&gtk::StringList::new(&[]))
+            .build(),
+        input_names: RefCell::new(Vec::new()),
         latency: row("Latency"),
         processing: row("Processing Time"),
         dropouts: row("Dropouts Since the Start"),
@@ -88,6 +95,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         group
     };
     let page = adw::PreferencesPage::new();
+    page.add(&group("Input", &[widgets.input.upcast_ref()]));
     page.add(&group(
         "Noise Suppression",
         &[
@@ -105,7 +113,6 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     page.add(&group(
         "Status",
         &[
-            widgets.input.upcast_ref(),
             widgets.latency.upcast_ref(),
             widgets.processing.upcast_ref(),
             widgets.dropouts.upcast_ref(),
@@ -148,6 +155,28 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             });
         });
     }
+    let weak = Rc::downgrade(widgets);
+    widgets.input.connect_selected_notify(move |row| {
+        let Some(proxy) = sendable(&weak) else {
+            return;
+        };
+        let Some(widgets) = weak.upgrade() else {
+            return;
+        };
+        let Some(name) = widgets
+            .input_names
+            .borrow()
+            .get(row.selected() as usize)
+            .cloned()
+        else {
+            return;
+        };
+        glib::spawn_future_local(async move {
+            if let Err(err) = proxy.set_input(&name).await {
+                eprintln!("Could not switch to {name}: {err}");
+            }
+        });
+    });
     let weak = Rc::downgrade(widgets);
     widgets.atten_lim.connect_value_changed(move |scale| {
         let Some(proxy) = sendable(&weak) else {
@@ -209,6 +238,35 @@ async fn poll(widgets: Rc<Widgets>) {
     }
 }
 
+/// The microphones to choose from, the chosen one selected; one that's unplugged stays in the
+/// list, so the row shows what the filter waits for.
+fn show_inputs(widgets: &Widgets, status: &Status) {
+    let mut names = vec![String::new()];
+    let mut labels = vec!["Default Input".to_owned()];
+    for (name, description, _) in &status.inputs {
+        names.push(name.clone());
+        labels.push(description.clone());
+    }
+    if !names.contains(&status.input) {
+        names.push(status.input.clone());
+        labels.push(format!("{} (unplugged)", status.input));
+    }
+    if *widgets.input_names.borrow() != names {
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        widgets
+            .input
+            .set_model(Some(&gtk::StringList::new(&labels)));
+        widgets.input_names.replace(names.clone());
+    }
+    let selected = names
+        .iter()
+        .position(|name| *name == status.input)
+        .unwrap_or_default() as u32;
+    if widgets.input.selected() != selected {
+        widgets.input.set_selected(selected);
+    }
+}
+
 fn show(widgets: &Widgets, status: &Status) {
     widgets.updating.set(true);
     for (name, enabled) in &status.stages {
@@ -222,13 +280,9 @@ fn show(widgets: &Widgets, status: &Status) {
     {
         widgets.atten_lim.set_value(status.attenuation_limit);
     }
+    show_inputs(widgets, status);
     widgets.updating.set(false);
 
-    widgets.input.set_subtitle(if status.input.is_empty() {
-        "The default input"
-    } else {
-        &status.input
-    });
     let ms = |part: &str| status.latency.get(part).copied().unwrap_or_default();
     widgets.latency.set_subtitle(&format!(
         "{:.1} ms until the app: microphone {:.1}, buffer {:.1}, processing {:.1}",

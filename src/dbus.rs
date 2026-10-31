@@ -2,9 +2,9 @@
 //! go to the audio path through atomics, and the status of the live filter.
 
 use ::std::collections::HashMap;
-use ::std::sync::Arc;
+use ::std::path::PathBuf;
 use ::std::sync::atomic::{AtomicBool, Ordering};
-use ::std::sync::mpsc;
+use ::std::sync::{Arc, Mutex, mpsc};
 
 use ::anyhow::{Context as _, Result, anyhow};
 use ::zbus::{connection, fdo, interface};
@@ -13,6 +13,8 @@ use crate::SAMPLE_RATE;
 use crate::atomic::AtomicF32;
 use crate::bridge::Stats;
 use crate::denoise::UNLIMITED;
+use crate::live::Input;
+use crate::settings;
 
 /// The well-known name; only one process can own it, so it also keeps a second instance from
 /// running.
@@ -28,6 +30,12 @@ pub struct Service {
     pub chain_latency: usize,
     /// The `node.name` of the microphone, empty for the default input.
     pub input: String,
+    /// The microphones to choose from, kept up to date by the PipeWire loop.
+    pub inputs: Arc<Mutex<Vec<Input>>>,
+    /// Switches the live filter to another microphone.
+    pub select_input: Box<dyn Fn(String) -> Result<()> + Send + Sync>,
+    /// Where a chosen microphone is kept for the next runs.
+    pub settings_dir: Option<PathBuf>,
 }
 
 fn ms(samples: i64) -> f64 {
@@ -75,9 +83,48 @@ impl Service {
         Ok(())
     }
 
-    #[zbus(property(emits_changed_signal = "const"))]
+    /// The `node.name` of the microphone, empty for the default input. Setting it switches the
+    /// filter to that microphone and keeps it for the next runs.
+    #[zbus(property)]
     pub fn input(&self) -> String {
         self.input.clone()
+    }
+
+    #[zbus(property)]
+    pub fn set_input(&mut self, name: String) -> fdo::Result<()> {
+        let known = self
+            .inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.name == name);
+        if !name.is_empty() && !known {
+            return Err(fdo::Error::InvalidArgs(format!("no input {name}")));
+        }
+        (self.select_input)(name.clone()).map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        if let Some(dir) = &self.settings_dir {
+            settings::save_input(dir, &name).map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        }
+        self.input = name;
+        Ok(())
+    }
+
+    /// The microphones to choose from: `node.name`, description and priority (the session
+    /// manager falls back to the highest one), the highest first.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn inputs(&self) -> Vec<(String, String, i32)> {
+        self.inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|input| {
+                (
+                    input.name.clone(),
+                    input.description.clone(),
+                    input.priority,
+                )
+            })
+            .collect()
     }
 
     /// The latency in ms from the microphone to the app: `total` and its parts `microphone`,
