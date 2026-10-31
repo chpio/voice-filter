@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`voice-filter` is going to be a live voice filter for Linux: a single Rust process acting as a PipeWire node that reads the microphone, runs it through a chain of stages (echo cancellation, DeepFilterNet3 denoising, optional Hush for suppressing other voices, classic DSP voice enhancement) and exposes the result as the virtual microphone "Voice Filter". The design, model choice, latency budget and roadmap are in `docs/concept.md` (started as a German document, now authoritative here). So far there's only the project skeleton and the vendored DeepFilterNet3 inference (`crates/deep-filter-rt`), no code of voice-filter itself.
+`voice-filter` is going to be a live voice filter for Linux: a single Rust process acting as a PipeWire node that reads the microphone, runs it through a chain of stages (echo cancellation, DeepFilterNet3 denoising, optional Hush for suppressing other voices, classic DSP voice enhancement) and exposes the result as the virtual microphone "Voice Filter". The design, model choice, latency budget and roadmap are in `docs/concept.md` (started as a German document, now authoritative here). So far there's the vendored DeepFilterNet3 inference (`crates/deep-filter-rt`), the stage chain with DeepFilterNet3 as its only stage and the offline mode; the live PipeWire part doesn't exist yet.
 
 ## Commands
 
@@ -13,6 +13,7 @@ cargo build
 cargo clippy --workspace --all-targets
 cargo test --workspace
 cargo test --release -p deep-filter-rt   # the model runs about 10x faster than in debug builds
+cargo run --release -- process in.wav out.wav   # offline mode, prints latency and time per stage
 cargo fmt --all            # 4 spaces (rustfmt default, matches .editorconfig)
 cargo deny check           # licenses, advisories, sources (deny.toml)
 cargo machete              # unused dependencies
@@ -24,7 +25,9 @@ Tests live in `tests/` of each crate (integration tests against the library, no 
 ## Architecture
 
 - **Workspace**: the root package `voice-filter` and `crates/deep-filter-rt`; edition, MSRV and license are shared in `[workspace.package]` of the root `Cargo.toml`.
-- **Crate layout** of voice-filter: all modules live in the library (`lib.rs`) so tests under `tests/` can use them; the binary (`main.rs`) only wires them up.
+- **Crate layout** of voice-filter: all modules live in the library (`lib.rs`) so tests under `tests/` can use them; the binary (`main.rs`, clap, subcommand `process`) only wires them up.
+- **Stages** (`stage.rs`): the trait `Stage` (name, latency in samples, `process` of one `Frame`, `[f32; FRAME_LEN]` in place) runs in the audio path, so no allocations there; `SAMPLE_RATE` (48 kHz) and `FRAME_LEN` (480, 10 ms) are in `lib.rs`. `Chain` (`chain.rs`) runs them in order and sums their latency. `Denoise` (`denoise.rs`) wraps `DfTract` with preallocated `[1, 480]` arrays, its latency is `DfTract::delay` (30 ms).
+- **Offline mode** (`offline.rs`): `read_wav` takes 48 kHz only (int or float, channels mixed down to mono), `process` runs the samples frame by frame through the chain, times every stage (mean and max per frame, against the 10 ms a frame may take live) and shifts the output by the chain's latency (padding the input with silence), so it lines up with the input; `write_wav` writes mono 32-bit float. The max times are only meaningful on an idle machine.
 - **deep-filter-rt**: DeepFilterNet's `deep_filter` crate (`libDF`, upstream commit `d375b2d`), vendored without its history and reduced to the real-time inference: `lib.rs` (STFT state, ERB features, gains, post filter) and `tract.rs` (`DfParams` loads the model, `DfTract` runs the three ONNX parts encoder, ERB decoder and DF decoder with tract per 10 ms frame). The DeepFilterNet3 model is embedded from the unpacked files in `models/DeepFilterNet3/` (the keys in its `config.ini` belong to the model even where they look like typos, `_typos.toml` excludes the folder). `NOTICE.md` names the origin and lists the changes against upstream (required by Apache-2.0); it's published on its own, so its API is public. Debug builds of tract 0.21 failed on the model with "duplicate name /convt3/Conv.bias" (a debug-only check), 0.23 doesn't.
 - The planned architecture (stage trait, 48 kHz frames of 10 ms / 480 samples, fixed 3:1 resampling for Hush, lock-free settings, D-Bus interface for the GNOME app, offline WAV test mode) is described in `docs/concept.md`. Keep this section in sync with the code once it exists.
 
