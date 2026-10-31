@@ -4,3 +4,7 @@
 # the model files of deep-filter-rt; config.ini has keys like `p_interfer_sp` the model was trained
 # with, they must stay as they are
 extend-exclude = ["crates/deep-filter-rt/models/"]
+
+[default.extend-words]
+# resonance of the vocal tract, in the speech-like test signals
+formant = "formant"

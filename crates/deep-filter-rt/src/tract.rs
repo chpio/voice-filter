@@ -340,6 +340,12 @@ impl DfTract {
         Ok(m)
     }
 
+    /// The delay of the output against the input in samples: the overlap of the STFT windows
+    /// plus the lookahead frames of the model (1440 samples, 30 ms, for DeepFilterNet3).
+    pub fn delay(&self) -> usize {
+        self.fft_size - self.hop_size + self.lookahead * self.hop_size
+    }
+
     pub fn set_pf_beta(&mut self, beta: f32) {
         log::debug!("Setting post-filter beta to {beta}");
         self.post_filter_beta = beta;
