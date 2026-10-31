@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Voice Filter
+Comment=Remove background noise and echo from your microphone
+Exec=voice-filter ui
+Icon=net.b128.VoiceFilter
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=microphone;noise;suppression;echo;voice;filter;
+StartupNotify=true

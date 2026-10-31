@@ -116,7 +116,10 @@ already running".
 ### The GNOME app
 
 `voice-filter ui` controls a running `voice-filter run`. It's a separate process, so closing it
-never interrupts the audio. In the app you can:
+never interrupts the audio. `voice-filter install-desktop` adds it to the apps of the desktop, with
+its icon (it writes `~/.local/share/applications/net.b128.VoiceFilter.desktop` and
+`~/.local/share/icons/hicolor/scalable/apps/net.b128.VoiceFilter.svg`; delete them to remove it).
+In the app you can:
 
 - choose the **microphone**, switched while the filter keeps running
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones

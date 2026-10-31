@@ -61,6 +61,11 @@ enum Command {
     /// its latency.
     #[cfg(feature = "gui")]
     Ui,
+    /// Installs the desktop entry and the icon of the app into `~/.local/share`
+    /// (`$XDG_DATA_HOME`), so it's among the apps and has its icon in the dock. The entry starts
+    /// this binary by its full path.
+    #[cfg(feature = "gui")]
+    InstallDesktop,
 }
 
 /// The device given on the command line, which is saved, or else the saved one.
@@ -195,6 +200,16 @@ fn main() -> Result<ExitCode> {
         }
         #[cfg(feature = "gui")]
         Command::Ui => return Ok(::voice_filter::gui::run().into()),
+        #[cfg(feature = "gui")]
+        Command::InstallDesktop => {
+            use ::voice_filter::gui::desktop;
+            let data_home = desktop::data_home()?;
+            let exe = ::std::env::current_exe()?;
+            for path in desktop::install(&data_home, &exe)? {
+                println!("Wrote {}", path.display());
+            }
+            desktop::update_icon_cache(&data_home);
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

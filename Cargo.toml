@@ -18,6 +18,7 @@ categories = ["multimedia", "multimedia::audio"]
 keywords = ["audio", "pipewire", "noise-suppression", "voice", "microphone"]
 include = [
     "/src/**/*",
+    "/data/**/*",
     "/tests/**/*",
     "/README.md",
     "/CHANGELOG.md",

@@ -2,6 +2,7 @@
 //! `voice-filter run` and its status, over its control interface on the session bus. A process of
 //! its own, so closing or crashing it never touches the audio.
 
+pub mod desktop;
 mod help;
 mod proxy;
 mod window;
@@ -16,6 +17,8 @@ const APP_ID: &str = "net.b128.VoiceFilter";
 /// Runs the app until its last window is closed.
 pub fn run() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
+    // the icon of the window outside GNOME Shell, which takes it from the desktop entry
+    gtk::Window::set_default_icon_name(APP_ID);
     app.connect_activate(|app| match app.active_window() {
         Some(window) => window.present(),
         None => window::build(app).present(),

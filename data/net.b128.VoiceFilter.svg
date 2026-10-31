@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62a0ea"/>
+      <stop offset="1" stop-color="#3584e4"/>
+    </linearGradient>
+  </defs>
+  <!-- the tile, its darker base below -->
+  <rect x="8" y="16" width="112" height="104" rx="24" fill="#1a5fb4"/>
+  <rect x="8" y="8" width="112" height="104" rx="24" fill="url(#face)"/>
+  <!-- noise goes in on the left, a clean wave comes out on the right -->
+  <polyline points="14,52 18,42 22,62 26,38 30,60 34,46 38,52" fill="none" stroke="#c0dcf8"
+    stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 90 52 q 4.5 -11 9 0 t 9 0 t 9 0" fill="none" stroke="#ffffff" stroke-width="4"
+    stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- the microphone -->
+  <rect x="50" y="22" width="28" height="50" rx="14" fill="#ffffff"/>
+  <path d="M 40 54 a 24 24 0 0 0 48 0" fill="none" stroke="#ffffff" stroke-width="6"
+    stroke-linecap="round"/>
+  <path d="M 64 78 v 18 M 50 96 h 28" fill="none" stroke="#ffffff" stroke-width="6"
+    stroke-linecap="round"/>
+</svg>
