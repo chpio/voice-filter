@@ -26,9 +26,10 @@ use crate::{FRAME_LEN, SAMPLE_RATE};
 const NODE_NAME: &str = "voice-filter";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
 const REFERENCE_NODE_NAME: &str = "voice-filter-reference";
-/// The streams are in this group, so they run in the same cycle of the microphone's driver (a
-/// virtual source has no clock of its own), and in this link group, so the session manager never
-/// links the capture stream to the filter's own output.
+/// The capture stream and the virtual microphone are in this group, so they run in the same cycle
+/// of the microphone's driver (a virtual source has no clock of its own), and in this link group,
+/// so the session manager never links the capture stream to the filter's own output. (PipeWire
+/// schedules both, group and link group, on one driver.)
 const GROUP: &str = "voice-filter";
 /// The largest quantum the callbacks are prepared for without allocating.
 const MAX_QUANTUM: usize = 8192;
@@ -129,15 +130,18 @@ pub fn run(
     let input = StreamRc::new(core.clone(), CAPTURE_NODE_NAME, capture_properties)?;
 
     // What an output device plays, from its monitor, for the echo canceller. Without a target the
-    // session manager links the default output.
+    // session manager links the default output. In neither the group nor the link group of the
+    // other streams, PipeWire puts the nodes of both on one driver: the output device would run
+    // under the microphone's clock and at its quantum (256) while an app records, with xruns at
+    // every join and leave and players that want a larger quantum (Firefox: 900–3600) falling
+    // behind. It follows the output device's clock instead and hands its samples over through the ring of the reference; with
+    // `stream.capture.sink` it only links to output devices, never to the filter's own output.
     let mut reference_properties = properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::NODE_NAME => REFERENCE_NODE_NAME,
         *pw::keys::NODE_DESCRIPTION => "Voice Filter (speakers, for the echo cancellation)",
         *pw::keys::NODE_LATENCY => latency.as_str(),
-        *pw::keys::NODE_GROUP => GROUP,
-        *pw::keys::NODE_LINK_GROUP => GROUP,
         *pw::keys::AUDIO_CHANNELS => "1",
         "stream.capture.sink" => "true",
     };
