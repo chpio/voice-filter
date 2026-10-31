@@ -10,6 +10,7 @@ pub mod bridge;
 pub mod chain;
 pub mod compressor;
 pub mod dbus;
+pub mod deesser;
 pub mod denoise;
 pub mod equalizer;
 #[cfg(feature = "gui")]

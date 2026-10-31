@@ -10,10 +10,11 @@ use super::proxy::{Status, VoiceFilterProxy};
 
 /// The stages the window has a switch for: name in the chain and title; what they do is in the
 /// descriptions of their groups, so the rows stay short.
-const STAGES: [(&str, &str); 6] = [
+const STAGES: [(&str, &str); 7] = [
     ("denoise", "Noise Suppression"),
     ("highpass", "High-Pass Filter"),
     ("eq", "Equalizer"),
+    ("deesser", "De-Esser"),
     ("agc", "Automatic Gain Control"),
     ("compressor", "Compressor"),
     ("limiter", "Limiter"),
@@ -116,10 +117,10 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     page.add(&group(
         "Tone",
         Some(
-            "Removes rumble below 80 Hz and makes the voice clearer: less boom around 250 Hz, \
-             more presence around 3.5 kHz.",
+            "Removes rumble below 80 Hz, makes the voice clearer (less boom around 250 Hz, \
+             more presence around 3.5 kHz) and tames harsh S sounds.",
         ),
-        &[switch("highpass"), switch("eq")],
+        &[switch("highpass"), switch("eq"), switch("deesser")],
     ));
     page.add(&group(
         "Level",
