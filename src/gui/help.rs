@@ -166,6 +166,17 @@ const PARAMS: [(&str, &str, &str); 17] = [
     ),
 ];
 
+pub const INPUT_LEVEL: &str = "How loud the microphone is, before the filter; the bar goes \
+    from −60 to 0 dBFS.\n\nThe background noise is its quietest moment in the last 2 seconds, \
+    what it picks up while you're silent. Below −60 dBFS is quiet; above −45 dBFS the noise \
+    suppression has a hard time and leaves a hiss. A microphone boost that's turned up (in \
+    alsamixer often “Mic Boost” or “Internal Mic Boost”) raises the noise; a headset or a USB \
+    microphone usually picks up much less.";
+
+pub const OUTPUT_LEVEL: &str = "How loud the voice leaves the filter, what apps get; the bar \
+    goes from −60 to 0 dBFS. Speech should sit around the target level of the gain control \
+    (−18 dBFS), the pauses far below.";
+
 pub const LATENCY: &str = "How long the voice takes from the microphone to the app: the \
     microphone's buffer, the buffer before the virtual microphone, what the stages need (the \
     noise suppression 30 ms) and the buffer of the app.";

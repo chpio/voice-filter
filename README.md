@@ -126,6 +126,8 @@ never interrupts the audio. In the app you can:
 - switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
   suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
   or the frequency of the high-pass
+- watch the **levels** of the microphone and of Voice Filter, and the background noise of the
+  microphone: above −45 dBFS the app points out that it's too noisy
 - watch the **latency**, the processing time per frame and dropouts
 
 The info button on a row explains what the stage, the setting or the status value means.
@@ -168,6 +170,7 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                                                           |
 | `Quantum`         | `t`, read            | samples per PipeWire cycle                                                                                          |
 | `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms                                                        |
+| `Levels`          | `a{sd}`, read        | `input` and `output` (dBFS, falling 20 dB/s) and `input-floor`, the noise floor of the microphone                   |
 | `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start                                                         |
 
 For example with `busctl`:

@@ -54,6 +54,15 @@ const GROUPS: [(&str, &str, &[&str]); 4] = [
 
 /// How often the window reads the state; the status properties don't emit change signals.
 const POLL: Duration = Duration::from_secs(1);
+/// How often it reads the levels for the meters, while the filter runs.
+const POLL_LEVELS: Duration = Duration::from_millis(100);
+/// The range of the meters, in dBFS.
+const METER_MIN_DB: f64 = -60.;
+/// Above this noise floor of the microphone (dBFS), for [`NOISY_POLLS`] polls in a row, the window
+/// says that it's noisy: the noise suppression leaves a hiss then (heard on a built-in microphone
+/// at −27 dBFS).
+const NOISY_DB: f64 = -45.;
+const NOISY_POLLS: u32 = 5;
 
 /// The row of a stage: a switch, or with parameters a row that expands to them, its switch turns
 /// the stage on and off.
@@ -103,6 +112,14 @@ struct Widgets {
     /// The frame counters of the echo cancellation at the last poll, to see whether they move.
     echo_frames: Cell<(f64, f64)>,
     listen: adw::SwitchRow,
+    /// The meters of the microphone (its noise floor in the subtitle) and of the output.
+    input_level: (adw::ActionRow, gtk::LevelBar),
+    output_level: (adw::ActionRow, gtk::LevelBar),
+    /// Whether the filter ran since the poll before, from its frame counter, and the counter.
+    running: Cell<bool>,
+    frames: Cell<u64>,
+    /// Polls in a row with the noise floor above [`NOISY_DB`].
+    noisy_polls: Cell<u32>,
     latency: adw::ActionRow,
     processing: adw::ActionRow,
     dropouts: adw::ActionRow,
@@ -157,6 +174,11 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .title("Listen")
             .subtitle("Plays it on the default output, use headphones")
             .build(),
+        input_level: meter_row("Microphone", help::INPUT_LEVEL),
+        output_level: meter_row("Voice Filter", help::OUTPUT_LEVEL),
+        running: Cell::new(false),
+        frames: Cell::new(0),
+        noisy_polls: Cell::new(0),
         latency: status_row("Latency", help::LATENCY),
         processing: status_row("Processing Time", help::PROCESSING),
         dropouts: status_row("Dropouts Since the Start", help::DROPOUTS),
@@ -177,6 +199,14 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         "Input",
         Some("The filter reads from this microphone, apps read from “Voice Filter”."),
         &[widgets.input.upcast_ref(), widgets.listen.upcast_ref()],
+    ));
+    page.add(&group(
+        "Levels",
+        None,
+        &[
+            widgets.input_level.0.upcast_ref(),
+            widgets.output_level.0.upcast_ref(),
+        ],
     ));
     for stage_group in &widgets.groups {
         page.add(stage_group);
@@ -206,8 +236,82 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         .build();
 
     connect_controls(&widgets);
+    glib::spawn_future_local(poll_levels(widgets.clone()));
     glib::spawn_future_local(poll(widgets));
     window
+}
+
+/// A row with a meter of a level, and an info button.
+fn meter_row(title: &str, help: &str) -> (adw::ActionRow, gtk::LevelBar) {
+    let bar = gtk::LevelBar::builder()
+        .min_value(0.)
+        .max_value(1.)
+        .width_request(220)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .build();
+    // one color: the default offsets color the low end like a warning
+    for offset in [
+        gtk::LEVEL_BAR_OFFSET_LOW,
+        gtk::LEVEL_BAR_OFFSET_HIGH,
+        gtk::LEVEL_BAR_OFFSET_FULL,
+    ] {
+        bar.remove_offset_value(Some(offset));
+    }
+    let row = adw::ActionRow::builder().title(title).build();
+    row.add_suffix(&bar);
+    row.add_suffix(&help::button(help));
+    (row, bar)
+}
+
+/// A level in dBFS as the fill of a meter, 0 to 1.
+fn meter_fill(db: f64) -> f64 {
+    ((db - METER_MIN_DB) / -METER_MIN_DB).clamp(0., 1.)
+}
+
+/// Reads the levels every [`POLL_LEVELS`] while the filter runs and shows them in the meters.
+async fn poll_levels(widgets: Rc<Widgets>) {
+    loop {
+        glib::timeout_future(POLL_LEVELS).await;
+        let proxy = widgets.proxy.borrow().clone();
+        let levels = match proxy {
+            Some(proxy) if widgets.running.get() => proxy.levels().await.ok(),
+            _ => None,
+        };
+        let level = |name: &str| {
+            levels
+                .as_ref()
+                .and_then(|levels| levels.get(name).copied())
+                .map_or(0., meter_fill)
+        };
+        widgets.input_level.1.set_value(level("input"));
+        widgets.output_level.1.set_value(level("output"));
+    }
+}
+
+/// Whether the filter runs, and the noise floor of the microphone under its meter.
+fn show_levels(widgets: &Widgets, status: &Status) {
+    let frames = status.counters.get("frames").copied().unwrap_or_default();
+    let running = frames != widgets.frames.replace(frames);
+    widgets.running.set(running);
+    let floor = status.levels.get("input-floor").copied().unwrap_or(-120.);
+    let noisy_polls = if running && floor > NOISY_DB {
+        widgets.noisy_polls.get().saturating_add(1)
+    } else {
+        0
+    };
+    widgets.noisy_polls.set(noisy_polls);
+    let subtitle = if !running {
+        "Not running: no app records from “Voice Filter”".to_owned()
+    } else if noisy_polls >= NOISY_POLLS {
+        format!(
+            "Background noise at {floor:.0} dBFS, very loud: the noise suppression leaves a hiss. \
+             Lower the microphone boost, if it's up, or use a headset"
+        )
+    } else {
+        format!("Background noise at {floor:.0} dBFS")
+    };
+    widgets.input_level.0.set_subtitle(&subtitle);
 }
 
 /// Sends what the user changes to the filter.
@@ -566,6 +670,7 @@ fn show(widgets: &Widgets, status: &Status) {
     show_devices(widgets, Device::Input, status);
     show_devices(widgets, Device::Output, status);
     show_echo(widgets, status);
+    show_levels(widgets, status);
     widgets.listen.set_active(status.listen);
     widgets.updating.set(false);
 

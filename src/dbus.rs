@@ -295,6 +295,23 @@ impl Service {
         self.stats.last_max_frame_ns.load(Ordering::Relaxed) as f64 / 1e6
     }
 
+    /// The levels in dBFS: `input` and `output`, of the microphone and of what the filter outputs
+    /// (RMS per frame, rising at once and falling by 20 dB/s), and `input-floor`, the noise floor
+    /// of the microphone (its quietest frame of the last 2 s). They only change while the filter
+    /// runs, see the `frames` of [`Self::counters`].
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn levels(&self) -> HashMap<String, f64> {
+        let stats = &self.stats;
+        [
+            ("input", &stats.input_db),
+            ("output", &stats.output_db),
+            ("input-floor", &stats.input_floor_db),
+        ]
+        .into_iter()
+        .map(|(name, level)| (name.to_owned(), level.load() as f64))
+        .collect()
+    }
+
     /// Since the start: frames processed, samples of silence played because the chain wasn't
     /// ahead, samples dropped to bring the latency down and frames the chain failed on.
     #[zbus(property(emits_changed_signal = "false"))]

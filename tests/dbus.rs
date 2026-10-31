@@ -257,3 +257,16 @@ fn keeps_the_stages_and_parameters() {
         "\n"
     );
 }
+
+#[test]
+fn reports_the_levels() {
+    let service = service();
+    assert_eq!(service.levels()["input"], 0.);
+    service.stats.input_db.store(-40.);
+    service.stats.output_db.store(-18.);
+    service.stats.input_floor_db.store(-62.5);
+    let levels = service.levels();
+    assert_eq!(levels["input"], -40.);
+    assert_eq!(levels["output"], -18.);
+    assert_eq!(levels["input-floor"], -62.5);
+}

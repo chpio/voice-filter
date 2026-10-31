@@ -18,3 +18,9 @@ impl AtomicF32 {
         self.0.store(value.to_bits(), Ordering::Relaxed);
     }
 }
+
+impl Default for AtomicF32 {
+    fn default() -> Self {
+        Self::new(0.)
+    }
+}

@@ -46,6 +46,8 @@ pub trait VoiceFilter {
     fn max_frame_time(&self) -> ::zbus::Result<f64>;
     #[zbus(property)]
     fn counters(&self) -> ::zbus::Result<HashMap<String, u64>>;
+    #[zbus(property)]
+    fn levels(&self) -> ::zbus::Result<HashMap<String, f64>>;
 }
 
 /// A parameter as the bus carries it, see [`Parameter`].
@@ -100,6 +102,8 @@ pub struct Status {
     pub quantum: u64,
     pub max_frame_time: f64,
     pub counters: HashMap<String, u64>,
+    /// `input`, `output` and `input-floor` in dBFS, see `src/dbus.rs`.
+    pub levels: HashMap<String, f64>,
 }
 
 impl VoiceFilterProxy<'_> {
@@ -122,6 +126,7 @@ impl VoiceFilterProxy<'_> {
             quantum: self.quantum().await?,
             max_frame_time: self.max_frame_time().await?,
             counters: self.counters().await?,
+            levels: self.levels().await?,
         })
     }
 }

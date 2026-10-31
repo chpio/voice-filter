@@ -96,3 +96,14 @@ fn runs_the_chain_on_whole_frames() {
     playback.pull(&mut buffer, 0);
     assert!(buffer.iter().all(|&sample| sample == 0.5));
 }
+
+#[test]
+fn measures_the_levels_before_and_after_the_chain() {
+    let (mut capture, _playback, stats) = bridge(Chain::new(vec![]));
+    assert_eq!(stats.input_db.load(), -120.);
+    assert_eq!(stats.input_floor_db.load(), -120.);
+    capture.push(&[0.1; FRAME_LEN], 0);
+    for level in [&stats.input_db, &stats.output_db, &stats.input_floor_db] {
+        assert!((level.load() - -20.).abs() < 0.01, "{}", level.load());
+    }
+}

@@ -18,6 +18,7 @@ pub mod expander;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod highpass;
+pub mod level;
 pub mod limiter;
 pub mod live;
 pub mod offline;

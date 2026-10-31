@@ -13,7 +13,9 @@ use ::std::time::Instant;
 
 use ::rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::atomic::AtomicF32;
 use crate::chain::Chain;
+use crate::level::{self, Meter, NoiseFloor};
 use crate::stage::Frame;
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
@@ -41,6 +43,11 @@ pub struct Stats {
     pub capture_delay: AtomicI64,
     /// From the output stream to the app as PipeWire reports it, in samples.
     pub playback_delay: AtomicI64,
+    /// The level of the microphone and of the output of the chain, as a [`Meter`], in dBFS.
+    pub input_db: AtomicF32,
+    pub output_db: AtomicF32,
+    /// The noise floor of the microphone, see [`NoiseFloor`], in dBFS.
+    pub input_floor_db: AtomicF32,
     // what the playback side needs from the capture side for `bridge_delay`: the cycle time of the
     // last push, its number of samples and the samples waiting for a complete frame
     captured_at_ns: AtomicI64,
@@ -55,6 +62,9 @@ pub struct Capture {
     filled: usize,
     output: Producer<f32>,
     stats: Arc<Stats>,
+    input_meter: Meter,
+    output_meter: Meter,
+    input_floor: NoiseFloor,
 }
 
 /// The playback side: hands out the processed samples.
@@ -69,12 +79,18 @@ const CAPACITY: usize = 16 * FRAME_LEN;
 pub fn bridge(chain: Chain) -> (Capture, Playback, Arc<Stats>) {
     let (output, input) = RingBuffer::new(CAPACITY);
     let stats = Arc::new(Stats::default());
+    for level in [&stats.input_db, &stats.output_db, &stats.input_floor_db] {
+        level.store(-120.);
+    }
     let capture = Capture {
         chain,
         frame: [0.; FRAME_LEN],
         filled: 0,
         output,
         stats: stats.clone(),
+        input_meter: Meter::new(),
+        output_meter: Meter::new(),
+        input_floor: NoiseFloor::new(),
     };
     let playback = Playback {
         input,
@@ -113,11 +129,17 @@ impl Capture {
     fn process_frame(&mut self) {
         // Instant::now goes through the vDSO, no syscall
         let started = Instant::now();
+        let input_db = level::frame_db(&self.frame);
         if self.chain.process(&mut self.frame).is_err() {
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
             self.frame.fill(0.);
         }
         let elapsed = started.elapsed().as_nanos() as u64;
+        let stats = &self.stats;
+        stats.input_db.store(self.input_meter.push(input_db));
+        stats.input_floor_db.store(self.input_floor.push(input_db));
+        let output_db = level::frame_db(&self.frame);
+        stats.output_db.store(self.output_meter.push(output_db));
         self.stats
             .max_frame_ns
             .fetch_max(elapsed, Ordering::Relaxed);
