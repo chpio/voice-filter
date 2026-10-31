@@ -10,6 +10,7 @@ use ::voice_filter::deesser::DeEsser;
 use ::voice_filter::denoise::Denoise;
 use ::voice_filter::echo::{Echo, Reference};
 use ::voice_filter::equalizer::Equalizer;
+use ::voice_filter::expander::Expander;
 use ::voice_filter::highpass::HighPass;
 use ::voice_filter::limiter::Limiter;
 use ::voice_filter::{live, offline, settings};
@@ -102,6 +103,7 @@ fn main() -> Result<ExitCode> {
         let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
         let agc = Agc::new();
         let compressor = Compressor::new().following(agc.target());
+        let expander = Expander::new().listening(denoise.speech());
         let chain = Chain::new(vec![
             Box::new(echo),
             Box::new(denoise),
@@ -110,6 +112,7 @@ fn main() -> Result<ExitCode> {
             Box::new(DeEsser::new()),
             Box::new(agc),
             Box::new(compressor),
+            Box::new(expander),
             Box::new(Limiter::new()),
         ]);
         Ok((chain, reference))

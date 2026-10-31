@@ -14,6 +14,7 @@ pub mod deesser;
 pub mod denoise;
 pub mod echo;
 pub mod equalizer;
+pub mod expander;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod highpass;

@@ -10,7 +10,7 @@ use super::proxy::{Parameter, Status, VoiceFilterProxy};
 
 /// The stages the window shows: name in the chain and title; what they do is in the descriptions
 /// of their groups, so the rows stay short.
-const STAGES: [(&str, &str); 8] = [
+const STAGES: [(&str, &str); 9] = [
     ("echo", "Echo Cancellation"),
     ("denoise", "Noise Suppression"),
     ("highpass", "High-Pass Filter"),
@@ -18,6 +18,7 @@ const STAGES: [(&str, &str); 8] = [
     ("deesser", "De-Esser"),
     ("agc", "Automatic Gain Control"),
     ("compressor", "Compressor"),
+    ("expander", "Expander"),
     ("limiter", "Limiter"),
 ];
 
@@ -43,9 +44,9 @@ const GROUPS: [(&str, &str, &[&str]); 4] = [
     ),
     (
         "Level",
-        "Brings the voice to a constant level, evens out the loudness within words and keeps the \
-         peaks below −1 dBFS.",
-        &["agc", "compressor", "limiter"],
+        "Brings the voice to a constant level, evens out the loudness within words, keeps the \
+         noise down in speech pauses and the peaks below −1 dBFS.",
+        &["agc", "compressor", "expander", "limiter"],
     ),
 ];
 

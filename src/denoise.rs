@@ -1,7 +1,11 @@
+use ::std::sync::Arc;
+use ::std::sync::atomic::{AtomicU64, Ordering};
+
 use ::anyhow::{Result, ensure};
 use ::deep_filter_rt::tract::DfTract;
 use ::ndarray::Array2;
 
+use crate::atomic::AtomicF32;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -15,6 +19,47 @@ pub struct Denoise {
     atten_lim: Param,
     /// The attenuation limit `df` has, to see changes of `atten_lim`.
     applied_atten_lim: f32,
+    speech: Arc<Speech>,
+}
+
+/// How much speech the model hears, for the stages after it (the expander): its estimate of the
+/// local SNR of the frame it analyzes, in dB (−15 to 35), and how many frames it processed, so a
+/// reader sees when it stopped (switched off). The frame it analyzes is the newest, its output is
+/// [`Stage::latency`] behind, so the estimate comes ahead of the audio it belongs to.
+#[derive(Debug)]
+pub struct Speech {
+    snr_db: AtomicF32,
+    frames: AtomicU64,
+}
+
+impl Speech {
+    pub fn new() -> Self {
+        Self {
+            snr_db: AtomicF32::new(-15.),
+            frames: AtomicU64::new(0),
+        }
+    }
+
+    /// The local SNR of the last frame in dB.
+    pub fn snr_db(&self) -> f32 {
+        self.snr_db.load()
+    }
+
+    /// The frames the model processed so far.
+    pub fn frames(&self) -> u64 {
+        self.frames.load(Ordering::Relaxed)
+    }
+
+    pub fn update(&self, snr_db: f32) {
+        self.snr_db.store(snr_db);
+        self.frames.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Default for Speech {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// The default of the model: no limit.
@@ -36,6 +81,7 @@ impl Denoise {
             enhanced: Array2::zeros((1, FRAME_LEN)),
             atten_lim: Param::new("limit", "Limit", "dB", (0., UNLIMITED, 1.), UNLIMITED),
             applied_atten_lim: UNLIMITED,
+            speech: Arc::new(Speech::new()),
         })
     }
 
@@ -47,6 +93,11 @@ impl Denoise {
             .set(db.clamp(0., UNLIMITED))
             .expect("clamped to the range");
         self
+    }
+
+    /// How much speech the model hears, updated with every frame it processes.
+    pub fn speech(&self) -> Arc<Speech> {
+        self.speech.clone()
     }
 
     /// The attenuation limit in dB, to change it while the stage runs in the audio path; it takes
@@ -87,8 +138,10 @@ impl Stage for Denoise {
             .as_slice_mut()
             .unwrap()
             .copy_from_slice(frame);
-        self.df
+        let snr_db = self
+            .df
             .process(self.noisy.view(), self.enhanced.view_mut())?;
+        self.speech.update(snr_db);
         frame.copy_from_slice(self.enhanced.row(0).as_slice().unwrap());
         Ok(())
     }

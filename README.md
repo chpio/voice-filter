@@ -9,7 +9,7 @@ your voice with the background noise removed and a clearer, even tone.
 - **Removes background noise** with [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet), a
   neural network that keeps the full 48 kHz range
 - **Enhances the voice** with classic DSP: high-pass, EQ, de-esser, automatic gain control,
-  compressor and limiter
+  compressor, an expander that keeps the noise down in speech pauses, and a limiter
 - **Runs on the CPU**: the whole chain takes about 2–3 % of one core
 - **Switch and tune everything at runtime** from a GNOME app or over D-Bus, without clicks and
   without changing the latency
@@ -25,7 +25,7 @@ A single process reads the microphone, runs it through a chain of stages in 10 m
 plays the result into the virtual microphone:
 
 ```text
- Microphone ──▶ echo ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──▶ agc ──▶ compressor ──▶ limiter ──▶ "Voice Filter" ──▶ apps
+ Microphone ──▶ echo ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──▶ agc ──▶ compressor ──▶ expander ──▶ limiter ──▶ "Voice Filter" ──▶ apps
                 ▲
  Speakers ──────┘ (what they play, as the reference)
 ```
@@ -39,6 +39,7 @@ plays the result into the virtual microphone:
 | `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates          | `freq`, `threshold`                    |    1 ms |
 | `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses               | `target`, `max-gain`                   |       – |
 | `compressor` | Evens out the loudness within words (3:1 above −24 dBFS)                          | `threshold`, `ratio`                   |       – |
+| `expander`   | Turns the speech pauses down by 20 dB, opens for speech (level or DeepFilterNet3) | `range`, `threshold`, `hold`, `level`  |       – |
 | `limiter`    | Keeps the peaks below −1 dBFS                                                     | `ceiling`, `release`                   |    1 ms |
 
 The values above are the defaults. The settings change them while it runs, but aren't kept for

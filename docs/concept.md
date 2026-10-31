@@ -24,7 +24,7 @@ The signal passes through all stages in a fixed order. Echo comes first, because
 2. **Remove echo** – WebRTC AEC3 in our own process, with the speakers' monitor as the reference (see [Echo cancellation](#echo-cancellation))
 3. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter)
 4. **Suppress other voices** (optional, postponed) – Hush, modes Off · Full · Gate, about 11 ms more
-5. **Enhance the voice** – high-pass, EQ, de-esser, AGC, compressor, limiter
+5. **Enhance the voice** – high-pass, EQ, de-esser, AGC, compressor, expander, limiter
 6. **Restoration** (optional, later) – ML model such as Stream.FM, GPU required
 7. **Virtual microphone "Voice Filter"** – selected in Discord, the browser or OBS
 
@@ -113,9 +113,10 @@ Classic DSP brings the biggest audible gain and runs live with practically no CP
 |     3 | De-esser   | Harsh S sounds                          | band above 5 kHz turned down while its share of the energy is above −7 dB (ratio 4, at most 12 dB), split with a linear-phase FIR, 1 ms latency                   |
 |     4 | AGC        | A constant level, whatever the distance | −18 dBFS RMS, gain −12…+30 dB, rises 6 dB/s, falls 30 dB/s, holds below −55 dBFS                                                                                  |
 |     5 | Compressor | Even loudness within words              | 3:1 above −24 dBFS, soft knee 6 dB, attack 5 ms, release 120 ms                                                                                                   |
-|     6 | Limiter    | No clipping                             | −1 dBFS, 1 ms lookahead, release 50 ms                                                                                                                            |
+|     6 | Expander   | Quiet speech pauses                     | −20 dB unless the level is above −50 dBFS or DeepFilterNet3's local SNR above 0 dB (it's 30 ms ahead, so it opens before a word), hold 200 ms, closes over 150 ms |
+|     7 | Limiter    | No clipping                             | −1 dBFS, 1 ms lookahead, release 50 ms                                                                                                                            |
 
-The AGC comes before the compressor (the first draft had it the other way round): the compressor then sees a known level, so its threshold and make-up gain can be fixed relative to the AGC's target. The de-esser goes after the EQ, whose presence boost brings out the S sounds, and before the AGC: it detects the S sounds relative to the total energy, so it doesn't depend on the level. The values are the defaults, each one adjustable at runtime from the GNOME app; presets are to follow.
+The AGC comes before the compressor (the first draft had it the other way round): the compressor then sees a known level, so its threshold and make-up gain can be fixed relative to the AGC's target. The de-esser goes after the EQ, whose presence boost brings out the S sounds, and before the AGC: it detects the S sounds relative to the total energy, so it doesn't depend on the level. The expander comes after the compressor: the AGC holds its gain in the pauses and the compressor's make-up gain raises what the noise suppression leaves, so the noise became audible there. It opens for the level like a classic expander and also where DeepFilterNet3 hears speech, which catches quieter speech. DeepFilterNet3's estimate alone wasn't enough: live it cut quiet speech and word ends now and then, on three recordings up to 20 % of the quieter speech; with the level too none on two of them and 1.7 % on a very quiet one, while short pauses between sentences went 10–20 dB down. WebRTC's AGC2, compared on a recording, kept the pauses 5 dB further below the speech than our AGC and compressor, with the same evenness of the speech, but less to adjust. The values are the defaults, each one adjustable at runtime from the GNOME app; presets are to follow.
 
 **Level 2: ML restoration ("studio voice")**
 
@@ -189,7 +190,7 @@ Four phases, each usable on its own. Each phase ends with a latency and listenin
    - [x] offline mode for WAV tests
    - [x] latency measurement per stage
 2. **Voice** – in progress
-   - [x] high-pass, EQ, de-esser, AGC, compressor, limiter
+   - [x] high-pass, EQ, de-esser, AGC, compressor, expander, limiter
    - [ ] presets
    - [x] D-Bus interface and GNOME app
    - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
