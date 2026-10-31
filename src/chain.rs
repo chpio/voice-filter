@@ -4,6 +4,7 @@ use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::anyhow::Result;
 
 use crate::FRAME_LEN;
+use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
 /// The stages in the order the signal runs through them. Each one can be switched off at runtime
@@ -60,6 +61,21 @@ impl Chain {
         self.slots
             .iter()
             .map(|slot| (slot.stage.name(), slot.enabled.clone()))
+            .collect()
+    }
+
+    /// The settings of every stage, with the name of the stage, to change them while the chain
+    /// runs in the audio path.
+    pub fn params(&self) -> Vec<(&'static str, Param)> {
+        self.slots
+            .iter()
+            .flat_map(|slot| {
+                let name = slot.stage.name();
+                slot.stage
+                    .params()
+                    .into_iter()
+                    .map(move |param| (name, param))
+            })
             .collect()
     }
 

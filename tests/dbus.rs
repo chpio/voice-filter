@@ -3,10 +3,10 @@
 use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::std::sync::{Arc, Mutex};
 
-use ::voice_filter::atomic::AtomicF32;
 use ::voice_filter::bridge::Stats;
 use ::voice_filter::dbus::{Control, Service};
 use ::voice_filter::live::Input;
+use ::voice_filter::param::Param;
 use ::voice_filter::settings;
 
 fn service() -> Service {
@@ -29,7 +29,16 @@ fn service_with(
             ("denoise", Arc::new(AtomicBool::new(true))),
             ("agc", Arc::new(AtomicBool::new(true))),
         ],
-        atten_lim: Arc::new(AtomicF32::new(100.)),
+        params: vec![
+            (
+                "denoise",
+                Param::new("limit", "Limit", "dB", (0., 100., 1.), 100.),
+            ),
+            (
+                "agc",
+                Param::new("target", "Target", "dBFS", (-30., -12., 0.5), -18.),
+            ),
+        ],
         stats: Arc::new(Stats::default()),
         chain_latency: 1488,
         input: String::new(),
@@ -47,15 +56,39 @@ fn service_with(
 }
 
 #[test]
-fn sets_the_attenuation_limit_within_its_range() {
+fn lists_the_parameters_of_the_stages() {
+    let service = service();
+    let parameters = service.parameters();
+    assert_eq!(parameters.len(), 2);
+    assert_eq!(
+        parameters[1],
+        (
+            "agc".to_owned(),
+            "target".to_owned(),
+            "Target".to_owned(),
+            "dBFS".to_owned(),
+            -30.,
+            -12.,
+            0.5,
+            -18.,
+            -18.
+        )
+    );
+}
+
+#[test]
+fn sets_parameters_within_their_range() {
     let mut service = service();
-    service.set_attenuation_limit(12.).unwrap();
-    assert_eq!(service.atten_lim.load(), 12.);
-    assert_eq!(service.attenuation_limit(), 12.);
-    assert!(service.set_attenuation_limit(101.).is_err());
-    assert!(service.set_attenuation_limit(-1.).is_err());
-    assert!(service.set_attenuation_limit(f64::NAN).is_err());
-    assert_eq!(service.atten_lim.load(), 12.);
+    service.set_parameter("denoise", "limit", 12.).unwrap();
+    assert_eq!(service.params[0].1.get(), 12.);
+    assert_eq!(service.parameters()[0].8, 12.);
+    assert!(service.set_parameter("denoise", "limit", 101.).is_err());
+    assert!(service.set_parameter("denoise", "limit", -1.).is_err());
+    assert!(service.set_parameter("denoise", "limit", f64::NAN).is_err());
+    assert_eq!(service.params[0].1.get(), 12.);
+    // the name belongs to its stage
+    assert!(service.set_parameter("agc", "limit", 12.).is_err());
+    assert!(service.set_parameter("denoise", "target", -20.).is_err());
 }
 
 #[test]

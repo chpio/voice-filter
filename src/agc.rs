@@ -1,5 +1,6 @@
 use ::anyhow::Result;
 
+use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
@@ -10,13 +11,16 @@ pub struct Agc {
     /// The smoothed level of the speech, in dBFS (RMS).
     level_db: f32,
     gain_db: f32,
+    target: Param,
+    max_gain: Param,
 }
 
-/// The level the speech is brought to, in dBFS (RMS): loud enough for calls, with headroom for
+/// The level the speech is brought to by default, in dBFS (RMS): loud enough for calls, with headroom for
 /// the peaks, which the limiter after the AGC catches.
 pub const TARGET_DB: f32 = -18.;
 /// Frames below this level (RMS, dBFS) are pauses, they don't change the measured level.
 pub const GATE_DB: f32 = -55.;
+/// The most it raises by default.
 pub const MAX_GAIN_DB: f32 = 30.;
 pub const MIN_GAIN_DB: f32 = -12.;
 /// The time constant of the measured level, in seconds.
@@ -34,7 +38,20 @@ impl Agc {
         Self {
             level_db: TARGET_DB,
             gain_db: 0.,
+            target: Param::new(
+                "target",
+                "Target Level",
+                "dBFS",
+                (-30., -12., 0.5),
+                TARGET_DB,
+            ),
+            max_gain: Param::new("max-gain", "Maximum Gain", "dB", (0., 40., 1.), MAX_GAIN_DB),
         }
+    }
+
+    /// The level it brings the speech to, for the compressor, whose make-up gain depends on it.
+    pub fn target(&self) -> Param {
+        self.target.clone()
     }
 
     /// The current gain, in dB.
@@ -58,6 +75,10 @@ impl Stage for Agc {
         0
     }
 
+    fn params(&self) -> Vec<Param> {
+        vec![self.target.clone(), self.max_gain.clone()]
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let power = frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
         let frame_db = 10. * (power + 1e-12).log10();
@@ -65,7 +86,7 @@ impl Stage for Agc {
             let alpha = 1. - (-FRAME_S / LEVEL_TAU).exp();
             self.level_db += (frame_db - self.level_db) * alpha;
         }
-        let wanted = (TARGET_DB - self.level_db).clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        let wanted = (self.target.get() - self.level_db).clamp(MIN_GAIN_DB, self.max_gain.get());
         let previous = self.gain_db;
         self.gain_db = if wanted > previous {
             wanted.min(previous + RISE_DB_PER_S * FRAME_S)

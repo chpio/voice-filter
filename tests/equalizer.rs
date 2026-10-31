@@ -24,3 +24,21 @@ fn lowers_the_low_mids_and_raises_the_presence() {
         );
     }
 }
+
+#[test]
+fn follows_its_gains_and_the_presence_frequency() {
+    let mut eq = Equalizer::new();
+    let params = eq.params();
+    let names: Vec<_> = params.iter().map(|param| param.name).collect();
+    assert_eq!(names, ["low-mid", "presence", "presence-freq"]);
+    params[0].set(0.).unwrap();
+    params[1].set(6.).unwrap();
+    params[2].set(5000.).unwrap();
+    for (freq, expected, tolerance) in [(250., 0., 0.3), (5000., 6., 0.2), (3500., 4., 1.)] {
+        let gain = gain_db(&mut eq, freq);
+        assert!(
+            (gain - expected).abs() < tolerance,
+            "{freq} Hz: {gain:.2} dB"
+        );
+    }
+}

@@ -1,11 +1,9 @@
 use ::std::path::PathBuf;
 use ::std::process::ExitCode;
-use ::std::sync::Arc;
 
 use ::anyhow::Result;
 use ::clap::{Parser, Subcommand};
 use ::voice_filter::agc::Agc;
-use ::voice_filter::atomic::AtomicF32;
 use ::voice_filter::chain::Chain;
 use ::voice_filter::compressor::Compressor;
 use ::voice_filter::deesser::DeEsser;
@@ -51,20 +49,20 @@ enum Command {
 fn main() -> Result<ExitCode> {
     let args = Args::parse();
     let settings_dir = settings::dir();
-    // the chain and the attenuation limit of its denoise stage, for the control interface
-    let chain = || -> Result<(Chain, Arc<AtomicF32>)> {
+    let chain = || -> Result<Chain> {
         let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
-        let atten_lim = denoise.atten_lim();
+        let agc = Agc::new();
+        let compressor = Compressor::new().following(agc.target());
         let chain = Chain::new(vec![
             Box::new(denoise),
             Box::new(HighPass::new()),
             Box::new(Equalizer::new()),
             Box::new(DeEsser::new()),
-            Box::new(Agc::new()),
-            Box::new(Compressor::new()),
+            Box::new(agc),
+            Box::new(compressor),
             Box::new(Limiter::new()),
         ]);
-        Ok((chain, atten_lim))
+        Ok(chain)
     };
     match args.command {
         Command::Run { input } => {
@@ -81,8 +79,7 @@ fn main() -> Result<ExitCode> {
                 Some(input) => eprintln!("Reading from {input}"),
                 None => eprintln!("Reading from the default input"),
             }
-            let (chain, atten_lim) = chain()?;
-            live::run(chain, input.as_deref(), atten_lim, settings_dir)?;
+            live::run(chain()?, input.as_deref(), settings_dir)?;
         }
         Command::Inputs => {
             let saved = match &settings_dir {
@@ -102,7 +99,7 @@ fn main() -> Result<ExitCode> {
             }
         }
         Command::Process { input, output } => {
-            let report = offline::process_file(&mut chain()?.0, &input, &output)?;
+            let report = offline::process_file(&mut chain()?, &input, &output)?;
             println!("{report}");
         }
         #[cfg(feature = "gui")]

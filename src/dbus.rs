@@ -10,10 +10,9 @@ use ::anyhow::{Context as _, Result, anyhow};
 use ::zbus::{connection, fdo, interface};
 
 use crate::SAMPLE_RATE;
-use crate::atomic::AtomicF32;
 use crate::bridge::Stats;
-use crate::denoise::UNLIMITED;
 use crate::live::Input;
+use crate::param::Param;
 use crate::settings;
 
 /// The well-known name; only one process can own it, so it also keeps a second instance from
@@ -33,7 +32,8 @@ pub enum Control {
 
 pub struct Service {
     pub switches: Vec<(&'static str, Arc<AtomicBool>)>,
-    pub atten_lim: Arc<AtomicF32>,
+    /// The settings of the stages, with the name of their stage.
+    pub params: Vec<(&'static str, Param)>,
     pub stats: Arc<Stats>,
     /// In samples.
     pub chain_latency: usize,
@@ -49,6 +49,9 @@ pub struct Service {
     pub settings_dir: Option<PathBuf>,
 }
 
+/// A parameter on the bus: stage, name, title, unit, minimum, maximum, step, default and value.
+pub type Parameter = (String, String, String, String, f64, f64, f64, f64, f64);
+
 fn ms(samples: i64) -> f64 {
     samples as f64 * 1e3 / SAMPLE_RATE as f64
 }
@@ -57,21 +60,40 @@ fn ms(samples: i64) -> f64 {
 /// don't emit change signals: they change every cycle, clients poll them.
 #[interface(name = "net.b128.VoiceFilter1")]
 impl Service {
-    /// How much the noise suppression may attenuate, in dB, 0 to 100; 100 doesn't limit it.
-    #[zbus(property)]
-    pub fn attenuation_limit(&self) -> f64 {
-        self.atten_lim.load() as f64
+    /// The settings of the stages, in the order of the chain: stage, name, title, unit, minimum,
+    /// maximum, step, default and value. Set with [`Self::set_parameter`], they don't emit change
+    /// signals either.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn parameters(&self) -> Vec<Parameter> {
+        self.params
+            .iter()
+            .map(|(stage, param)| {
+                (
+                    stage.to_string(),
+                    param.name.to_owned(),
+                    param.title.to_owned(),
+                    param.unit.to_owned(),
+                    param.min as f64,
+                    param.max as f64,
+                    param.step as f64,
+                    param.default as f64,
+                    param.get() as f64,
+                )
+            })
+            .collect()
     }
 
-    #[zbus(property)]
-    pub fn set_attenuation_limit(&mut self, db: f64) -> fdo::Result<()> {
-        if !(0. ..=UNLIMITED as f64).contains(&db) {
-            return Err(fdo::Error::InvalidArgs(format!(
-                "the attenuation limit must be 0 to {UNLIMITED} dB, not {db}"
-            )));
-        }
-        self.atten_lim.store(db as f32);
-        Ok(())
+    /// Sets a setting of a stage, within its range; the stage applies it with the next frame. Not
+    /// kept for the next runs.
+    pub fn set_parameter(&mut self, stage: &str, name: &str, value: f64) -> fdo::Result<()> {
+        let (_, param) = self
+            .params
+            .iter()
+            .find(|(of, param)| *of == stage && param.name == name)
+            .ok_or_else(|| fdo::Error::InvalidArgs(format!("no parameter {name} of {stage}")))?;
+        param
+            .set(value as f32)
+            .map_err(|err| fdo::Error::InvalidArgs(err.to_string()))
     }
 
     /// Whether what "Voice Filter" outputs is played on the default output, to hear the filter

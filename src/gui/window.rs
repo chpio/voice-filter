@@ -6,10 +6,10 @@ use ::adw::prelude::*;
 use ::gtk::glib;
 use ::zbus::proxy::CacheProperties;
 
-use super::proxy::{Status, VoiceFilterProxy};
+use super::proxy::{Parameter, Status, VoiceFilterProxy};
 
-/// The stages the window has a switch for: name in the chain and title; what they do is in the
-/// descriptions of their groups, so the rows stay short.
+/// The stages the window shows: name in the chain and title; what they do is in the descriptions
+/// of their groups, so the rows stay short.
 const STAGES: [(&str, &str); 7] = [
     ("denoise", "Noise Suppression"),
     ("highpass", "High-Pass Filter"),
@@ -20,14 +20,67 @@ const STAGES: [(&str, &str); 7] = [
     ("limiter", "Limiter"),
 ];
 
+/// The groups of the stages: title, description and their stages.
+const GROUPS: [(&str, &str, &[&str]); 3] = [
+    (
+        "Noise Suppression",
+        "Removes background noise. The limit keeps part of it: lower sounds more natural, 100 dB \
+         removes it all.",
+        &["denoise"],
+    ),
+    (
+        "Tone",
+        "Removes rumble, makes the voice clearer (less boom in the low mids, more presence) and \
+         tames harsh S sounds.",
+        &["highpass", "eq", "deesser"],
+    ),
+    (
+        "Level",
+        "Brings the voice to a constant level, evens out the loudness within words and keeps the \
+         peaks below −1 dBFS.",
+        &["agc", "compressor", "limiter"],
+    ),
+];
+
 /// How often the window reads the state; the status properties don't emit change signals.
 const POLL: Duration = Duration::from_secs(1);
+
+/// The row of a stage: a switch, or with parameters a row that expands to them, its switch turns
+/// the stage on and off.
+enum StageRow {
+    Switch(adw::SwitchRow),
+    Expander {
+        row: adw::ExpanderRow,
+        /// Parameter name and its scale.
+        scales: Vec<(String, gtk::Scale)>,
+    },
+}
+
+impl StageRow {
+    fn widget(&self) -> &gtk::Widget {
+        match self {
+            Self::Switch(row) => row.upcast_ref(),
+            Self::Expander { row, .. } => row.upcast_ref(),
+        }
+    }
+
+    fn set_on(&self, on: bool) {
+        match self {
+            Self::Switch(row) => row.set_active(on),
+            Self::Expander { row, .. } => row.set_enable_expansion(on),
+        }
+    }
+}
 
 struct Widgets {
     stack: gtk::Stack,
     missing: adw::StatusPage,
-    switches: Vec<(&'static str, adw::SwitchRow)>,
-    atten_lim: gtk::Scale,
+    /// The groups of [`GROUPS`], their rows come with the first status.
+    groups: Vec<adw::PreferencesGroup>,
+    /// Stage name, its row and the group the row is in.
+    stages: RefCell<Vec<(String, StageRow, adw::PreferencesGroup)>>,
+    /// The stages with their parameter names that `stages` were built for.
+    layout: RefCell<Vec<(String, Vec<String>)>>,
     input: adw::ComboRow,
     /// The `node.name` per entry of `input`, the first is the default input (empty).
     input_names: RefCell<Vec<String>>,
@@ -42,14 +95,6 @@ struct Widgets {
 
 pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let row = |title: &str| adw::ActionRow::builder().title(title).build();
-    let atten_lim = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 100., 1.);
-    atten_lim.set_draw_value(true);
-    atten_lim.set_value_pos(gtk::PositionType::Left);
-    atten_lim.set_digits(0);
-    atten_lim.set_format_value_func(|_, db| format!("{db:.0} dB"));
-    atten_lim.set_width_request(260);
-    atten_lim.set_hexpand(true);
-    atten_lim.set_valign(gtk::Align::Center);
     let widgets = Rc::new(Widgets {
         stack: gtk::Stack::new(),
         missing: adw::StatusPage::builder()
@@ -57,11 +102,17 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .title("Voice Filter Isn't Running")
             .description("Start it with <tt>voice-filter run</tt>")
             .build(),
-        switches: STAGES
+        groups: GROUPS
             .iter()
-            .map(|&(name, title)| (name, adw::SwitchRow::builder().title(title).build()))
+            .map(|(title, description, _)| {
+                adw::PreferencesGroup::builder()
+                    .title(*title)
+                    .description(*description)
+                    .build()
+            })
             .collect(),
-        atten_lim,
+        stages: RefCell::new(Vec::new()),
+        layout: RefCell::new(Vec::new()),
         // the chosen microphone as the subtitle, over the width of the row, instead of squeezed
         // next to the title
         input: adw::ComboRow::builder()
@@ -81,9 +132,6 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         proxy: RefCell::new(None),
     });
 
-    let atten_lim_row = adw::ActionRow::builder().title("Limit").build();
-    atten_lim_row.add_suffix(&widgets.atten_lim);
-
     let group = |title: &str, description: Option<&str>, rows: &[&gtk::Widget]| {
         let group = adw::PreferencesGroup::builder().title(title).build();
         group.set_description(description);
@@ -92,44 +140,15 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         }
         group
     };
-    let switch = |name: &str| -> &gtk::Widget {
-        let (_, row) = widgets
-            .switches
-            .iter()
-            .find(|(stage, _)| *stage == name)
-            .expect("a switch for every stage the window shows");
-        row.upcast_ref()
-    };
     let page = adw::PreferencesPage::new();
     page.add(&group(
         "Input",
         Some("The filter reads from this microphone, apps read from “Voice Filter”."),
         &[widgets.input.upcast_ref(), widgets.listen.upcast_ref()],
     ));
-    page.add(&group(
-        "Noise Suppression",
-        Some(
-            "Removes background noise. The limit keeps part of it: lower sounds more natural, \
-             100 dB removes it all.",
-        ),
-        &[switch("denoise"), atten_lim_row.upcast_ref()],
-    ));
-    page.add(&group(
-        "Tone",
-        Some(
-            "Removes rumble below 80 Hz, makes the voice clearer (less boom around 250 Hz, \
-             more presence around 3.5 kHz) and tames harsh S sounds.",
-        ),
-        &[switch("highpass"), switch("eq"), switch("deesser")],
-    ));
-    page.add(&group(
-        "Level",
-        Some(
-            "Brings the voice to a constant level, evens out the loudness within words and \
-             keeps the peaks below −1 dBFS.",
-        ),
-        &[switch("agc"), switch("compressor"), switch("limiter")],
-    ));
+    for stage_group in &widgets.groups {
+        page.add(stage_group);
+    }
     page.add(&group(
         "Status",
         None,
@@ -161,21 +180,6 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
 
 /// Sends what the user changes to the filter.
 fn connect_controls(widgets: &Rc<Widgets>) {
-    for (name, row) in &widgets.switches {
-        let name = *name;
-        let widgets = Rc::downgrade(widgets);
-        row.connect_active_notify(move |row| {
-            let Some(proxy) = sendable(&widgets) else {
-                return;
-            };
-            let enabled = row.is_active();
-            glib::spawn_future_local(async move {
-                if let Err(err) = proxy.set_stage_enabled(name, enabled).await {
-                    eprintln!("Could not switch {name}: {err}");
-                }
-            });
-        });
-    }
     let weak = Rc::downgrade(widgets);
     widgets.listen.connect_active_notify(move |row| {
         let Some(proxy) = sendable(&weak) else {
@@ -210,18 +214,139 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             }
         });
     });
-    let weak = Rc::downgrade(widgets);
-    widgets.atten_lim.connect_value_changed(move |scale| {
+}
+
+/// Sends switching a stage on or off.
+fn send_enabled(widgets: &::std::rc::Weak<Widgets>, stage: &str, enabled: bool) {
+    let Some(proxy) = sendable(widgets) else {
+        return;
+    };
+    let stage = stage.to_owned();
+    glib::spawn_future_local(async move {
+        if let Err(err) = proxy.set_stage_enabled(&stage, enabled).await {
+            eprintln!("Could not switch {stage}: {err}");
+        }
+    });
+}
+
+/// The digits a step needs: 0 for 1 and above, 1 for 0.1 to 0.5 …
+fn digits(step: f64) -> u32 {
+    (-step.log10()).ceil().max(0.) as u32
+}
+
+fn format_value(value: f64, digits: u32, unit: &str) -> String {
+    let digits = digits as usize;
+    // a ratio as 3.0:1, everything else with a space
+    let space = if unit.starts_with(':') { "" } else { " " };
+    format!("{value:.digits$}{space}{unit}")
+}
+
+/// The slider of a parameter, the default marked, sending what the user sets.
+fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
+    let scale = gtk::Scale::with_range(
+        gtk::Orientation::Horizontal,
+        param.min,
+        param.max,
+        param.step,
+    );
+    let digits = digits(param.step);
+    scale.set_draw_value(true);
+    scale.set_value_pos(gtk::PositionType::Left);
+    scale.set_digits(digits as i32);
+    let unit = param.unit.clone();
+    scale.set_format_value_func(move |_, value| format_value(value, digits, &unit));
+    scale.add_mark(param.default, gtk::PositionType::Bottom, None);
+    scale.set_width_request(220);
+    scale.set_hexpand(true);
+    scale.set_valign(gtk::Align::Center);
+    scale.set_value(param.value);
+    let (stage, name) = (param.stage.clone(), param.name.clone());
+    let weak = widgets.clone();
+    scale.connect_value_changed(move |scale| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
-        let db = scale.value();
+        let (stage, name, value) = (stage.clone(), name.clone(), scale.value());
         glib::spawn_future_local(async move {
-            if let Err(err) = proxy.set_attenuation_limit(db).await {
-                eprintln!("Could not set the attenuation limit: {err}");
+            if let Err(err) = proxy.set_parameter(&stage, &name, value).await {
+                eprintln!("Could not set {name} of {stage}: {err}");
             }
         });
     });
+    scale
+}
+
+/// Builds the rows of the stages for the stages and parameters of `status`, unless they were
+/// built for the same ones.
+fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
+    let layout: Vec<(String, Vec<String>)> = status
+        .stages
+        .iter()
+        .map(|(stage, _)| {
+            let params = status
+                .parameters
+                .iter()
+                .filter(|param| param.stage == *stage);
+            (
+                stage.clone(),
+                params.map(|param| param.name.clone()).collect(),
+            )
+        })
+        .collect();
+    if *widgets.layout.borrow() == layout {
+        return;
+    }
+    let weak = Rc::downgrade(widgets);
+    for (_, row, group) in widgets.stages.take() {
+        group.remove(row.widget());
+    }
+    let mut stages = Vec::new();
+    for ((_, _, names), group) in GROUPS.iter().zip(&widgets.groups) {
+        for name in *names {
+            if !status.stages.iter().any(|(stage, _)| stage == name) {
+                continue;
+            }
+            let title = STAGES
+                .iter()
+                .find(|(stage, _)| stage == name)
+                .map_or(*name, |(_, title)| title);
+            let params: Vec<&Parameter> = status
+                .parameters
+                .iter()
+                .filter(|param| param.stage == *name)
+                .collect();
+            let row = if params.is_empty() {
+                let row = adw::SwitchRow::builder().title(title).build();
+                let (weak, name) = (weak.clone(), *name);
+                row.connect_active_notify(move |row| send_enabled(&weak, name, row.is_active()));
+                StageRow::Switch(row)
+            } else {
+                let row = adw::ExpanderRow::builder()
+                    .title(title)
+                    .show_enable_switch(true)
+                    .build();
+                let scales = params
+                    .iter()
+                    .map(|param| {
+                        let scale = scale(&weak, param);
+                        let param_row = adw::ActionRow::builder().title(&param.title).build();
+                        param_row.add_suffix(&scale);
+                        row.add_row(&param_row);
+                        (param.name.clone(), scale)
+                    })
+                    .collect();
+                let (weak, name) = (weak.clone(), *name);
+                row.connect_enable_expansion_notify(move |row| {
+                    send_enabled(&weak, name, row.enables_expansion());
+                });
+                StageRow::Expander { row, scales }
+            };
+            group.add(row.widget());
+            stages.push((name.to_string(), row, group.clone()));
+        }
+    }
+    widgets.stages.replace(stages);
+    widgets.layout.replace(layout);
 }
 
 /// The proxy to send a change with, unless the change comes from showing a read value.
@@ -262,6 +387,9 @@ async fn poll(widgets: Rc<Widgets>) {
     loop {
         match proxy.status().await {
             Ok(status) => {
+                widgets.updating.set(true);
+                build_stages(&widgets, &status);
+                widgets.updating.set(false);
                 show(&widgets, &status);
                 widgets.stack.set_visible_child_name("controls");
             }
@@ -302,16 +430,26 @@ fn show_inputs(widgets: &Widgets, status: &Status) {
 
 fn show(widgets: &Widgets, status: &Status) {
     widgets.updating.set(true);
-    for (name, enabled) in &status.stages {
-        if let Some((_, row)) = widgets.switches.iter().find(|(stage, _)| stage == name) {
-            row.set_active(*enabled);
+    for (name, row, _) in widgets.stages.borrow().iter() {
+        if let Some((_, enabled)) = status.stages.iter().find(|(stage, _)| stage == name) {
+            row.set_on(*enabled);
         }
-    }
-    // not while the user drags it, the read value lags behind by up to a poll
-    if (widgets.atten_lim.value() - status.attenuation_limit).abs() >= 1.
-        && !widgets.atten_lim.has_focus()
-    {
-        widgets.atten_lim.set_value(status.attenuation_limit);
+        let StageRow::Expander { scales, .. } = row else {
+            continue;
+        };
+        for (param_name, scale) in scales {
+            let Some(param) = status
+                .parameters
+                .iter()
+                .find(|param| param.stage == *name && param.name == *param_name)
+            else {
+                continue;
+            };
+            // not while the user drags it, the read value lags behind by up to a poll
+            if (scale.value() - param.value).abs() >= param.step / 2. && !scale.has_focus() {
+                scale.set_value(param.value);
+            }
+        }
     }
     show_inputs(widgets, status);
     widgets.listen.set_active(status.listen);

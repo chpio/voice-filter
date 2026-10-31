@@ -1,5 +1,6 @@
 use ::std::f32::consts::PI;
 
+use ::voice_filter::agc::{Agc, TARGET_DB};
 use ::voice_filter::compressor::{
     Compressor, KNEE_DB, RATIO, THRESHOLD_DB, makeup_db, reduction_db,
 };
@@ -26,12 +27,12 @@ fn run(compressor: &mut Compressor, level_db: f32, frames: usize) -> f32 {
 
 #[test]
 fn has_a_soft_knee_and_the_ratio_above_it() {
-    assert_eq!(reduction_db(THRESHOLD_DB - 10.), 0.);
+    assert_eq!(reduction_db(THRESHOLD_DB - 10., THRESHOLD_DB, RATIO), 0.);
     // at the threshold, in the middle of the knee: the slope times an eighth of its width
     let slope = 1. / RATIO - 1.;
-    assert!((reduction_db(THRESHOLD_DB) - slope * KNEE_DB / 8.).abs() < 1e-5);
-    assert!((reduction_db(THRESHOLD_DB + 12.) - slope * 12.).abs() < 1e-5);
-    assert!(makeup_db() > 0.);
+    assert!((reduction_db(THRESHOLD_DB, THRESHOLD_DB, RATIO) - slope * KNEE_DB / 8.).abs() < 1e-5);
+    assert!((reduction_db(THRESHOLD_DB + 12., THRESHOLD_DB, RATIO) - slope * 12.).abs() < 1e-5);
+    assert!(makeup_db(TARGET_DB, THRESHOLD_DB, RATIO) > 0.);
 }
 
 #[test]
@@ -39,7 +40,10 @@ fn compresses_steady_levels_by_the_ratio() {
     // settled: below the knee only the make-up gain, above it 3 dB in give 1 dB out
     let settled = |level_db| run(&mut Compressor::new(), level_db, 100);
     let quiet = settled(-45.);
-    assert!((quiet - (-45. + makeup_db())).abs() < 0.2, "{quiet}");
+    assert!(
+        (quiet - (-45. + makeup_db(TARGET_DB, THRESHOLD_DB, RATIO))).abs() < 0.2,
+        "{quiet}"
+    );
     let (loud, louder) = (settled(-12.), settled(-6.));
     assert!(
         ((louder - loud) - 6. / RATIO).abs() < 0.2,
@@ -54,7 +58,7 @@ fn turns_down_fast_and_back_up_slowly() {
     assert!(compressor.reduction() > -0.01);
     // loud: within 3 frames (30 ms) almost all of the reduction
     run(&mut compressor, -6., 3);
-    let wanted = reduction_db(-6.);
+    let wanted = reduction_db(-6., THRESHOLD_DB, RATIO);
     assert!(
         compressor.reduction() < wanted * 0.95,
         "{}",
@@ -70,4 +74,35 @@ fn turns_down_fast_and_back_up_slowly() {
     );
     run(&mut compressor, -40., 100);
     assert!(compressor.reduction() > -0.1, "{}", compressor.reduction());
+}
+
+#[test]
+fn follows_its_parameters_and_the_target_of_the_agc() {
+    let agc = Agc::new();
+    let mut compressor = Compressor::new().following(agc.target());
+    let params = compressor.params();
+    let names: Vec<_> = params.iter().map(|param| param.name).collect();
+    assert_eq!(names, ["threshold", "ratio"]);
+    let (threshold, ratio) = (&params[0], &params[1]);
+
+    // a ratio of 1 doesn't compress: 6 dB more in give 6 dB more out
+    ratio.set(1.).unwrap();
+    let settled = |compressor: &mut Compressor, level_db| run(compressor, level_db, 100);
+    let (loud, louder) = (
+        settled(&mut compressor, -12.),
+        settled(&mut compressor, -6.),
+    );
+    assert!(((louder - loud) - 6.).abs() < 0.2, "{loud} -> {louder}");
+
+    // a lower threshold and the AGC's target take part in the make-up gain
+    ratio.set(4.).unwrap();
+    threshold.set(-30.).unwrap();
+    agc.target().set(-24.).unwrap();
+    let quiet = settled(&mut compressor, -50.);
+    let expected = -50. + makeup_db(-24., -30., 4.);
+    assert!(
+        (quiet - expected).abs() < 0.2,
+        "{quiet}, expected {expected}"
+    );
+    assert!(ratio.set(0.5).is_err());
 }

@@ -14,9 +14,8 @@ pub trait VoiceFilter {
     fn set_stage_enabled(&self, name: &str, enabled: bool) -> ::zbus::Result<()>;
 
     #[zbus(property)]
-    fn attenuation_limit(&self) -> ::zbus::Result<f64>;
-    #[zbus(property)]
-    fn set_attenuation_limit(&self, db: f64) -> ::zbus::Result<()>;
+    fn parameters(&self) -> ::zbus::Result<Vec<ParameterTuple>>;
+    fn set_parameter(&self, stage: &str, name: &str, value: f64) -> ::zbus::Result<()>;
 
     #[zbus(property)]
     fn listen(&self) -> ::zbus::Result<bool>;
@@ -41,11 +40,46 @@ pub trait VoiceFilter {
     fn counters(&self) -> ::zbus::Result<HashMap<String, u64>>;
 }
 
+/// A parameter as the bus carries it, see [`Parameter`].
+type ParameterTuple = (String, String, String, String, f64, f64, f64, f64, f64);
+
+/// A setting of a stage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Parameter {
+    pub stage: String,
+    pub name: String,
+    pub title: String,
+    /// Shown after the value, e.g. `dB`, `Hz` or `:1`.
+    pub unit: String,
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+    pub default: f64,
+    pub value: f64,
+}
+
+impl From<ParameterTuple> for Parameter {
+    fn from((stage, name, title, unit, min, max, step, default, value): ParameterTuple) -> Self {
+        Self {
+            stage,
+            name,
+            title,
+            unit,
+            min,
+            max,
+            step,
+            default,
+            value,
+        }
+    }
+}
+
 /// Everything the window shows, read in one go.
 pub struct Status {
     pub listen: bool,
     pub stages: Vec<(String, bool)>,
-    pub attenuation_limit: f64,
+    /// In the order of the chain.
+    pub parameters: Vec<Parameter>,
     pub input: String,
     /// `node.name`, description and priority.
     pub inputs: Vec<(String, String, i32)>,
@@ -60,7 +94,12 @@ impl VoiceFilterProxy<'_> {
         Ok(Status {
             listen: self.listen().await?,
             stages: self.stages().await?,
-            attenuation_limit: self.attenuation_limit().await?,
+            parameters: self
+                .parameters()
+                .await?
+                .into_iter()
+                .map(Parameter::from)
+                .collect(),
             input: self.input().await?,
             inputs: self.inputs().await?,
             latency: self.latency().await?,

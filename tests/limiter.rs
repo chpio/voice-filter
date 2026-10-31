@@ -62,3 +62,25 @@ fn passes_quiet_signals_unchanged_but_delayed() {
         assert!((out - x).abs() < 1e-6);
     }
 }
+
+#[test]
+fn follows_its_ceiling_and_release() {
+    let mut input = vec![0.5; 10 * FRAME_LEN];
+    input[2000] = 2.;
+    let with = |ceiling_db: f32, release_ms: f32| {
+        let mut limiter = Limiter::new();
+        let params = limiter.params();
+        let names: Vec<_> = params.iter().map(|param| param.name).collect();
+        assert_eq!(names, ["ceiling", "release"]);
+        params[0].set(ceiling_db).unwrap();
+        params[1].set(release_ms).unwrap();
+        run(&mut limiter, &input)
+    };
+    // a lower ceiling: the peak and the steady signal (0.5 is -6 dBFS) both kept below it
+    let output = with(-6., 50.);
+    assert!(output.iter().all(|x| x.abs() <= db_to_gain(-6.)));
+    // 20 ms after the peak: back up with a short release, still down with a long one
+    let after = 2000 + LOOKAHEAD + 960;
+    let (short, long) = (with(-1., 10.)[after], with(-1., 200.)[after]);
+    assert!(short > 0.45 && long < 0.35, "{short} {long}");
+}

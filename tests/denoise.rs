@@ -56,7 +56,7 @@ fn changes_the_attenuation_limit_at_runtime() {
     };
     let limited = ratio_db(&mut denoise);
     assert!((-7. ..-5.).contains(&limited), "{limited} dB");
-    atten_lim.store(::voice_filter::denoise::UNLIMITED);
+    atten_lim.set(::voice_filter::denoise::UNLIMITED).unwrap();
     let unlimited = ratio_db(&mut denoise);
     assert!(unlimited < -20., "{unlimited} dB");
 }

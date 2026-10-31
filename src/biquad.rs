@@ -59,6 +59,16 @@ impl Biquad {
         )
     }
 
+    /// Takes the coefficients of `other` and keeps its own state, so a change of the frequency or
+    /// gain while it runs doesn't click.
+    pub fn retune(&mut self, other: Biquad) {
+        *self = Self {
+            z1: self.z1,
+            z2: self.z2,
+            ..other
+        };
+    }
+
     pub fn process(&mut self, x: f32) -> f32 {
         let x = x as f64;
         let y = self.b0 * x + self.z1;

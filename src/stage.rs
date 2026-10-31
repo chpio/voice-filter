@@ -1,6 +1,7 @@
 use ::anyhow::Result;
 
 use crate::FRAME_LEN;
+use crate::param::Param;
 
 /// One frame of mono audio at [`crate::SAMPLE_RATE`].
 pub type Frame = [f32; FRAME_LEN];
@@ -19,5 +20,10 @@ pub trait Stage: Send {
     /// it. By default its latency, rounded up to frames.
     fn resume_frames(&self) -> usize {
         self.latency().div_ceil(FRAME_LEN)
+    }
+    /// The settings the control interface can change while it runs, sharing their values with
+    /// the stage; called once, before it runs.
+    fn params(&self) -> Vec<Param> {
+        Vec::new()
     }
 }

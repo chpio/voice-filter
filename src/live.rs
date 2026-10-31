@@ -16,7 +16,6 @@ use ::pipewire::spa::pod::Pod;
 use ::pipewire::stream::{StreamFlags, StreamRc, StreamState};
 use ::pipewire::types::ObjectType;
 
-use crate::atomic::AtomicF32;
 use crate::bridge::{Capture, Playback, Stats, bridge};
 use crate::chain::Chain;
 use crate::dbus::{self, Control, Service};
@@ -33,16 +32,12 @@ const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
 
 /// Runs until SIGINT or SIGTERM. `input` is the `node.name` of the microphone, without it the
-/// session manager links the default input. `atten_lim` is the denoise stage's, for the control
-/// interface, which keeps the microphone chosen there in `settings_dir`.
-pub fn run(
-    chain: Chain,
-    input: Option<&str>,
-    atten_lim: Arc<AtomicF32>,
-    settings_dir: Option<PathBuf>,
-) -> Result<()> {
+/// session manager links the default input. The control interface keeps the microphone chosen
+/// there in `settings_dir`.
+pub fn run(chain: Chain, input: Option<&str>, settings_dir: Option<PathBuf>) -> Result<()> {
     pw::init();
     let switches = chain.switches();
+    let params = chain.params();
     let (mut capture, mut playback, stats) = bridge(chain);
     let chain_latency = capture.latency();
     let inputs = Arc::new(Mutex::new(Vec::new()));
@@ -50,7 +45,7 @@ pub fn run(
     // first, so a second instance stops before it creates nodes
     dbus::serve(Service {
         switches,
-        atten_lim,
+        params,
         stats: stats.clone(),
         chain_latency,
         input: input.unwrap_or_default().to_owned(),

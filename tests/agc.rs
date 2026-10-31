@@ -81,3 +81,24 @@ fn keeps_the_gain_in_pauses_and_below_the_gate() {
 fn has_no_latency() {
     assert_eq!(Agc::new().latency(), 0);
 }
+
+#[test]
+fn follows_its_target_and_maximum_gain() {
+    let mut agc = Agc::new();
+    let params = agc.params();
+    let names: Vec<_> = params.iter().map(|param| param.name).collect();
+    assert_eq!(names, ["target", "max-gain"]);
+    params[0].set(-24.).unwrap();
+    let mut last = 0.;
+    for mut frame in bursts(-40., 1000, 0, 1000) {
+        agc.process(&mut frame).unwrap();
+        last = rms_db(&frame);
+    }
+    assert!((last - -24.).abs() < 1., "{last} dBFS");
+    // a lower maximum: the gain falls to it
+    params[1].set(10.).unwrap();
+    for mut frame in bursts(-40., 100, 0, 100) {
+        agc.process(&mut frame).unwrap();
+    }
+    assert_eq!(agc.gain_db(), 10.);
+}

@@ -29,12 +29,14 @@ microphone given with `--input` is kept for the next runs; without one so far, i
 input, which doesn't work once "Voice Filter" is the default itself. The microphone is only in use
 while an app records from "Voice Filter".
 
-While it runs, the GNOME app (`voice-filter ui`) switches its stages, sets the attenuation limit
-and shows its latency. Or over D-Bus, e.g. with `busctl`:
+While it runs, the GNOME app (`voice-filter ui`) switches its stages, sets their parameters (e.g.
+the attenuation limit of the noise suppression or the frequency of the high-pass) and shows its
+latency. Or over D-Bus, e.g. with `busctl`:
 
 ```bash
 busctl --user introspect net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1
-busctl --user set-property net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 AttenuationLimit d 12
+busctl --user get-property net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 Parameters
+busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetParameter ssd denoise limit 12
 busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetStageEnabled sb agc false
 ```
 
