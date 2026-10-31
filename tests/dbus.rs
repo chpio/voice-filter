@@ -40,6 +40,7 @@ fn service_with(
             ),
         ],
         stats: Arc::new(Stats::default()),
+        echo: None,
         chain_latency: 1488,
         input: String::new(),
         inputs: Arc::new(Mutex::new(vec![
@@ -199,4 +200,31 @@ fn switches_the_output_device_and_keeps_it() {
             Control::SetOutput(String::new())
         ]
     );
+}
+
+#[test]
+fn reports_how_the_echo_cancellation_does() {
+    use ::voice_filter::FRAME_LEN;
+    use ::voice_filter::echo::Echo;
+    use ::voice_filter::stage::Stage;
+
+    let mut service = service();
+    assert!(service.echo().is_empty());
+    let (mut echo, mut reference) = Echo::new();
+    service.echo = Some(echo.status());
+    // two frames of the microphone, one of a reference at -20 dBFS (RMS)
+    reference.push(&[0.1; FRAME_LEN]);
+    echo.process(&mut [0.; FRAME_LEN]).unwrap();
+    echo.process(&mut [0.; FRAME_LEN]).unwrap();
+    let status = service.echo();
+    assert_eq!(status["capture-frames"], 2.);
+    assert_eq!(status["reference-frames"], 1.);
+    assert!(
+        (status["reference"] - -20.).abs() < 0.01,
+        "{}",
+        status["reference"]
+    );
+    for key in ["erle", "erl", "delay"] {
+        assert!(status.contains_key(key), "{key}");
+    }
 }

@@ -87,6 +87,17 @@ fn removes_the_echo_of_the_reference() {
     }
     let removed_db = 10. * (energy_in / energy_out).log10();
     assert!(removed_db > 25., "{removed_db:.1} dB removed");
+    // what it reports: it ran, took the reference, sees the echo removed and the room's delay
+    let status = echo.status();
+    assert_eq!(status.capture_frames(), 500);
+    assert_eq!(status.reference_frames(), 500);
+    assert!(status.erle_db() > 10., "ERLE {} dB", status.erle_db());
+    let delay_ms = Room::DELAY as f32 * 1000. / ::voice_filter::SAMPLE_RATE as f32;
+    assert!(
+        (status.delay_ms() - delay_ms).abs() <= 4.,
+        "delay {} ms, the room's {delay_ms} ms",
+        status.delay_ms()
+    );
 }
 
 #[test]

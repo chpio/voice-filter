@@ -39,6 +39,8 @@ pub trait VoiceFilter {
     #[zbus(property)]
     fn latency(&self) -> ::zbus::Result<HashMap<String, f64>>;
     #[zbus(property)]
+    fn echo(&self) -> ::zbus::Result<HashMap<String, f64>>;
+    #[zbus(property)]
     fn quantum(&self) -> ::zbus::Result<u64>;
     #[zbus(property)]
     fn max_frame_time(&self) -> ::zbus::Result<f64>;
@@ -93,6 +95,8 @@ pub struct Status {
     pub output: String,
     pub outputs: Vec<(String, String, i32)>,
     pub latency: HashMap<String, f64>,
+    /// How the echo cancellation does, see `src/dbus.rs`.
+    pub echo: HashMap<String, f64>,
     pub quantum: u64,
     pub max_frame_time: f64,
     pub counters: HashMap<String, u64>,
@@ -114,6 +118,7 @@ impl VoiceFilterProxy<'_> {
             output: self.output().await?,
             outputs: self.outputs().await?,
             latency: self.latency().await?,
+            echo: self.echo().await?,
             quantum: self.quantum().await?,
             max_frame_time: self.max_frame_time().await?,
             counters: self.counters().await?,

@@ -11,6 +11,7 @@ use ::zbus::{connection, fdo, interface};
 
 use crate::SAMPLE_RATE;
 use crate::bridge::Stats;
+use crate::echo::EchoStatus;
 use crate::live::Device;
 use crate::param::Param;
 use crate::settings;
@@ -38,6 +39,8 @@ pub struct Service {
     /// The settings of the stages, with the name of their stage.
     pub params: Vec<(&'static str, Param)>,
     pub stats: Arc<Stats>,
+    /// How the echo canceller does, if the chain has one.
+    pub echo: Option<Arc<EchoStatus>>,
     /// In samples.
     pub chain_latency: usize,
     /// The `node.name` of the microphone, empty for the default input.
@@ -240,6 +243,30 @@ impl Service {
             .chain([("total", total)])
             .map(|(name, samples)| (name.to_owned(), ms(samples)))
             .collect()
+    }
+
+    /// How the echo cancellation does: `capture-frames` and `reference-frames` (counters; the
+    /// first stops while it's off or no app records, the second while the speakers are idle),
+    /// `reference` (the peak level of what the speakers play in dBFS, falling by 60 dB/s), `erle`
+    /// and `erl` (as AEC3 reports them, of its linear filter only: they say little about how much
+    /// echo it removes in all, see [`EchoStatus::erle_db`]) and `delay` (from the speakers to the
+    /// microphone, in ms, in steps of 4 ms). Empty without echo cancellation.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn echo(&self) -> HashMap<String, f64> {
+        let Some(echo) = &self.echo else {
+            return HashMap::new();
+        };
+        [
+            ("capture-frames", echo.capture_frames() as f64),
+            ("reference-frames", echo.reference_frames() as f64),
+            ("reference", echo.reference_db() as f64),
+            ("erle", echo.erle_db() as f64),
+            ("erl", echo.erl_db() as f64),
+            ("delay", echo.delay_ms() as f64),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect()
     }
 
     /// The samples per graph cycle.

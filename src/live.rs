@@ -69,6 +69,7 @@ pub fn run(
         switches,
         params,
         stats: stats.clone(),
+        echo: Some(reference.status()),
         chain_latency,
         input: input.unwrap_or_default().to_owned(),
         inputs: inputs.clone(),

@@ -99,7 +99,8 @@ never interrupts the audio. In the app you can:
 
 - choose the **microphone**, switched while the filter keeps running
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
-  there's no echo, it can be off
+  there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the
+  delay of their echo
 - turn on **Listen** to hear yourself through the filter on the default output (use headphones)
 - switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
   suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
@@ -128,21 +129,22 @@ pw-record --target <speakers> -P '{ stream.capture.sink = true }' --rate 48000 -
 The daemon serves `net.b128.VoiceFilter.Daemon` on the session bus (object `/net/b128/VoiceFilter`,
 interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 
-| Member            | Type                 | Description                                                            |
-| ----------------- | -------------------- | ---------------------------------------------------------------------- |
-| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input              |
-| `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output |
-| `Listen`          | `b`, read/write      | plays Voice Filter on the default output                               |
-| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                     |
-| `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value |
-| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range       |
-| `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                             |
-| `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                           |
-| `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                       |
-| `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms              |
-| `Quantum`         | `t`, read            | samples per PipeWire cycle                                             |
-| `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms           |
-| `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start            |
+| Member            | Type                 | Description                                                               |
+| ----------------- | -------------------- | ------------------------------------------------------------------------- |
+| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                 |
+| `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output    |
+| `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                  |
+| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                        |
+| `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value    |
+| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range          |
+| `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                                |
+| `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                              |
+| `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                          |
+| `Echo`            | `a{sd}`, read        | the echo cancellation: frame counters, level of the speakers, ERLE, delay |
+| `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                 |
+| `Quantum`         | `t`, read            | samples per PipeWire cycle                                                |
+| `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms              |
+| `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start               |
 
 For example with `busctl`:
 

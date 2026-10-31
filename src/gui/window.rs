@@ -96,6 +96,10 @@ struct Widgets {
     output: adw::ComboRow,
     /// Like `input_names`.
     output_names: RefCell<Vec<String>>,
+    /// How the echo cancellation does, under `output`.
+    echo_status: adw::ActionRow,
+    /// The frame counters of the echo cancellation at the last poll, to see whether they move.
+    echo_frames: Cell<(f64, f64)>,
     listen: adw::SwitchRow,
     latency: adw::ActionRow,
     processing: adw::ActionRow,
@@ -139,6 +143,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .model(&gtk::StringList::new(&[]))
             .build(),
         output_names: RefCell::new(Vec::new()),
+        echo_status: row("Status"),
+        echo_frames: Cell::new((0., 0.)),
         listen: adw::SwitchRow::builder()
             .title("Listen")
             .subtitle("Plays it on the default output, use headphones")
@@ -340,12 +346,17 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
     }
     let weak = Rc::downgrade(widgets);
     for (_, row, group) in widgets.stages.take() {
-        // the row of the output device moves to the new row of the echo cancellation
-        if let StageRow::Expander { row, .. } = &row
-            && widgets.output.parent().is_some()
-            && widgets.output.is_ancestor(row)
-        {
-            row.remove(&widgets.output);
+        // the rows of the output device and the status move to the new row of the echo
+        // cancellation
+        if let StageRow::Expander { row, .. } = &row {
+            for moving in [
+                widgets.output.upcast_ref::<gtk::Widget>(),
+                widgets.echo_status.upcast_ref(),
+            ] {
+                if moving.parent().is_some() && moving.is_ancestor(row) {
+                    row.remove(moving);
+                }
+            }
         }
         group.remove(row.widget());
     }
@@ -387,6 +398,7 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                     .collect();
                 if *name == "echo" {
                     row.add_row(&widgets.output);
+                    row.add_row(&widgets.echo_status);
                 }
                 let (weak, name) = (weak.clone(), *name);
                 row.connect_enable_expansion_notify(move |row| {
@@ -484,6 +496,33 @@ fn show_devices(widgets: &Widgets, device: Device, status: &Status) {
     }
 }
 
+/// What the echo cancellation does: whether it runs and hears the speakers, how loud, and the delay
+/// of the echo it estimates. Not AEC3's ERLE: it only covers its linear filter, a few dB, while
+/// what it removes in all was 30 dB on a recording that reported 6.
+fn show_echo(widgets: &Widgets, status: &Status) {
+    let value = |name: &str| status.echo.get(name).copied();
+    let (Some(capture), Some(reference)) = (value("capture-frames"), value("reference-frames"))
+    else {
+        widgets.echo_status.set_subtitle("Not in the chain");
+        return;
+    };
+    let (last_capture, last_reference) = widgets.echo_frames.replace((capture, reference));
+    let level = value("reference").unwrap_or(-120.);
+    let subtitle = if capture == last_capture {
+        "Not running: switched off, or no app records from “Voice Filter”".to_owned()
+    } else if reference == last_reference || level < -60. {
+        "The speakers are silent, there's no echo to remove".to_owned()
+    } else {
+        // AEC3 estimates in blocks of 4 ms
+        let delay = match value("delay").unwrap_or_default() {
+            delay if delay < 4. => "less than 4 ms".to_owned(),
+            delay => format!("about {delay:.0} ms"),
+        };
+        format!("Hears the speakers at {level:.0} dBFS, their echo comes back after {delay}")
+    };
+    widgets.echo_status.set_subtitle(&subtitle);
+}
+
 fn show(widgets: &Widgets, status: &Status) {
     widgets.updating.set(true);
     for (name, row, _) in widgets.stages.borrow().iter() {
@@ -509,6 +548,7 @@ fn show(widgets: &Widgets, status: &Status) {
     }
     show_devices(widgets, Device::Input, status);
     show_devices(widgets, Device::Output, status);
+    show_echo(widgets, status);
     widgets.listen.set_active(status.listen);
     widgets.updating.set(false);
 

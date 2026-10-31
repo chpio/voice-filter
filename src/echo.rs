@@ -1,8 +1,12 @@
+use ::std::sync::Arc;
+use ::std::sync::atomic::{AtomicU64, Ordering};
+
 use ::anyhow::{Result, anyhow};
 use ::rtrb::{Consumer, Producer, RingBuffer};
 use ::sonora::config::{EchoCanceller, MaxProcessingRate, Pipeline};
 use ::sonora::{AudioProcessing, Config, StreamConfig};
 
+use crate::atomic::AtomicF32;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
@@ -22,11 +26,78 @@ pub struct Echo {
     render: [f32; FRAME_LEN],
     render_out: [f32; FRAME_LEN],
     capture: [f32; FRAME_LEN],
+    status: Arc<EchoStatus>,
 }
 
 /// What the speakers play, handed to the echo canceller from another thread.
 pub struct Reference {
     producer: Producer<f32>,
+    status: Arc<EchoStatus>,
+}
+
+/// How the echo canceller does, for the control interface, updated with every frame: whether it
+/// runs and gets a reference (frame counters, a reader compares them with its last look), how loud
+/// the reference is and what AEC3 measures.
+#[derive(Debug)]
+pub struct EchoStatus {
+    capture_frames: AtomicU64,
+    reference_frames: AtomicU64,
+    reference_db: AtomicF32,
+    erle_db: AtomicF32,
+    erl_db: AtomicF32,
+    delay_ms: AtomicF32,
+}
+
+/// How fast the level of the reference falls after a peak, in dB per frame: 60 dB per second, so
+/// it shows what played within the last second or so.
+const REFERENCE_DECAY_DB: f32 = 0.6;
+
+impl EchoStatus {
+    fn new() -> Self {
+        Self {
+            capture_frames: AtomicU64::new(0),
+            reference_frames: AtomicU64::new(0),
+            reference_db: AtomicF32::new(-120.),
+            erle_db: AtomicF32::new(0.),
+            erl_db: AtomicF32::new(0.),
+            delay_ms: AtomicF32::new(0.),
+        }
+    }
+
+    /// The frames of the microphone it processed; they stop while it's off or no app records.
+    pub fn capture_frames(&self) -> u64 {
+        self.capture_frames.load(Ordering::Relaxed)
+    }
+
+    /// The frames of the reference it took; they stop while the speakers are idle.
+    pub fn reference_frames(&self) -> u64 {
+        self.reference_frames.load(Ordering::Relaxed)
+    }
+
+    /// The peak level of the reference (RMS per frame) in dBFS, falling by 60 dB per second.
+    pub fn reference_db(&self) -> f32 {
+        self.reference_db.load()
+    }
+
+    /// Echo return loss enhancement as AEC3 reports it, in dB: what its linear filter removes, not
+    /// what it removes in all with its suppressor (a recording it reported 5–7 dB for lost 30 dB of
+    /// echo).
+    pub fn erle_db(&self) -> f32 {
+        self.erle_db.load()
+    }
+
+    /// Echo return loss as AEC3 reports it, in dB: how much quieter the echo reaches the
+    /// microphone than the speakers play, as its linear filter sees it (it stays at its initial
+    /// 20 dB until the filter is sure).
+    pub fn erl_db(&self) -> f32 {
+        self.erl_db.load()
+    }
+
+    /// The delay from the speakers to the microphone AEC3 estimates, in ms, in steps of 4 ms (0 for
+    /// less, e.g. with a USB microphone close to the speakers).
+    pub fn delay_ms(&self) -> f32 {
+        self.delay_ms.load()
+    }
 }
 
 /// The reference the ring holds at most, in samples: 340 ms, more than the stages ever lag behind
@@ -52,14 +123,20 @@ impl Echo {
             .render_config(stream)
             .build();
         let (producer, consumer) = RingBuffer::new(REFERENCE_CAPACITY);
+        let status = Arc::new(EchoStatus::new());
         let echo = Self {
             apm,
             reference: consumer,
             render: [0.; FRAME_LEN],
             render_out: [0.; FRAME_LEN],
             capture: [0.; FRAME_LEN],
+            status: status.clone(),
         };
-        (echo, Reference { producer })
+        (echo, Reference { producer, status })
+    }
+
+    pub fn status(&self) -> Arc<EchoStatus> {
+        self.status.clone()
     }
 }
 
@@ -72,6 +149,11 @@ impl Reference {
             chunk.fill_from_iter(samples[..fits].iter().copied());
         }
         samples.len() - fits
+    }
+
+    /// The status of its echo canceller, for the control interface.
+    pub fn status(&self) -> Arc<EchoStatus> {
+        self.status.clone()
     }
 }
 
@@ -106,11 +188,29 @@ impl Stage for Echo {
             self.apm
                 .process_render_f32(&[&self.render], &mut [&mut self.render_out])
                 .map_err(|err| anyhow!("{err}"))?;
+            let status = &self.status;
+            let power = self.render.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
+            let level_db = 10. * (power + 1e-12).log10();
+            let peak_db = (status.reference_db() - REFERENCE_DECAY_DB).max(level_db);
+            status.reference_db.store(peak_db);
+            status.reference_frames.fetch_add(1, Ordering::Relaxed);
         }
         self.capture.copy_from_slice(frame);
         self.apm
             .process_capture_f32(&[&self.capture], &mut [frame])
             .map_err(|err| anyhow!("{err}"))?;
+        let stats = self.apm.statistics();
+        let status = &self.status;
+        if let Some(erle) = stats.echo_return_loss_enhancement {
+            status.erle_db.store(erle as f32);
+        }
+        if let Some(erl) = stats.echo_return_loss {
+            status.erl_db.store(erl as f32);
+        }
+        if let Some(delay) = stats.delay_ms {
+            status.delay_ms.store(delay as f32);
+        }
+        status.capture_frames.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
