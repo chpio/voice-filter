@@ -8,3 +8,5 @@ extend-exclude = ["crates/deep-filter-rt/models/"]
 [default.extend-words]
 # resonance of the vocal tract, in the speech-like test signals
 formant = "formant"
+# pipewire-rs: Buffer::datas_mut
+datas = "datas"

@@ -3,8 +3,10 @@
 //! All modules live in the library so the tests under `tests/` can use them, the binary only
 //! wires them up. The design is described in `docs/concept.md`.
 
+pub mod bridge;
 pub mod chain;
 pub mod denoise;
+pub mod live;
 pub mod offline;
 pub mod stage;
 
