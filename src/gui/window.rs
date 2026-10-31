@@ -6,7 +6,7 @@ use ::adw::prelude::*;
 use ::gtk::glib;
 use ::zbus::proxy::CacheProperties;
 
-use crate::proxy::{Status, VoiceFilterProxy};
+use super::proxy::{Status, VoiceFilterProxy};
 
 /// The stages the window has a switch for: name in the chain and title; what they do is in the
 /// descriptions of their groups, so the rows stay short.

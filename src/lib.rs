@@ -9,6 +9,8 @@ pub mod bridge;
 pub mod chain;
 pub mod dbus;
 pub mod denoise;
+#[cfg(feature = "gui")]
+pub mod gui;
 pub mod limiter;
 pub mod live;
 pub mod offline;

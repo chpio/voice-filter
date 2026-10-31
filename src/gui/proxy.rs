@@ -1,5 +1,5 @@
-//! The client side of the control interface of `voice-filter run` (`src/dbus.rs` in the root
-//! crate, the names and types here must match it).
+//! The client side of the control interface of `voice-filter run` ([`crate::dbus`], the names and
+//! types here must match it).
 
 use ::std::collections::HashMap;
 

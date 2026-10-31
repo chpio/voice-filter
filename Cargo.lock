@@ -2159,20 +2159,13 @@ dependencies = [
  "anyhow",
  "clap",
  "deep-filter-rt",
+ "gtk4",
  "hound",
+ "libadwaita",
  "ndarray",
  "pipewire",
  "rtrb",
  "tempfile",
- "zbus",
-]
-
-[[package]]
-name = "voice-filter-gtk"
-version = "0.1.0"
-dependencies = [
- "gtk4",
- "libadwaita",
  "zbus",
 ]
 

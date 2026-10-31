@@ -1,4 +1,5 @@
 use ::std::path::PathBuf;
+use ::std::process::ExitCode;
 use ::std::sync::Arc;
 
 use ::anyhow::Result;
@@ -37,9 +38,13 @@ enum Command {
     /// Runs a WAV file (48 kHz, mixed down to mono) through the chain and writes the result, lined
     /// up with the input; prints the latency and processing time of every stage.
     Process { input: PathBuf, output: PathBuf },
+    /// Opens the GNOME app, which switches the stages and settings of `voice-filter run` and shows
+    /// its latency.
+    #[cfg(feature = "gui")]
+    Ui,
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let args = Args::parse();
     let settings_dir = settings::dir();
     // the chain and the attenuation limit of its denoise stage, for the control interface
@@ -92,6 +97,8 @@ fn main() -> Result<()> {
             let report = offline::process_file(&mut chain()?.0, &input, &output)?;
             println!("{report}");
         }
+        #[cfg(feature = "gui")]
+        Command::Ui => return Ok(::voice_filter::gui::run().into()),
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }

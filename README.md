@@ -20,6 +20,7 @@ The project is at an early stage: so far it only removes noise. The design is de
 voice-filter inputs                   # lists the microphones
 voice-filter run --input <name>       # provides "Voice Filter", until Ctrl+C
 voice-filter process in.wav out.wav   # filters a 48 kHz WAV file, prints latency and timing
+voice-filter ui                       # the GNOME app, controls a running `voice-filter run`
 ```
 
 Select "Voice Filter" as the microphone in the app, or as the default input of the system. The
@@ -27,7 +28,7 @@ microphone given with `--input` is kept for the next runs; without one so far, i
 input, which doesn't work once "Voice Filter" is the default itself. The microphone is only in use
 while an app records from "Voice Filter".
 
-While it runs, the GNOME app (`voice-filter-gtk`) switches its stages, sets the attenuation limit
+While it runs, the GNOME app (`voice-filter ui`) switches its stages, sets the attenuation limit
 and shows its latency. Or over D-Bus, e.g. with `busctl`:
 
 ```bash
@@ -44,6 +45,7 @@ Debian/Ubuntu), clang, and for the GNOME app GTK 4 and libadwaita (`gtk4` and `l
 
 ```bash
 cargo build --release
+cargo build --release --no-default-features   # without the GNOME app, no GTK needed
 ```
 
 ## License

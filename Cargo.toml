@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/deep-filter-rt", "crates/voice-filter-gtk"]
+members = ["crates/deep-filter-rt"]
 
 [workspace.package]
 edition = "2024"
@@ -25,10 +25,19 @@ include = [
     "/LICENSE-MIT",
 ]
 
+[features]
+default = ["gui"]
+# the GNOME app (`voice-filter ui`), needs GTK 4 and libadwaita; without it, only the daemon and the
+# command line
+gui = ["dep:adw", "dep:gtk", "zbus/proxy"]
+
 [dependencies]
+adw = { package = "libadwaita", version = "0.9", features = ["v1_4"], optional = true }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 deep-filter-rt = { path = "crates/deep-filter-rt", version = "0.1" }
+# v4_10 for Scale::set_format_value_func
+gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = true }
 hound = "3.5"
 ndarray = "0.17"
 # v0_3_49 for Buffer::requested, v0_3_50 for Time::buffered

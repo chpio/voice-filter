@@ -45,6 +45,8 @@ jobs:
         with:
           persist-credentials: false
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # without the GNOME app, only the daemon and the command line
+      - run: cargo clippy -p voice-filter --all-targets --no-default-features --locked -- -D warnings
       - run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
