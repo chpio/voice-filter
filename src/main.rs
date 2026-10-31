@@ -2,8 +2,10 @@ use ::std::path::PathBuf;
 
 use ::anyhow::Result;
 use ::clap::{Parser, Subcommand};
+use ::voice_filter::agc::Agc;
 use ::voice_filter::chain::Chain;
 use ::voice_filter::denoise::Denoise;
+use ::voice_filter::limiter::Limiter;
 use ::voice_filter::{live, offline, settings};
 
 /// Live voice filter for PipeWire.
@@ -40,7 +42,11 @@ fn main() -> Result<()> {
     let settings_dir = settings::dir();
     let chain = || -> Result<Chain> {
         let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
-        Ok(Chain::new(vec![Box::new(denoise)]))
+        Ok(Chain::new(vec![
+            Box::new(denoise),
+            Box::new(Agc::new()),
+            Box::new(Limiter::new()),
+        ]))
     };
     match args.command {
         Command::Run { input } => {
