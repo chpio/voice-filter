@@ -17,8 +17,9 @@ const APP_ID: &str = "net.b128.VoiceFilter";
 /// Runs the app until its last window is closed.
 pub fn run() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
-    // the icon of the window outside GNOME Shell, which takes it from the desktop entry
-    gtk::Window::set_default_icon_name(APP_ID);
+    // the icon of the window outside GNOME Shell, which takes it from the desktop entry; GTK is
+    // initialized at the startup of the app, not before
+    app.connect_startup(|_| gtk::Window::set_default_icon_name(APP_ID));
     app.connect_activate(|app| match app.active_window() {
         Some(window) => window.present(),
         None => window::build(app).present(),
