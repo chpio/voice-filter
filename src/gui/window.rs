@@ -10,8 +10,10 @@ use super::proxy::{Status, VoiceFilterProxy};
 
 /// The stages the window has a switch for: name in the chain and title; what they do is in the
 /// descriptions of their groups, so the rows stay short.
-const STAGES: [(&str, &str); 3] = [
+const STAGES: [(&str, &str); 5] = [
     ("denoise", "Noise Suppression"),
+    ("highpass", "High-Pass Filter"),
+    ("eq", "Equalizer"),
     ("agc", "Automatic Gain Control"),
     ("limiter", "Limiter"),
 ];
@@ -88,6 +90,14 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         }
         group
     };
+    let switch = |name: &str| -> &gtk::Widget {
+        let (_, row) = widgets
+            .switches
+            .iter()
+            .find(|(stage, _)| *stage == name)
+            .expect("a switch for every stage the window shows");
+        row.upcast_ref()
+    };
     let page = adw::PreferencesPage::new();
     page.add(&group(
         "Input",
@@ -100,18 +110,20 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             "Removes background noise. The limit keeps part of it: lower sounds more natural, \
              100 dB removes it all.",
         ),
-        &[
-            widgets.switches[0].1.upcast_ref(),
-            atten_lim_row.upcast_ref(),
-        ],
+        &[switch("denoise"), atten_lim_row.upcast_ref()],
+    ));
+    page.add(&group(
+        "Tone",
+        Some(
+            "Removes rumble below 80 Hz and makes the voice clearer: less boom around 250 Hz, \
+             more presence around 3.5 kHz.",
+        ),
+        &[switch("highpass"), switch("eq")],
     ));
     page.add(&group(
         "Level",
         Some("Brings the voice to a constant level and keeps its peaks below −1 dBFS."),
-        &[
-            widgets.switches[1].1.upcast_ref(),
-            widgets.switches[2].1.upcast_ref(),
-        ],
+        &[switch("agc"), switch("limiter")],
     ));
     page.add(&group(
         "Status",

@@ -11,7 +11,8 @@ Planned:
 - runs entirely on the CPU, with a total latency below 40 ms
 - stages and modes can be switched at runtime without clicks, from a GNOME app
 
-The project is at an early stage: so far it only removes noise. The design is described in
+The project is at an early stage: so far it removes noise, cuts rumble, makes the voice clearer
+with an EQ and evens out its level. The design is described in
 [docs/concept.md](docs/concept.md).
 
 ## Usage

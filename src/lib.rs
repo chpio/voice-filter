@@ -5,12 +5,15 @@
 
 pub mod agc;
 pub mod atomic;
+pub mod biquad;
 pub mod bridge;
 pub mod chain;
 pub mod dbus;
 pub mod denoise;
+pub mod equalizer;
 #[cfg(feature = "gui")]
 pub mod gui;
+pub mod highpass;
 pub mod limiter;
 pub mod live;
 pub mod offline;

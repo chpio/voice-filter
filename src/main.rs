@@ -8,6 +8,8 @@ use ::voice_filter::agc::Agc;
 use ::voice_filter::atomic::AtomicF32;
 use ::voice_filter::chain::Chain;
 use ::voice_filter::denoise::Denoise;
+use ::voice_filter::equalizer::Equalizer;
+use ::voice_filter::highpass::HighPass;
 use ::voice_filter::limiter::Limiter;
 use ::voice_filter::{live, offline, settings};
 
@@ -53,6 +55,8 @@ fn main() -> Result<ExitCode> {
         let atten_lim = denoise.atten_lim();
         let chain = Chain::new(vec![
             Box::new(denoise),
+            Box::new(HighPass::new()),
+            Box::new(Equalizer::new()),
             Box::new(Agc::new()),
             Box::new(Limiter::new()),
         ]);
