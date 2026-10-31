@@ -10,7 +10,8 @@ your voice without the echo of your speakers and the background noise, with a cl
   neural network that keeps the full 48 kHz range
 - **Enhances the voice** with classic DSP: high-pass, EQ, de-esser, automatic gain control,
   compressor, an expander that keeps the noise down in speech pauses, and a limiter
-- **Runs on the CPU**: the whole chain takes about 3–4 % of one core
+- **Runs on the CPU**: the whole chain takes about 0.3 % of the CPU (measured on an 8-core Ryzen 7
+  8840U: 0.35 ms per 10 ms frame in a single thread, 3–4 % of one core)
 - **Switch and tune everything at runtime** from a GNOME app or over D-Bus, without clicks and
   without changing the latency
 - **Test offline** with WAV files: the same chain, with the latency and processing time of every
