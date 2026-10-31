@@ -56,8 +56,20 @@ pub struct Service {
     pub send: Box<dyn Fn(Control) -> Result<()> + Send + Sync>,
     /// Whether the output is played on the default output, see [`Control::SetListen`].
     pub listening: bool,
-    /// Where a chosen microphone and output device are kept for the next runs.
+    /// Where a chosen microphone and output device, the stages switched on or off and the
+    /// parameters are kept for the next runs.
     pub settings_dir: Option<PathBuf>,
+}
+
+impl Service {
+    /// Keeps the stages and parameters as they are now for the next runs.
+    fn save_chain(&self) -> fdo::Result<()> {
+        let Some(dir) = &self.settings_dir else {
+            return Ok(());
+        };
+        settings::save_chain(dir, &self.switches, &self.params)
+            .map_err(|err| fdo::Error::Failed(format!("{err:#}")))
+    }
 }
 
 /// A parameter on the bus: stage, name, title, unit, minimum, maximum, step, default and value.
@@ -110,8 +122,8 @@ impl Service {
             .collect()
     }
 
-    /// Sets a setting of a stage, within its range; the stage applies it with the next frame. Not
-    /// kept for the next runs.
+    /// Sets a setting of a stage, within its range; the stage applies it with the next frame. Kept
+    /// for the next runs.
     pub fn set_parameter(&mut self, stage: &str, name: &str, value: f64) -> fdo::Result<()> {
         let (_, param) = self
             .params
@@ -120,7 +132,8 @@ impl Service {
             .ok_or_else(|| fdo::Error::InvalidArgs(format!("no parameter {name} of {stage}")))?;
         param
             .set(value as f32)
-            .map_err(|err| fdo::Error::InvalidArgs(err.to_string()))
+            .map_err(|err| fdo::Error::InvalidArgs(err.to_string()))?;
+        self.save_chain()
     }
 
     /// Whether what "Voice Filter" outputs is played on the default output, to hear the filter
@@ -147,7 +160,8 @@ impl Service {
             .collect()
     }
 
-    /// Switches a stage on or off; switching crossfades and doesn't change the latency.
+    /// Switches a stage on or off; switching crossfades and doesn't change the latency. Kept for
+    /// the next runs.
     pub fn set_stage_enabled(&mut self, name: &str, enabled: bool) -> fdo::Result<()> {
         let (_, switch) = self
             .switches
@@ -155,7 +169,7 @@ impl Service {
             .find(|(stage, _)| *stage == name)
             .ok_or_else(|| fdo::Error::InvalidArgs(format!("no stage {name}")))?;
         switch.store(enabled, Ordering::Relaxed);
-        Ok(())
+        self.save_chain()
     }
 
     /// The `node.name` of the microphone, empty for the default input. Setting it switches the

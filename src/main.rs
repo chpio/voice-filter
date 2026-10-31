@@ -7,7 +7,7 @@ use ::voice_filter::agc::Agc;
 use ::voice_filter::chain::Chain;
 use ::voice_filter::compressor::Compressor;
 use ::voice_filter::deesser::DeEsser;
-use ::voice_filter::denoise::Denoise;
+use ::voice_filter::denoise::{self, Denoise};
 use ::voice_filter::echo::{Echo, Reference};
 use ::voice_filter::equalizer::Equalizer;
 use ::voice_filter::expander::Expander;
@@ -22,9 +22,10 @@ struct Args {
     #[command(subcommand)]
     command: Command,
     /// Limits how much the noise suppression attenuates, in dB; 100 and above don't limit it.
-    /// Lower values keep more of the original voice, e.g. its highs.
-    #[arg(long, global = true, default_value_t = 100.)]
-    atten_lim: f32,
+    /// Lower values keep more of the original voice, e.g. its highs. `run` keeps it for the next
+    /// runs, like a limit set in the app; without it, `run` takes the kept one and `process` 100.
+    #[arg(long, global = true)]
+    atten_lim: Option<f32>,
 }
 
 #[derive(Subcommand)]
@@ -100,7 +101,11 @@ fn main() -> Result<ExitCode> {
     let settings_dir = settings_dir.as_deref();
     let chain = || -> Result<(Chain, Reference)> {
         let (echo, reference) = Echo::new();
-        let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
+        let denoise = Denoise::new()?;
+        let denoise = match args.atten_lim {
+            Some(db) => denoise.with_atten_lim(db),
+            None => denoise,
+        };
         let agc = Agc::new();
         let compressor = Compressor::new().following(agc.target());
         let expander = Expander::new().listening(denoise.speech());
@@ -140,6 +145,22 @@ fn main() -> Result<ExitCode> {
                 None => eprintln!("Removing the echo of the default output"),
             }
             let (chain, reference) = chain()?;
+            if let Some(dir) = settings_dir {
+                let (switches, params) = (chain.switches(), chain.params());
+                for warning in settings::restore_chain(dir, &switches, &params)? {
+                    eprintln!("{warning}");
+                }
+                // a limit given on the command line wins over the kept one, and is kept instead
+                if let Some(db) = args.atten_lim {
+                    let limit = params
+                        .iter()
+                        .find(|(stage, param)| *stage == "denoise" && param.name == "limit");
+                    if let Some((_, limit)) = limit {
+                        limit.set(db.clamp(0., denoise::UNLIMITED))?;
+                    }
+                    settings::save_chain(dir, &switches, &params)?;
+                }
+            }
             let devices = live::Devices {
                 input: input.as_deref(),
                 output: output.as_deref(),

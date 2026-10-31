@@ -86,7 +86,9 @@ voice-filter ui                       # opens the GNOME app for a running `voice
    kept the same way; without one it's the default output.
 2. Select **Voice Filter** as the microphone in your app (or as the default input of the system).
 3. Open `voice-filter ui` to choose the microphone and the speakers, switch stages on and off or
-   adjust their settings.
+   adjust their settings. All of it is kept for the next runs, in `~/.local/state/voice-filter/`
+   (`$XDG_STATE_HOME`); `chain` there lists what differs from the defaults, one setting per line
+   (`denoise off`, `denoise.limit 30`), delete it to go back to them.
 
 The microphone is only in use while an app records from Voice Filter, and only then the chain
 runs: while no app records, `voice-filter run` takes no CPU. If Voice Filter is the
@@ -137,7 +139,8 @@ voice-filter process in.wav out.wav --reference played.wav   # with what the spe
 
 Runs a WAV file (48 kHz, mixed down to mono) through the same chain and writes the result, lined
 up with the input. It prints the latency and the processing time of every stage. Use it to compare
-settings, e.g. `--atten-lim 12` for a limit of 12 dB (the option works for `run` too). For the echo
+settings, e.g. `--atten-lim 12` for a limit of 12 dB; it takes the defaults, not the settings kept
+for `run` (`run --atten-lim` sets the limit and keeps it, like the app). For the echo
 cancellation, record the microphone and the monitor of the speakers at the same time, e.g.:
 
 ```bash
@@ -155,9 +158,9 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                                                           |
 | `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output                                              |
 | `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                                                            |
-| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                                                                  |
+| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name, kept for the next runs                                                          |
 | `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value                                              |
-| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range                                                    |
+| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range, kept for the next runs                            |
 | `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                                                                          |
 | `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                                                                        |
 | `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                                                                    |

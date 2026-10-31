@@ -228,3 +228,32 @@ fn reports_how_the_echo_cancellation_does() {
         assert!(status.contains_key(key), "{key}");
     }
 }
+
+#[test]
+fn keeps_the_stages_and_parameters() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let mut service = service_with(Arc::default(), Some(dir.path().to_owned()));
+    service.set_parameter("denoise", "limit", 24.).unwrap();
+    service.set_stage_enabled("agc", false).unwrap();
+    // refused values aren't kept either
+    assert!(service.set_parameter("agc", "target", -40.).is_err());
+
+    let restored = service_with(Arc::default(), None);
+    let warnings =
+        settings::restore_chain(dir.path(), &restored.switches, &restored.params).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(restored.params[0].1.get(), 24.);
+    assert_eq!(restored.params[1].1.get(), -18.);
+    assert_eq!(
+        restored.stages(),
+        [("denoise".to_owned(), true), ("agc".to_owned(), false)]
+    );
+
+    // back on and at the default, there's nothing left to keep
+    service.set_parameter("denoise", "limit", 100.).unwrap();
+    service.set_stage_enabled("agc", true).unwrap();
+    assert_eq!(
+        ::std::fs::read_to_string(dir.path().join("chain")).unwrap(),
+        "\n"
+    );
+}
