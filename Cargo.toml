@@ -31,8 +31,8 @@ clap = { version = "4", features = ["derive"] }
 deep-filter-rt = { path = "crates/deep-filter-rt", version = "0.1" }
 hound = "3.5"
 ndarray = "0.17"
-# v0_3_49 for Buffer::requested
-pipewire = { version = "0.10", features = ["v0_3_49"] }
+# v0_3_49 for Buffer::requested, v0_3_50 for Time::buffered
+pipewire = { version = "0.10", features = ["v0_3_50"] }
 rtrb = "0.4"
 
 [dev-dependencies]

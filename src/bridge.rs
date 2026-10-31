@@ -8,14 +8,14 @@
 //! quantum of the callbacks need.
 
 use ::std::sync::Arc;
-use ::std::sync::atomic::{AtomicU64, Ordering};
+use ::std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use ::std::time::Instant;
 
 use ::rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::FRAME_LEN;
 use crate::chain::Chain;
 use crate::stage::Frame;
+use crate::{FRAME_LEN, SAMPLE_RATE};
 
 /// Counters both sides update and the main thread reads.
 #[derive(Default)]
@@ -30,6 +30,20 @@ pub struct Stats {
     pub dropped: AtomicU64,
     /// The longest processing time of a frame in nanoseconds, reset by the reader.
     pub max_frame_ns: AtomicU64,
+    /// The delay through the bridge at the last pull, in samples: from the capture of a sample to
+    /// its playback, without the latency of the chain.
+    pub bridge_delay: AtomicI64,
+    /// The samples of the last pull, i.e. the quantum of the graph.
+    pub quantum: AtomicU64,
+    /// From the microphone to the capture stream as PipeWire reports it, in samples.
+    pub capture_delay: AtomicI64,
+    /// From the output stream to the app as PipeWire reports it, in samples.
+    pub playback_delay: AtomicI64,
+    // what the playback side needs from the capture side for `bridge_delay`: the cycle time of the
+    // last push, its number of samples and the samples waiting for a complete frame
+    captured_at_ns: AtomicI64,
+    captured_block: AtomicU64,
+    pending: AtomicU64,
 }
 
 /// The capture side: collects samples into frames and runs the chain on them.
@@ -73,7 +87,12 @@ impl Capture {
         self.chain.latency()
     }
 
-    pub fn push(&mut self, mut samples: &[f32]) {
+    /// `now_ns` is the time of the graph cycle, the same clock as for [`Playback::pull`].
+    pub fn push(&mut self, mut samples: &[f32], now_ns: i64) {
+        self.stats.captured_at_ns.store(now_ns, Ordering::Relaxed);
+        self.stats
+            .captured_block
+            .store(samples.len() as u64, Ordering::Relaxed);
         while !samples.is_empty() {
             let n = (FRAME_LEN - self.filled).min(samples.len());
             self.frame[self.filled..self.filled + n].copy_from_slice(&samples[..n]);
@@ -84,6 +103,9 @@ impl Capture {
                 self.process_frame();
             }
         }
+        self.stats
+            .pending
+            .store(self.filled as u64, Ordering::Relaxed);
     }
 
     fn process_frame(&mut self) {
@@ -113,7 +135,9 @@ impl Capture {
 }
 
 impl Playback {
-    pub fn pull(&mut self, out: &mut [f32]) {
+    /// `now_ns` is the time of the graph cycle, the same clock as for [`Capture::push`].
+    pub fn pull(&mut self, out: &mut [f32], now_ns: i64) {
+        self.update_delay(out.len(), now_ns);
         let n = self.input.slots().min(out.len());
         if let Ok(chunk) = self.input.read_chunk(n) {
             let (first, second) = chunk.as_slices();
@@ -142,7 +166,25 @@ impl Playback {
         }
     }
 
-    /// Samples waiting to be played, i.e. the latency the buffer adds.
+    /// The first sample this pull hands out is older than the newest captured one by the samples
+    /// in the ring and those waiting for a frame. The newest captured one is the end of the last
+    /// push, whose cycle may be this one (the capture side ran first) or an earlier one.
+    fn update_delay(&self, quantum: usize, now_ns: i64) {
+        let stats = &self.stats;
+        stats.quantum.store(quantum as u64, Ordering::Relaxed);
+        let block = stats.captured_block.load(Ordering::Relaxed) as i64;
+        if block == 0 {
+            return;
+        }
+        let since_push_ns = now_ns - stats.captured_at_ns.load(Ordering::Relaxed);
+        let since_push = (since_push_ns as f64 * SAMPLE_RATE as f64 / 1e9).round() as i64;
+        let waiting = self.input.slots() as i64 + stats.pending.load(Ordering::Relaxed) as i64;
+        stats
+            .bridge_delay
+            .store(since_push - block + waiting, Ordering::Relaxed);
+    }
+
+    /// Samples waiting to be played.
     pub fn buffered(&self) -> usize {
         self.input.slots()
     }

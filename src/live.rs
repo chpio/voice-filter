@@ -73,9 +73,12 @@ pub fn run(chain: Chain) -> Result<()> {
     )?;
 
     let mut samples = Vec::with_capacity(MAX_QUANTUM);
+    let capture_stats = stats.clone();
     let _input_listener = input
         .add_local_listener_with_user_data(())
         .process(move |stream, _| {
+            let (now, delay) = timing(stream);
+            capture_stats.capture_delay.store(delay, Ordering::Relaxed);
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
@@ -92,14 +95,19 @@ pub fn run(chain: Chain) -> Result<()> {
                     .iter()
                     .map(|&b| f32::from_le_bytes(b)),
             );
-            capture.push(&samples);
+            capture.push(&samples, now);
         })
         .register()?;
 
     let mut pulled = vec![0.; MAX_QUANTUM];
+    let playback_stats = stats.clone();
     let _output_listener = output
         .add_local_listener_with_user_data(())
         .process(move |stream, _| {
+            let (now, delay) = timing(stream);
+            playback_stats
+                .playback_delay
+                .store(delay, Ordering::Relaxed);
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
@@ -113,7 +121,7 @@ pub fn run(chain: Chain) -> Result<()> {
             let n = {
                 let Some(bytes) = data.data() else { return };
                 let n = requested.min(bytes.len() / SAMPLE_SIZE).min(MAX_QUANTUM);
-                playback.pull(&mut pulled[..n]);
+                playback.pull(&mut pulled[..n], now);
                 for (b, sample) in bytes
                     .as_chunks_mut::<SAMPLE_SIZE>()
                     .0
@@ -173,7 +181,7 @@ pub fn run(chain: Chain) -> Result<()> {
         "\"Voice Filter\" is ready, the chain adds {:.1} ms",
         chain_latency as f64 * 1e3 / SAMPLE_RATE as f64
     );
-    report_periodically(stats);
+    report_periodically(stats, chain_latency);
     mainloop.run();
     Ok(())
 }
@@ -191,6 +199,21 @@ fn connect_capture(input: &StreamRc) -> Result<()> {
         &mut [Pod::from_bytes(&format).unwrap()],
     )?;
     Ok(())
+}
+
+/// The time of the graph cycle in nanoseconds and the delay to the device in samples (including
+/// what the resampler buffers), as PipeWire reports them; zero if it can't.
+fn timing(stream: &pw::stream::Stream) -> (i64, i64) {
+    let Ok(time) = stream.time() else {
+        return (0, 0);
+    };
+    let rate = time.rate();
+    let delay = if rate.denom == 0 {
+        0
+    } else {
+        time.delay() * rate.num as i64 * SAMPLE_RATE as i64 / rate.denom as i64
+    };
+    (time.now(), delay + time.buffered() as i64)
 }
 
 /// Mono F32 at [`SAMPLE_RATE`] for both streams, PipeWire converts from and to the devices.
@@ -215,8 +238,9 @@ fn format_param() -> Vec<u8> {
     .into_inner()
 }
 
-/// Prints the counters every 10 s while frames are processed.
-fn report_periodically(stats: Arc<Stats>) {
+/// Prints the counters and the latency every 10 s while frames are processed.
+fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
+    let ms = |samples: i64| samples as f64 * 1e3 / SAMPLE_RATE as f64;
     ::std::thread::spawn(move || {
         let mut last = [0; 4];
         loop {
@@ -229,6 +253,10 @@ fn report_periodically(stats: Arc<Stats>) {
             ];
             let max_ms = stats.max_frame_ns.swap(0, Ordering::Relaxed) as f64 / 1e6;
             if now[0] != last[0] {
+                let capture = stats.capture_delay.load(Ordering::Relaxed);
+                let bridge = stats.bridge_delay.load(Ordering::Relaxed);
+                let playback = stats.playback_delay.load(Ordering::Relaxed);
+                let total = capture + bridge + chain_latency as i64 + playback;
                 eprintln!(
                     "{} frames, max {max_ms:.2} ms per frame, {} samples silence, {} dropped, \
                      {} errors",
@@ -236,6 +264,16 @@ fn report_periodically(stats: Arc<Stats>) {
                     now[1] - last[1],
                     now[2] - last[2],
                     now[3] - last[3],
+                );
+                eprintln!(
+                    "latency {:.1} ms: microphone {:.1} + bridge {:.1} + chain {:.1} + app {:.1}, \
+                     quantum {}",
+                    ms(total),
+                    ms(capture),
+                    ms(bridge),
+                    ms(chain_latency as i64),
+                    ms(playback),
+                    stats.quantum.load(Ordering::Relaxed),
                 );
             }
             last = now;
