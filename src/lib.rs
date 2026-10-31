@@ -4,6 +4,7 @@
 //! wires them up. The design is described in `docs/concept.md`.
 
 pub mod agc;
+pub mod atomic;
 pub mod bridge;
 pub mod chain;
 pub mod denoise;

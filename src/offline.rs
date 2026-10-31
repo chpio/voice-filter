@@ -162,7 +162,7 @@ pub fn process(chain: &mut Chain, input: &[f32]) -> Result<(Vec<f32>, Report)> {
     let latency = chain.latency();
     let frames = (input.len() + latency).div_ceil(FRAME_LEN);
     let mut output = Vec::with_capacity(frames * FRAME_LEN);
-    let mut times = vec![(Duration::ZERO, Duration::ZERO); chain.stages().len()];
+    let mut times = vec![(Duration::ZERO, Duration::ZERO); chain.stages().count()];
     let mut max = Duration::ZERO;
     let mut frame: Frame = [0.; FRAME_LEN];
     for i in 0..frames {
@@ -171,7 +171,7 @@ pub fn process(chain: &mut Chain, input: &[f32]) -> Result<(Vec<f32>, Report)> {
         frame.fill(0.);
         frame[..end - start].copy_from_slice(&input[start..end]);
         let mut total = Duration::ZERO;
-        for (stage, (sum, stage_max)) in chain.stages_mut().iter_mut().zip(&mut times) {
+        for (stage, (sum, stage_max)) in chain.stages_mut().zip(&mut times) {
             let started = Instant::now();
             stage.process(&mut frame)?;
             let elapsed = started.elapsed();
@@ -187,7 +187,6 @@ pub fn process(chain: &mut Chain, input: &[f32]) -> Result<(Vec<f32>, Report)> {
 
     let stages = chain
         .stages()
-        .iter()
         .zip(times)
         .map(|(stage, (sum, max))| StageReport {
             name: stage.name(),
