@@ -76,6 +76,9 @@ fn reads_int_stereo_as_mono_and_writes_float() {
     assert_eq!(reader.spec().channels, 1);
     assert_eq!(reader.spec().sample_format, SampleFormat::Float);
     assert_eq!(offline::read_wav(&output).unwrap(), [0.5, -0.25]);
+    // the channel mask is "front center", players put mono on both speakers
+    let header = ::std::fs::read(&output).unwrap();
+    assert_eq!(header[40..44], 0x4u32.to_le_bytes());
 }
 
 #[test]

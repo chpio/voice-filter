@@ -2,6 +2,8 @@
 //! and settings and to check that every stage keeps up with real time.
 
 use ::std::fmt;
+use ::std::fs::OpenOptions;
+use ::std::io::{Read, Seek, SeekFrom, Write};
 use ::std::path::Path;
 use ::std::time::{Duration, Instant};
 
@@ -125,6 +127,31 @@ pub fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
         writer.write_sample(sample)?;
     }
     writer.finalize()?;
+    set_mono_channel_mask(path)
+        .with_context(|| format!("Could not fix the header of {}", path.display()))
+}
+
+/// The byte offset of the channel mask in the `WAVE_FORMAT_EXTENSIBLE` header hound writes: RIFF
+/// header (12), `fmt ` chunk header (8), the basic format fields (16), `cbSize` (2) and the valid
+/// bits (2).
+const CHANNEL_MASK_OFFSET: u64 = 40;
+const SPEAKER_FRONT_LEFT: u32 = 0x1;
+const SPEAKER_FRONT_CENTER: u32 = 0x4;
+
+/// hound writes float samples as `WAVE_FORMAT_EXTENSIBLE` with the channel mask "front left" for
+/// mono, so players like VLC only play it on the left; mono is "front center".
+fn set_mono_channel_mask(path: &Path) -> Result<()> {
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut header = [0; CHANNEL_MASK_OFFSET as usize + 4];
+    file.read_exact(&mut header)?;
+    let format_tag = u16::from_le_bytes([header[20], header[21]]);
+    let mask = u32::from_le_bytes(header[CHANNEL_MASK_OFFSET as usize..].try_into()?);
+    ensure!(
+        &header[12..16] == b"fmt " && format_tag == 0xfffe && mask == SPEAKER_FRONT_LEFT,
+        "unexpected WAV header (format tag {format_tag:#x}, channel mask {mask:#x})"
+    );
+    file.seek(SeekFrom::Start(CHANNEL_MASK_OFFSET))?;
+    file.write_all(&SPEAKER_FRONT_CENTER.to_le_bytes())?;
     Ok(())
 }
 
