@@ -88,7 +88,8 @@ voice-filter ui                       # opens the GNOME app for a running `voice
 3. Open `voice-filter ui` to choose the microphone and the speakers, switch stages on and off or
    adjust their settings.
 
-The microphone is only in use while an app records from Voice Filter. If Voice Filter is the
+The microphone is only in use while an app records from Voice Filter, and only then the chain
+runs: while no app records, `voice-filter run` takes no CPU. If Voice Filter is the
 default input, set the microphone with `--input` or in the app; otherwise it falls back to the
 source with the highest priority.
 
