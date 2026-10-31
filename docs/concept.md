@@ -1,6 +1,6 @@
 # Concept: Live Voice Filter for Linux
 
-As of: 2026-10-31 · Translation of the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN); the original is authoritative.
+Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore.
 
 ## Goal and requirements
 
@@ -17,7 +17,7 @@ A live voice filter for Linux that shows up in PipeWire as a virtual microphone.
 The signal passes through all stages in a fixed order. Echo comes first, because otherwise the other stages treat the echo as speech.
 
 1. **Microphone** – hardware input, 48 kHz mono
-2. **Remove echo** – WebRTC AEC3 via the PipeWire module
+2. **Remove echo** – WebRTC AEC3 via the PipeWire module (see [Echo cancellation](#echo-cancellation))
 3. **Remove noise** – DeepFilterNet3, 48 kHz, 20 ms latency or more (main filter)
 4. **Suppress other voices** (optional) – Hush, modes Off · Full · Gate, about 11 ms more
 5. **Enhance the voice** – high-pass, EQ, de-esser, compressor, AGC, limiter
@@ -38,6 +38,21 @@ DeepFilterNet3 is the main filter. It's the strongest open live option with the 
 | RNNoise                                                     | 48 kHz      | Minimal CPU usage                                        | Clearly worse quality                     | Not planned                |
 
 There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates/hush-vani)) with embedded weights, without ONNX Runtime. It comes from a third party, not from the maker.
+
+**DeepFilterNet3 vendored as `deep-filter-rt`:** the Rust crate of DeepFilterNet (`deep_filter`, folder `libDF`) is only usable from git: the last release on crates.io (0.2.5, July 2022) has neither DeepFilterNet3 nor the real-time inference, and the upstream repo has been dormant since September 2024. crates.io doesn't accept packages with git dependencies, so voice-filter couldn't be published that way. Instead we vendor it as the workspace crate `crates/deep-filter-rt` and publish it ourselves:
+
+- Filtered with `git filter-repo` to `libDF`, the licenses (MIT/Apache) and the DeepFilterNet3 model, moved to `crates/deep-filter-rt` and merged into this repo, so the history of these files stays with authors and dates; the Python training, demo, LADSPA plugin and other models are dropped. A separate repo has no advantage after filtering: the rewritten commits can't be merged with upstream anyway, and in the workspace a change of its API and the caller go into one commit. It can still be split off later the same way.
+- The model is a plain git object, not Git LFS: it's a single file that hardly ever changes, and LFS would break builds from clones without git-lfs (`include_bytes!` would embed the pointer file) and every mirror would need LFS.
+- Reduced to the inference: core, `tract` inference, transforms (about 90 KB of code). The training and dataset code goes, the dependencies (`tract` above all) get updated.
+- The model (`DeepFilterNet3_onnx.tar.gz`, 8 MB) stays embedded and fits the 10 MB limit of crates.io. The low-latency variant (36 MB) doesn't; if we need it, it has to be loaded at runtime.
+
+## Echo cancellation
+
+Echo cancellation needs the signal the speakers are playing as a reference: an adaptive filter learns how the room changes the sound on its way from the speakers to the microphone, predicts the echo from the reference and subtracts it; a second step suppresses the residual echo. With headphones there's no echo, the stage can stay off.
+
+We start with PipeWire's `libpipewire-module-echo-cancel` (WebRTC AEC3). It creates a sink, through which the playback goes and which gives it the reference (or, with `monitor.mode`, it listens to the default sink's monitor), and a source with the echo-cancelled microphone, which voice-filter reads instead of the microphone. Its own noise suppression and gain control must be off, so they don't interfere with DeepFilterNet3.
+
+- [ ] TODO: evaluate echo cancellation in our own process (monitor of the output device plus microphone, WebRTC AEC3 through a Rust binding): one node less in the graph and full control over latency and order, but more code. Decide after measuring the module's latency in phase 3.
 
 ## Suppressing other voices
 
@@ -95,41 +110,46 @@ The base runs on the CPU only. A GPU only pays off for heavy models such as the 
 
 A single Rust process as a PipeWire node. All stages run inside it, so the latency stays under control.
 
-- **Language:** Rust. DeepFilterNet3 and hush-vani are already Rust, PipeWire via `pipewire-rs`.
-- **PipeWire:** reads from the microphone (or from the echo-cancel source) and provides "Voice Filter" as a virtual microphone.
+- **Language:** Rust. DeepFilterNet3 (as `deep-filter-rt`) and hush-vani are already Rust, PipeWire via `pipewire-rs`.
+- **PipeWire:** reads from the microphone (or from the echo-cancel source) and provides "Voice Filter" as a virtual microphone. The process creates the device itself, so it only exists while voice-filter runs; if it isn't running, some apps silently switch to the unfiltered microphone.
+- [ ] TODO: offer a persistent device as an option (virtual source declared in `~/.config/pipewire/pipewire.conf.d/`, voice-filter only writes into it): always present and silent instead of unfiltered without voice-filter, but needs an installed config file and possibly one more buffer of latency.
 - **Frames:** internally 48 kHz, 10 ms per frame (480 samples). Fits DeepFilterNet3 (hop 480) and Hush (hop 160 at 16 kHz) exactly.
 - **Stages:** a common trait with name, latency and processing of one frame. Stages are interchangeable and optional.
 - **Resampling 48 ↔ 16 kHz:** fixed filter with factor 3. Known, constant latency, no allocation in the audio path.
-- **Control:** settings shared lock-free, changes via a local socket, e.g. `voice-filter ctl speaker gate`. Later a GNOME app on top of it.
+- **Control:** a GNOME app (GTK4 with libadwaita via `gtk4-rs`/`libadwaita-rs`) as a separate process; the audio process keeps running when the window is closed. They talk over the D-Bus session bus (`zbus`), which also allows a command line (`busctl` or our own `voice-filter ctl`). Inside the audio process the settings are shared lock-free with the audio path.
 - **Test mode:** the same chain processes WAV files offline. This allows comparing models and settings and measuring real-time capability.
 
 ## Risks and open questions
 
 The biggest risk is latency: all stages together must stay live.
 
-| Risk                                                             | Consequence                         | Countermeasure                                                  |
-| ---------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------- |
-| Latency adds up (DFN3 from 20 ms, Hush +11 ms, PipeWire buffers) | Conversations feel delayed          | Measure and show latency per stage; stages can be left out      |
-| Gate mode cuts off quiet speech of your own                      | Syllables go missing                | Open fast, close slowly; adjustable floor                       |
-| hush-vani is a third-party project                               | Maintenance uncertain               | Encapsulate behind an interchangeable interface; ONNX as plan B |
-| DeepFilterNet3 outdated on crates.io                             | Real-time part only usable from git | Pin a fixed git revision                                        |
-| Stream.FM: weights, license, ROCm unclear                        | Level 2 may not be feasible         | Check first, then decide                                        |
+| Risk                                                              | Consequence                         | Countermeasure                                                  |
+| ----------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------- |
+| Latency adds up (DFN3 from 20 ms, Hush +11 ms, PipeWire buffers)  | Conversations feel delayed          | Measure and show latency per stage; stages can be left out      |
+| Gate mode cuts off quiet speech of your own                       | Syllables go missing                | Open fast, close slowly; adjustable floor                       |
+| hush-vani is a third-party project                                | Maintenance uncertain               | Encapsulate behind an interchangeable interface; ONNX as plan B |
+| DeepFilterNet3 outdated on crates.io, upstream dormant since 2024 | Real-time part only usable from git | Vendored as `deep-filter-rt`, published ourselves               |
+| Stream.FM: weights, license, ROCm unclear                         | Level 2 may not be feasible         | Check first, then decide                                        |
+
+**Decided:**
+
+- Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed.
+- Echo cancellation: PipeWire module first, our own process as a TODO (see [Echo cancellation](#echo-cancellation)).
+- Control: GNOME app over D-Bus.
 
 **Open questions:**
 
-- [ ] What total latency is still acceptable for you?
-- [ ] Echo cancellation via the PipeWire module or directly in our own process?
-- [ ] Control: command line only, GNOME app, or both?
 - [ ] Presets for voice enhancement (e.g. "Call", "Stream", "Podcast")?
 - [ ] Should the chain also filter incoming audio (speaker side)?
+- [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
 
 ## Roadmap
 
 Four phases, each usable on its own. Each phase ends with a latency and listening test.
 
-1. **Base:** PipeWire node, DeepFilterNet3, offline mode for WAV tests, latency measurement.
-2. **Voice:** DSP chain (high-pass, EQ, de-esser, compressor, AGC, limiter), presets, runtime control.
-3. **Echo and other voices:** integrate echo cancellation, Hush with Full and Gate modes, click-free switching.
+1. **Base:** vendor `deep-filter-rt`, PipeWire node, DeepFilterNet3, offline mode for WAV tests, latency measurement per stage.
+2. **Voice:** DSP chain (high-pass, EQ, de-esser, compressor, AGC, limiter), presets, D-Bus interface and GNOME app.
+3. **Echo and other voices:** integrate the echo-cancel module, Hush with Full and Gate modes, click-free switching.
 4. **Restoration:** evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage.
 
-After that: a graphical interface for GNOME and a package for Arch (AUR).
+After that: a package for Arch (AUR).

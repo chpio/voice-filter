@@ -9,7 +9,7 @@ Planned:
 - optionally suppresses other voices (_Hush_)
 - enhances the voice with classic DSP: high-pass, EQ, de-esser, compressor, AGC and limiter
 - runs entirely on the CPU, with a total latency below 40 ms
-- stages and modes can be switched at runtime without clicks
+- stages and modes can be switched at runtime without clicks, from a GNOME app
 
 The project is at an early stage, nothing of this works yet. The design is described in
 [docs/concept.md](docs/concept.md).

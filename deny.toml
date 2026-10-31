@@ -13,6 +13,4 @@ multiple-versions = "warn"
 
 [sources]
 unknown-registry = "deny"
-# DeepFilterNet's realtime part is only usable from git (the crates.io release is outdated), its
-# repo gets allowed here once it's added as a dependency
 unknown-git = "deny"
