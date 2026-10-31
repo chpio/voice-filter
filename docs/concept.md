@@ -18,7 +18,7 @@ The signal passes through all stages in a fixed order. Echo comes first, because
 
 1. **Microphone** – hardware input, 48 kHz mono
 2. **Remove echo** – WebRTC AEC3 via the PipeWire module (see [Echo cancellation](#echo-cancellation))
-3. **Remove noise** – DeepFilterNet3, 48 kHz, 20 ms latency or more (main filter)
+3. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter)
 4. **Suppress other voices** (optional) – Hush, modes Off · Full · Gate, about 11 ms more
 5. **Enhance the voice** – high-pass, EQ, de-esser, compressor, AGC, limiter
 6. **Restoration** (optional, later) – ML model such as Stream.FM, GPU required
@@ -30,12 +30,12 @@ Voice enhancement comes after denoising, so the compressor doesn't bring up the 
 
 DeepFilterNet3 is the main filter. It's the strongest open live option with the full frequency range. Hush only complements it for other voices. There's no independent comparison of all models for 2026; Hush's placement on the Hugging Face leaderboard comes from its maker.
 
-| Model                                                       | Sample rate | Strength                                                 | Weakness                                  | Role                       |
-| ----------------------------------------------------------- | ----------- | -------------------------------------------------------- | ----------------------------------------- | -------------------------- |
-| [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet) | 48 kHz      | Best live quality, core in Rust, LADSPA plugin available | At least 20 ms latency, somewhat more CPU | Main filter                |
-| [Hush](https://huggingface.co/Aliados/hush)                 | 16 kHz      | Also suppresses other voices, 8 MB, under 1 ms per frame | Sounds like a phone, young project        | Optional                   |
-| [GTCRN](https://github.com/sherryyu33/gtcrn)                | 16 kHz      | Extremely small, 23.7 K parameters                       | Narrowband                                | Fallback for weak hardware |
-| RNNoise                                                     | 48 kHz      | Minimal CPU usage                                        | Clearly worse quality                     | Not planned                |
+| Model                                                       | Sample rate | Strength                                                 | Weakness                           | Role                       |
+| ----------------------------------------------------------- | ----------- | -------------------------------------------------------- | ---------------------------------- | -------------------------- |
+| [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet) | 48 kHz      | Best live quality, core in Rust, LADSPA plugin available | 30 ms latency, somewhat more CPU   | Main filter                |
+| [Hush](https://huggingface.co/Aliados/hush)                 | 16 kHz      | Also suppresses other voices, 8 MB, under 1 ms per frame | Sounds like a phone, young project | Optional                   |
+| [GTCRN](https://github.com/sherryyu33/gtcrn)                | 16 kHz      | Extremely small, 23.7 K parameters                       | Narrowband                         | Fallback for weak hardware |
+| RNNoise                                                     | 48 kHz      | Minimal CPU usage                                        | Clearly worse quality              | Not planned                |
 
 There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates/hush-vani)) with embedded weights, without ONNX Runtime. It comes from a third party, not from the maker.
 
@@ -127,17 +127,17 @@ A single Rust process as a PipeWire node. All stages run inside it, so the laten
 
 The biggest risk is latency: all stages together must stay live.
 
-| Risk                                                              | Consequence                         | Countermeasure                                                  |
-| ----------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------- |
-| Latency adds up (DFN3 from 20 ms, Hush +11 ms, PipeWire buffers)  | Conversations feel delayed          | Measure and show latency per stage; stages can be left out      |
-| Gate mode cuts off quiet speech of your own                       | Syllables go missing                | Open fast, close slowly; adjustable floor                       |
-| hush-vani is a third-party project                                | Maintenance uncertain               | Encapsulate behind an interchangeable interface; ONNX as plan B |
-| DeepFilterNet3 outdated on crates.io, upstream dormant since 2024 | Real-time part only usable from git | Vendored as `deep-filter-rt`, published ourselves               |
-| Stream.FM: weights, license, ROCm unclear                         | Level 2 may not be feasible         | Check first, then decide                                        |
+| Risk                                                                          | Consequence                         | Countermeasure                                                  |
+| ----------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------- |
+| Latency adds up (DFN3 30 ms, FIFO up to 10 ms, Hush +11 ms, PipeWire buffers) | Conversations feel delayed          | Measure and show latency per stage; stages can be left out      |
+| Gate mode cuts off quiet speech of your own                                   | Syllables go missing                | Open fast, close slowly; adjustable floor                       |
+| hush-vani is a third-party project                                            | Maintenance uncertain               | Encapsulate behind an interchangeable interface; ONNX as plan B |
+| DeepFilterNet3 outdated on crates.io, upstream dormant since 2024             | Real-time part only usable from git | Vendored as `deep-filter-rt`, published ourselves               |
+| Stream.FM: weights, license, ROCm unclear                                     | Level 2 may not be feasible         | Check first, then decide                                        |
 
 **Decided:**
 
-- Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed.
+- Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone, about 45–60 ms are realistic. The low-latency variant without lookahead would save 20 ms.
 - Echo cancellation: PipeWire module first, our own process as a TODO (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
 
