@@ -8,6 +8,7 @@ use ::zbus::proxy::CacheProperties;
 
 use super::help;
 use super::proxy::{Parameter, Status, VoiceFilterProxy};
+use crate::SAMPLE_RATE;
 
 /// The stages the window shows: name in the chain and title; what they do is in the descriptions
 /// of their groups and behind the info button of their row ([`help`]), so the rows stay short.
@@ -581,10 +582,12 @@ fn show(widgets: &Widgets, status: &Status) {
         status.max_frame_time, status.quantum
     ));
     let count = |name: &str| status.counters.get(name).copied().unwrap_or_default();
+    // the counters are in samples, which say little to the user
+    let count_ms = |name: &str| count(name) as f64 * 1e3 / SAMPLE_RATE as f64;
     widgets.dropouts.set_subtitle(&format!(
-        "{} samples of silence, {} dropped, {} errors",
-        count("silence"),
-        count("dropped"),
+        "{:.0} ms of silence, {:.0} ms dropped, {} errors",
+        count_ms("silence"),
+        count_ms("dropped"),
         count("errors"),
     ));
 }
