@@ -2,7 +2,7 @@
 
 **A live voice filter for Linux.** Voice Filter shows up in PipeWire as a virtual microphone named
 _Voice Filter_. Any app (Discord, the browser, OBS) can use it like a regular microphone and gets
-your voice with the background noise removed and a clearer, even tone.
+your voice without the echo of your speakers and the background noise, with a clearer, even tone.
 
 - **Removes the echo of your speakers** with WebRTC's echo canceller (AEC3), so calls work
   without headphones; it takes what the speakers play as a reference
@@ -10,7 +10,7 @@ your voice with the background noise removed and a clearer, even tone.
   neural network that keeps the full 48 kHz range
 - **Enhances the voice** with classic DSP: high-pass, EQ, de-esser, automatic gain control,
   compressor, an expander that keeps the noise down in speech pauses, and a limiter
-- **Runs on the CPU**: the whole chain takes about 2–3 % of one core
+- **Runs on the CPU**: the whole chain takes about 3–4 % of one core
 - **Switch and tune everything at runtime** from a GNOME app or over D-Bus, without clicks and
   without changing the latency
 - **Test offline** with WAV files: the same chain, with the latency and processing time of every
@@ -47,7 +47,9 @@ the next run yet.
 
 Every stage can be switched off while it runs. A stage that is off is skipped (it uses no CPU) and
 its input plays instead, delayed by the stage's latency, so the total latency never changes.
-Switching crossfades over one frame, so there are no clicks.
+Switching crossfades over one frame, so there are no clicks. The echo cancellation takes a few
+seconds after being switched on until it removes the echo fully again, as it missed what the
+speakers played meanwhile.
 
 **Latency.** About 56 ms from the microphone to the app with a USB microphone: 8 ms microphone,
 11 ms for turning PipeWire's blocks into 10 ms frames (both measured live) and 37 ms for the chain.
@@ -92,6 +94,21 @@ source with the highest priority.
 Only one `voice-filter run` can be active at a time. A second one stops with "Voice Filter is
 already running".
 
+### Tips
+
+- Leave the volume of **Voice Filter** in the system's sound settings at **100 %**: the chain
+  already brings the voice to its level and keeps the peaks below −1 dBFS, a lower volume only
+  makes it quieter, a higher one can clip.
+- Turn off the app's own noise suppression, echo cancellation and automatic gain control where it
+  has them (in Discord e.g. Krisp, echo cancellation and automatic gain control): Voice Filter
+  does that already, twice works against each other.
+- Get **close to the microphone**, about a hand's width. The louder the voice reaches it against
+  the room, the speakers and the noise, the better every stage works; raising the microphone's
+  volume above 100 % in software doesn't help, the automatic gain control does that anyway.
+- With **headphones** there's no echo, switch the echo cancellation off. Over speakers it removes
+  the echo, but talking into loud playback can make the voice choppy now and then: it turns down
+  what's left of the echo, and the voice with it.
+
 ### The GNOME app
 
 `voice-filter ui` controls a running `voice-filter run`. It's a separate process, so closing it
@@ -129,22 +146,22 @@ pw-record --target <speakers> -P '{ stream.capture.sink = true }' --rate 48000 -
 The daemon serves `net.b128.VoiceFilter.Daemon` on the session bus (object `/net/b128/VoiceFilter`,
 interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 
-| Member            | Type                 | Description                                                               |
-| ----------------- | -------------------- | ------------------------------------------------------------------------- |
-| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                 |
-| `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output    |
-| `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                  |
-| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                        |
-| `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value    |
-| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range          |
-| `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                                |
-| `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                              |
-| `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                          |
-| `Echo`            | `a{sd}`, read        | the echo cancellation: frame counters, level of the speakers, ERLE, delay |
-| `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                 |
-| `Quantum`         | `t`, read            | samples per PipeWire cycle                                                |
-| `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms              |
-| `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start               |
+| Member            | Type                 | Description                                                                                                         |
+| ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                                                           |
+| `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output                                              |
+| `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                                                            |
+| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name                                                                                  |
+| `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value                                              |
+| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range                                                    |
+| `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                                                                          |
+| `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                                                                        |
+| `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                                                                    |
+| `Echo`            | `a{sd}`, read        | the echo cancellation: frame counters, level of the speakers, AEC3's ERLE/ERL (of its linear filter only) and delay |
+| `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                                                           |
+| `Quantum`         | `t`, read            | samples per PipeWire cycle                                                                                          |
+| `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms                                                        |
+| `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start                                                         |
 
 For example with `busctl`:
 
