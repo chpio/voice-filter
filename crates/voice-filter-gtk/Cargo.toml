@@ -11,5 +11,6 @@ publish = false
 
 [dependencies]
 adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
-gtk = { package = "gtk4", version = "0.11" }
+# v4_10 for Scale::set_format_value_func
+gtk = { package = "gtk4", version = "0.11", features = ["v4_10"] }
 zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }

@@ -8,19 +8,12 @@ use ::zbus::proxy::CacheProperties;
 
 use crate::proxy::{Status, VoiceFilterProxy};
 
-/// The stages the window has a switch for: name in the chain, title, subtitle.
-const STAGES: [(&str, &str, &str); 3] = [
-    (
-        "denoise",
-        "Noise suppression",
-        "Removes background noise with DeepFilterNet3",
-    ),
-    (
-        "agc",
-        "Automatic gain control",
-        "Brings the voice to a constant level",
-    ),
-    ("limiter", "Limiter", "Keeps the peaks below −1 dBFS"),
+/// The stages the window has a switch for: name in the chain and title; what they do is in the
+/// descriptions of their groups, so the rows stay short.
+const STAGES: [(&str, &str); 3] = [
+    ("denoise", "Noise Suppression"),
+    ("agc", "Automatic Gain Control"),
+    ("limiter", "Limiter"),
 ];
 
 /// How often the window reads the state; the status properties don't emit change signals.
@@ -48,7 +41,9 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     atten_lim.set_draw_value(true);
     atten_lim.set_value_pos(gtk::PositionType::Left);
     atten_lim.set_digits(0);
-    atten_lim.set_width_request(200);
+    atten_lim.set_format_value_func(|_, db| format!("{db:.0} dB"));
+    atten_lim.set_width_request(260);
+    atten_lim.set_hexpand(true);
     atten_lim.set_valign(gtk::Align::Center);
     let widgets = Rc::new(Widgets {
         stack: gtk::Stack::new(),
@@ -59,18 +54,14 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .build(),
         switches: STAGES
             .iter()
-            .map(|&(name, title, subtitle)| {
-                let row = adw::SwitchRow::builder()
-                    .title(title)
-                    .subtitle(subtitle)
-                    .build();
-                (name, row)
-            })
+            .map(|&(name, title)| (name, adw::SwitchRow::builder().title(title).build()))
             .collect(),
         atten_lim,
+        // the chosen microphone as the subtitle, over the width of the row, instead of squeezed
+        // next to the title
         input: adw::ComboRow::builder()
             .title("Microphone")
-            .subtitle("The filter reads from it, apps read from \"Voice Filter\"")
+            .use_subtitle(true)
             .model(&gtk::StringList::new(&[]))
             .build(),
         input_names: RefCell::new(Vec::new()),
@@ -81,23 +72,29 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         proxy: RefCell::new(None),
     });
 
-    let atten_lim_row = adw::ActionRow::builder()
-        .title("Attenuation Limit")
-        .subtitle("How far the noise may be lowered, in dB. Less sounds more natural, 100 doesn't limit it.")
-        .build();
+    let atten_lim_row = adw::ActionRow::builder().title("Limit").build();
     atten_lim_row.add_suffix(&widgets.atten_lim);
 
-    let group = |title: &str, rows: &[&gtk::Widget]| {
+    let group = |title: &str, description: Option<&str>, rows: &[&gtk::Widget]| {
         let group = adw::PreferencesGroup::builder().title(title).build();
+        group.set_description(description);
         for row in rows {
             group.add(*row);
         }
         group
     };
     let page = adw::PreferencesPage::new();
-    page.add(&group("Input", &[widgets.input.upcast_ref()]));
+    page.add(&group(
+        "Input",
+        Some("The filter reads from this microphone, apps read from “Voice Filter”."),
+        &[widgets.input.upcast_ref()],
+    ));
     page.add(&group(
         "Noise Suppression",
+        Some(
+            "Removes background noise. The limit keeps part of it: lower sounds more natural, \
+             100 dB removes it all.",
+        ),
         &[
             widgets.switches[0].1.upcast_ref(),
             atten_lim_row.upcast_ref(),
@@ -105,6 +102,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     ));
     page.add(&group(
         "Level",
+        Some("Brings the voice to a constant level and keeps its peaks below −1 dBFS."),
         &[
             widgets.switches[1].1.upcast_ref(),
             widgets.switches[2].1.upcast_ref(),
@@ -112,6 +110,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     ));
     page.add(&group(
         "Status",
+        None,
         &[
             widgets.latency.upcast_ref(),
             widgets.processing.upcast_ref(),
