@@ -1,11 +1,19 @@
+[workspace]
+members = ["crates/deep-filter-rt"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+
 [package]
 name = "voice-filter"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.96"
+edition.workspace = true
+rust-version.workspace = true
 description = "Live voice filter for PipeWire that removes echo and noise and enhances the voice, as a virtual microphone"
 authors = ["Thomas Heck <t@b128.net>"]
-license = "MIT OR Apache-2.0"
+license.workspace = true
 categories = ["multimedia", "multimedia::audio"]
 keywords = ["audio", "pipewire", "noise-suppression", "voice", "microphone"]
 include = [

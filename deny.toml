@@ -4,8 +4,9 @@
 # the defaults: vulnerabilities, unmaintained and unsound crates fail, yanked crates warn
 
 [licenses]
-# extend the list when a new dependency brings in another license
-allow = ["MIT", "Apache-2.0"]
+# Unicode-3.0 comes in through unicode-ident, Zlib through foldhash (via tract) and CC0-1.0 through
+# tiny-keccak (via rust-ini); every other license in the tree is only an alternative to one of these
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib", "CC0-1.0"]
 
 [bans]
 # several versions of one crate are often unavoidable, so they only warn

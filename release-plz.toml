@@ -4,8 +4,6 @@
 # Nothing is released yet, so the first push doesn't publish the skeleton to crates.io: with this,
 # release-plz neither opens the release PR nor publishes or tags. Remove it for the first release.
 release = false
-# the library only exists for the tests under tests/, its API isn't public
-semver_check = false
 # Only releases for changes users notice, the same commits that end up in the changelog: features,
 # fixes and dependency updates (`chore(deps): …`, as Renovate writes them, also by hand). Commits
 # that don't touch a file of the package (e.g. Renovate's action updates) are left out anyway.
@@ -15,6 +13,19 @@ semver_check = false
 release_commits = '^(feat|fix|chore\(deps\)|chore: update Cargo\.(toml|lock) dependencies)'
 pr_name = "chore: bump version (v{{ version }})"
 pr_branch_prefix = "release/"
+
+[[package]]
+name = "voice-filter"
+# the library only exists for the tests under tests/, its API isn't public
+semver_check = false
+# plain vX.Y.Z, in a workspace release-plz prefixes the tags with the package name by default
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+
+# its tags and releases keep the default deep-filter-rt-vX.Y.Z, its API is public and gets the semver
+# check against the last release
+[[package]]
+name = "deep-filter-rt"
 
 [changelog]
 header = "# Changelog\n"

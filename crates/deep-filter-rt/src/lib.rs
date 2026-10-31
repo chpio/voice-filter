@@ -1,43 +1,16 @@
-#![allow(dead_code)]
+use ::std::ops::MulAssign;
+use ::std::sync::Arc;
+use ::std::vec::Vec;
 
-use std::ops::MulAssign;
-use std::sync::Arc;
-use std::vec::Vec;
-
-use itertools::izip;
-use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
+use ::itertools::izip;
+use ::realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 
 pub type Complex32 = num_complex::Complex32;
 
 pub const MEAN_NORM_INIT: [f32; 2] = [-60., -90.];
 pub const UNIT_NORM_INIT: [f32; 2] = [0.001, 0.0001];
 
-#[cfg(any(feature = "transforms", feature = "dataset"))]
-pub mod transforms;
-#[cfg(feature = "dataset")]
-#[path = ""]
-mod reexport_dataset_modules {
-    pub mod augmentations;
-    pub mod dataloader;
-    pub mod dataset;
-    pub mod hdf5_key_cache;
-    pub mod util;
-    pub mod wav_utils;
-}
-#[cfg(feature = "dataset")]
-pub use reexport_dataset_modules::*;
-#[cfg(feature = "capi")]
-mod capi;
-#[cfg(feature = "logging")]
-pub mod logging;
-#[cfg(feature = "tract")]
 pub mod tract;
-
-#[cfg(feature = "wasm")]
-mod wasm;
-
-#[cfg(all(feature = "wav-utils", not(feature = "dataset")))]
-pub mod wav_utils;
 
 pub(crate) fn freq2erb(freq_hz: f32) -> f32 {
     9.265 * (freq_hz / (24.7 * 9.265)).ln_1p()
@@ -99,7 +72,7 @@ pub fn erb_fb(sr: usize, fft_size: usize, nb_bands: usize, min_nb_freqs: usize) 
     erb
 }
 
-// TODO Check delay for diferent hop sizes
+// TODO Check delay for different hop sizes
 impl DFState {
     pub fn new(
         sr: usize,
@@ -325,28 +298,6 @@ where
     }
 }
 
-fn interp_band_gain(out: &mut [f32], band_e: &[f32], erb_fb: &[usize]) {
-    let mut bcsum = 0;
-    for (&band_size, &b) in erb_fb.iter().zip(band_e.iter()) {
-        for j in 0..band_size {
-            let idx = bcsum + j;
-            out[idx] = b;
-        }
-        bcsum += band_size;
-    }
-}
-
-fn apply_band_gain(out: &mut [Complex32], band_e: &[f32], erb_fb: &[usize]) {
-    let mut bcsum = 0;
-    for (&band_size, b) in erb_fb.iter().zip(band_e.iter()) {
-        for j in 0..band_size {
-            let idx = bcsum + j;
-            out[idx] *= *b;
-        }
-        bcsum += band_size;
-    }
-}
-
 fn process_frame(input: &[f32], output: &mut [f32], state: &mut DFState) {
     let mut freq_mem = vec![Complex32::default(); state.freq_size];
     frame_analysis(input, &mut freq_mem, state);
@@ -370,7 +321,11 @@ fn frame_analysis(input: &[f32], output: &mut [Complex32], state: &mut DFState) 
         *x = y * w;
     }
     // Second part of the window on the new input frame
-    for ((&y, &w), x) in input.iter().zip(window_second.iter()).zip(buf_second.iter_mut()) {
+    for ((&y, &w), x) in input
+        .iter()
+        .zip(window_second.iter())
+        .zip(buf_second.iter_mut())
+    {
         *x = y * w;
     }
     // Shift analysis_mem
@@ -405,7 +360,10 @@ fn frame_synthesis(input: &mut [Complex32], output: &mut [f32], state: &mut DFSt
     }
     apply_window_in_place(&mut x, &state.window);
     let (x_first, x_second) = x.split_at(state.frame_size);
-    for ((&xi, &mem), out) in x_first.iter().zip(state.synthesis_mem.iter()).zip(output.iter_mut())
+    for ((&xi, &mem), out) in x_first
+        .iter()
+        .zip(state.synthesis_mem.iter())
+        .zip(output.iter_mut())
     {
         *out = xi + mem;
     }
@@ -426,14 +384,6 @@ fn frame_synthesis(input: &mut [Complex32], output: &mut [f32], state: &mut DFSt
     }
 }
 
-fn apply_window(xs: &[f32], window: &[f32]) -> Vec<f32> {
-    let mut out = vec![0.; window.len()];
-    for (&x, &w, o) in izip!(xs.iter(), window.iter(), out.iter_mut()) {
-        *o = x * w;
-    }
-    out
-}
-
 fn apply_window_in_place<'a, I>(xs: &mut [f32], window: I)
 where
     I: IntoIterator<Item = &'a f32>,
@@ -450,7 +400,12 @@ pub fn post_filter(noisy: &[Complex32], enh: &mut [Complex32], beta: f32) {
     let mut g = [0.0; 4];
     let mut g_sin = [0.0; 4];
     let mut pf = [0.0; 4];
-    for (n, e) in noisy.chunks_exact(4).zip(enh.chunks_exact_mut(4)) {
+    for (n, e) in noisy
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(enh.as_chunks_mut::<4>().0)
+    {
         g[0] = (e[0].norm() / (n[0].norm() + eps)).min(1.).max(eps);
         g[1] = (e[1].norm() / (n[1].norm() + eps)).min(1.).max(eps);
         g[2] = (e[2].norm() / (n[2].norm() + eps)).min(1.).max(eps);
@@ -615,39 +570,4 @@ where
     x.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = x.len() / 2;
     x[mid]
-}
-
-#[cfg(test)]
-mod tests {
-    use rand::distributions::{Distribution, Uniform};
-
-    use super::*;
-
-    #[test]
-    fn test_erb_inout() {
-        let sr = 24000;
-        let n_fft = 192;
-        let n_freqs = n_fft / 2 + 1;
-        let hop = n_fft / 2;
-        let nb_bands = 24;
-        let state = DFState::new(sr, n_fft, hop, nb_bands, 1);
-        let d = Uniform::new(-1., 1.);
-        let mut input = Vec::with_capacity(n_freqs);
-        let mut rng = rand::thread_rng();
-        for _ in 0..(n_freqs) {
-            input.push(Complex32::new(d.sample(&mut rng), d.sample(&mut rng)))
-        }
-        let mut mask = vec![1.; nb_bands];
-        mask[3] = 0.3;
-        mask[nb_bands - 1] = 0.5;
-        let mut output = input.clone();
-        apply_band_gain(&mut output, mask.as_slice(), &state.erb);
-        let mut cumsum = 0;
-        for (erb_idx, erb_w) in state.erb.iter().enumerate() {
-            for i in cumsum..cumsum + erb_w {
-                assert_eq!(input[i] * mask[erb_idx], output[i])
-            }
-            cumsum += erb_w;
-        }
-    }
 }
