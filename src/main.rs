@@ -12,6 +12,10 @@ use ::voice_filter::{live, offline};
 struct Args {
     #[command(subcommand)]
     command: Command,
+    /// Limits how much the noise suppression attenuates, in dB; 100 and above don't limit it.
+    /// Lower values keep more of the original voice, e.g. its highs.
+    #[arg(long, global = true, default_value_t = 100.)]
+    atten_lim: f32,
 }
 
 #[derive(Subcommand)]
@@ -25,9 +29,10 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    let command = Args::parse().command;
-    let chain = Chain::new(vec![Box::new(Denoise::new()?)]);
-    match command {
+    let args = Args::parse();
+    let denoise = Denoise::new()?.with_atten_lim(args.atten_lim);
+    let chain = Chain::new(vec![Box::new(denoise)]);
+    match args.command {
         Command::Run => live::run(chain)?,
         Command::Process { input, output } => {
             let mut chain = chain;

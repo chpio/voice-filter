@@ -31,6 +31,15 @@ impl Denoise {
     }
 }
 
+impl Denoise {
+    /// Limits how much the model attenuates, in dB. It keeps part of the original everywhere,
+    /// which sounds more natural, the default of the model (100 dB and above) doesn't limit it.
+    pub fn with_atten_lim(mut self, db: f32) -> Self {
+        self.df.set_atten_lim(db);
+        self
+    }
+}
+
 impl Stage for Denoise {
     fn name(&self) -> &'static str {
         "denoise"

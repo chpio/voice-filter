@@ -144,6 +144,7 @@ The biggest risk is latency: all stages together must stay live.
 **Open questions:**
 
 - [ ] Presets for voice enhancement (e.g. "Call", "Stream", "Podcast")?
+- [ ] Default attenuation limit of DeepFilterNet3, to be chosen by listening in the GNOME app (it can change at runtime). Unlimited (the model's default) sounds dull: in a first test recording the speech above 1 kHz lost about 20 dB, with a limit of 12 dB about 11 dB, while the pauses lost 13 and 8 dB. That recording clipped (0.16 % of the samples), which may account for part of it.
 - [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
 - [ ] Can the weights be stored as fp16 or quantized to int8 (about half or a quarter of the size) without audible loss, and does `tract` support it for all operators?
@@ -153,7 +154,7 @@ The biggest risk is latency: all stages together must stay live.
 Four phases, each usable on its own. Each phase ends with a latency and listening test.
 
 1. **Base:** vendor `deep-filter-rt`, PipeWire node, DeepFilterNet3, offline mode for WAV tests, latency measurement per stage.
-2. **Voice:** DSP chain (high-pass, EQ, de-esser, compressor, AGC, limiter), presets, D-Bus interface and GNOME app.
+2. **Voice:** DSP chain (high-pass, EQ, de-esser, compressor, AGC, limiter), presets, D-Bus interface and GNOME app; the attenuation limit of DeepFilterNet3 (`--atten-lim` so far) as one of the first runtime settings.
 3. **Echo and other voices:** integrate the echo-cancel module, Hush with Full and Gate modes, click-free switching.
 4. **Restoration:** evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage.
 
