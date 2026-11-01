@@ -164,7 +164,9 @@ In the app you can:
   microphone: above −45 dBFS the app points out that it's too noisy
 - watch the **latency**, the processing time per frame and dropouts
 
-The info button on a row explains what the stage, the setting or the status value means.
+The info button on a row explains what the stage, the setting or the status value means. The
+status values (latency, processing time, dropouts, the echo cancellation's status and the
+background noise) have a copy button and can be selected, e.g. for a bug report.
 
 ### Offline mode
 

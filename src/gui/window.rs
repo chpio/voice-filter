@@ -141,7 +141,17 @@ struct Widgets {
 }
 
 pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
-    let row = |title: &str| adw::ActionRow::builder().title(title).build();
+    // says when a value was copied
+    let toasts = adw::ToastOverlay::new();
+    // a row whose subtitle shows a value, selectable and with a button that copies it
+    let row = |title: &str| {
+        let row = adw::ActionRow::builder()
+            .title(title)
+            .subtitle_selectable(true)
+            .build();
+        row.add_suffix(&copy_button(&row, &toasts));
+        row
+    };
     // a status row with an info button
     let status_row = |title: &str, text: &str| {
         let row = row(title);
@@ -195,8 +205,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
                  all the time.",
             )
             .build(),
-        input_level: meter_row("Microphone", help::INPUT_LEVEL),
-        output_level: meter_row("Voice Filter", help::OUTPUT_LEVEL),
+        input_level: meter_row("Microphone", help::INPUT_LEVEL, Some(&toasts)),
+        output_level: meter_row("Voice Filter", help::OUTPUT_LEVEL, None),
         running: Cell::new(false),
         frames: Cell::new(0),
         noisy_polls: Cell::new(0),
@@ -254,7 +264,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let toolbar = adw::ToolbarView::new();
     let header = adw::HeaderBar::new();
     toolbar.add_top_bar(&header);
-    toolbar.set_content(Some(&widgets.stack));
+    toasts.set_child(Some(&widgets.stack));
+    toolbar.set_content(Some(&toasts));
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Voice Filter")
@@ -270,8 +281,12 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     window
 }
 
-/// A row with a meter of a level, and an info button.
-fn meter_row(title: &str, help: &str) -> (adw::ActionRow, gtk::LevelBar) {
+/// A row with a meter of a level, and an info button; with `toasts` its subtitle can be copied.
+fn meter_row(
+    title: &str,
+    help: &str,
+    toasts: Option<&adw::ToastOverlay>,
+) -> (adw::ActionRow, gtk::LevelBar) {
     // a fixed width, not expanding: the row shares its width between the title and the bar by
     // their natural widths, so the microphone's long subtitle made its meter the shorter one
     let bar = gtk::LevelBar::builder()
@@ -289,9 +304,39 @@ fn meter_row(title: &str, help: &str) -> (adw::ActionRow, gtk::LevelBar) {
         bar.remove_offset_value(Some(offset));
     }
     let row = adw::ActionRow::builder().title(title).build();
+    // the noise floor in the subtitle of the microphone's, selectable and with a button that
+    // copies it; the button before the bar, so the bars of both rows line up
+    if let Some(toasts) = toasts {
+        row.set_subtitle_selectable(true);
+        row.add_suffix(&copy_button(&row, toasts));
+    }
     row.add_suffix(&bar);
     row.add_suffix(&help::button(help));
     (row, bar)
+}
+
+/// A button that copies the value in the subtitle of a row, and says so in a toast.
+fn copy_button(row: &adw::ActionRow, toasts: &adw::ToastOverlay) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Copy")
+        .valign(gtk::Align::Center)
+        .build();
+    button.add_css_class("flat");
+    // weak: the button is in the row, it would keep it alive
+    let (row, toasts) = (row.downgrade(), toasts.downgrade());
+    button.connect_clicked(move |button| {
+        let Some(row) = row.upgrade() else {
+            return;
+        };
+        button
+            .clipboard()
+            .set_text(&row.subtitle().unwrap_or_default());
+        if let Some(toasts) = toasts.upgrade() {
+            toasts.add_toast(adw::Toast::builder().title("Copied").timeout(2).build());
+        }
+    });
+    button
 }
 
 /// A level in dBFS as the fill of a meter, 0 to 1.
@@ -341,7 +386,7 @@ fn show_levels(widgets: &Widgets, status: &Status) {
     } else {
         format!("Background noise at {floor:.0} dBFS")
     };
-    widgets.input_level.0.set_subtitle(&subtitle);
+    show_value(&widgets.input_level.0, &subtitle);
 }
 
 /// Sends what the user changes to the filter.
@@ -811,7 +856,7 @@ fn show_echo(widgets: &Widgets, status: &Status) {
     let value = |name: &str| status.echo.get(name).copied();
     let (Some(capture), Some(reference)) = (value("capture-frames"), value("reference-frames"))
     else {
-        widgets.echo_status.set_subtitle("Not in the chain");
+        show_value(&widgets.echo_status, "Not in the chain");
         return;
     };
     let (last_capture, last_reference) = widgets.echo_frames.replace((capture, reference));
@@ -828,7 +873,7 @@ fn show_echo(widgets: &Widgets, status: &Status) {
         };
         format!("Hears the speakers at {level:.0} dBFS, their echo comes back after {delay}")
     };
-    widgets.echo_status.set_subtitle(&subtitle);
+    show_value(&widgets.echo_status, &subtitle);
 }
 
 fn show(widgets: &Widgets, status: &Status) {
@@ -873,24 +918,60 @@ fn show(widgets: &Widgets, status: &Status) {
     widgets.updating.set(false);
 
     let ms = |part: &str| status.latency.get(part).copied().unwrap_or_default();
-    widgets.latency.set_subtitle(&format!(
-        "{:.1} ms until the app: microphone {:.1}, buffer {:.1}, processing {:.1}",
-        ms("total"),
-        ms("microphone"),
-        ms("bridge"),
-        ms("chain"),
-    ));
-    widgets.processing.set_subtitle(&format!(
-        "Up to {:.1} ms per 10 ms frame, {} samples per cycle",
-        status.max_frame_time, status.quantum
-    ));
+    show_value(
+        &widgets.latency,
+        &format!(
+            "{:.1} ms until the app: microphone {:.1}, buffer {:.1}, processing {:.1}",
+            ms("total"),
+            ms("microphone"),
+            ms("bridge"),
+            ms("chain"),
+        ),
+    );
+    show_value(
+        &widgets.processing,
+        &format!(
+            "Up to {:.1} ms per 10 ms frame, {} samples per cycle",
+            status.max_frame_time, status.quantum
+        ),
+    );
     let count = |name: &str| status.counters.get(name).copied().unwrap_or_default();
     // the counters are in samples, which say little to the user
     let count_ms = |name: &str| samples_ms(count(name) as f64);
-    widgets.dropouts.set_subtitle(&format!(
-        "{:.0} ms of silence, {:.0} ms dropped, {} errors",
-        count_ms("silence"),
-        count_ms("dropped"),
-        count("errors"),
-    ));
+    show_value(
+        &widgets.dropouts,
+        &format!(
+            "{:.0} ms of silence, {:.0} ms dropped, {} errors",
+            count_ms("silence"),
+            count_ms("dropped"),
+            count("errors"),
+        ),
+    );
+}
+
+/// Shows a value in the subtitle of a row, which the user can select and copy: not while they
+/// select in it, the new text would drop the selection.
+fn show_value(row: &adw::ActionRow, text: &str) {
+    let selecting = subtitle_label(row.upcast_ref())
+        .is_some_and(|label| label.has_focus() && label.selection_bounds().is_some());
+    if !selecting {
+        row.set_subtitle(text);
+    }
+}
+
+/// The label of a row's subtitle, the one with the style class `subtitle`.
+fn subtitle_label(widget: &gtk::Widget) -> Option<gtk::Label> {
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>()
+            && label.has_css_class("subtitle")
+        {
+            return Some(label.clone());
+        }
+        if let Some(label) = subtitle_label(&widget) {
+            return Some(label);
+        }
+        child = widget.next_sibling();
+    }
+    None
 }
