@@ -2,7 +2,7 @@
 
 Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore. How to use it is in the [README](../README.md).
 
-**Status** (2026-11-01): phases 1 and 2 are done, most of phase 3. The live filter runs as the virtual microphone "Voice Filter" with echo cancellation, DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus. Missing from phase 3: AEC3's configuration and more tests. See the [roadmap](#roadmap).
+**Status** (2026-11-01): phases 1 and 2 are done, most of phase 3. The live filter runs as the virtual microphone "Voice Filter" with echo cancellation, DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus. Missing from phase 3: less loss of the voice while talking into the playback (designed in [Double talk](#double-talk-the-echo-cancellation-only-decides), measured offline) and more tests. See the [roadmap](#roadmap).
 
 **Contents:** [Goal and requirements](#goal-and-requirements) · [Signal chain](#signal-chain) · [Model choice](#model-choice) · [Echo cancellation](#echo-cancellation) · [Suppressing other voices](#suppressing-other-voices) · [Voice enhancement](#voice-enhancement) · [GPU strategy](#gpu-strategy) · [Architecture](#architecture) · [Risks and open questions](#risks-and-open-questions) · [Roadmap](#roadmap)
 
@@ -73,8 +73,58 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 
 - With it −72 to −76 dBFS, without it −38 to −49 dBFS: about 30 dB of the echo removed. Switched on again it took about 4 s to remove it fully: a stage that's off pauses and misses what the speakers play meanwhile.
 - In the first version the reference stream was in the `node.group` and `node.link-group` of the other streams. PipeWire puts the nodes of both on one driver, so the speakers ran under the USB microphone's clock and its quantum of 256 while an app recorded: xruns at every join and leave (511 at the output, 3134 at Firefox's playback, which wants 900–3600), heard as dropouts and a choppy video. Without them, the reference stream follows the speakers' clock and hands over through its ring.
-- Talking into the playback, the voice gets choppy now and then: AEC3's suppressor turns down what's left of the echo frequency by frequency, and the voice with it, the more the louder the echo is against the voice (quiet here, about −36 dBFS at the microphone). Less of it needs AEC3's configuration, which sonora 0.2 doesn't take yet ([PR #41](https://github.com/dignifiedquire/sonora/pull/41) would).
+- Talking into the playback, the voice gets choppy now and then: AEC3's suppressor turns down what's left of the echo frequency by frequency, and the voice with it, the more the louder the echo is against the voice (quiet here, about −36 dBFS at the microphone). AEC3's configuration could make it gentler, but sonora 0.2 doesn't take it yet ([PR #41](https://github.com/dignifiedquire/sonora/pull/41) would); the plan is now to let DeepFilterNet3 shape the voice instead, see [Double talk](#double-talk-the-echo-cancellation-only-decides).
 - AEC3's own metrics only cover its linear filter: on the spike's recording, which lost 30 dB of echo, it reported 5–7 dB ERLE and an ERL stuck at its initial 20 dB, so the app doesn't show them. Its delay comes in steps of 4 ms, 4 ms on that recording, 0 live with the USB microphone (another microphone showed more).
+
+### Double talk: the echo cancellation only decides
+
+**The problem:** AEC3 works in two steps. Its linear filter predicts the echo from the reference and subtracts it, which leaves the voice as it is. Its suppressor then turns down, band by band, where echo is left, and takes the voice in those bands with it while you talk into the playback. Yet DeepFilterNet3 tells music from a voice by itself; only speech from the speakers (a call, a video) it can't tell from yours.
+
+**Measured** (2026-11-01, offline, `examples/sidechain.rs`, the USB microphone, with only the echo cancellation and DeepFilterNet3): a double talk whose voice is known, built from a recording of the echo alone (the microphone and the reference) with a recording of the speaker alone added. Every variant runs on it and on the voice alone; per band (24, 100 Hz to 20 kHz) and 20 ms where the voice is, how much quieter the output is than for the voice alone (*loss*, the mean, and the share of more than 6 dB, choppy), and the level that's left of the echo alone. Three echoes: a video with speech over a laptop's speakers (at the microphone 14 dB below the voice; also raised by 12 dB, about as loud as the voice), music without vocals and a song with vocals over a Bluetooth speaker (both about 11 dB below the voice).
+
+| Echo                     | Variant                         | Echo alone | Loss    | > 6 dB |
+| ------------------------ | ------------------------------- | ---------- | ------- | ------ |
+| Video, speech            | now (AEC3, then DeepFilterNet3) | −89 dBFS   | 8.0 dB  | 38 %   |
+|                          | without the echo cancellation   | −85 dBFS   | 2.7 dB  | 13 %   |
+|                          | sidechain, adaptive (see below) | −89 dBFS   | 3.6 dB  | 13 %   |
+| Video, speech, +12 dB    | now                             | −118 dBFS  | 7.3 dB  | 33 %   |
+|                          | without the echo cancellation   | −71 dBFS   | 5.1 dB  | 25 %   |
+|                          | sidechain, adaptive             | −118 dBFS  | 3.6 dB  | 14 %   |
+| Music without vocals     | now                             | −120 dBFS  | 10.7 dB | 51 %   |
+|                          | without the echo cancellation   | −120 dBFS  | 5.0 dB  | 23 %   |
+|                          | sidechain                       | −120 dBFS  | 4.6 dB  | 30 %   |
+| Song with vocals         | now                             | −120 dBFS  | 14.4 dB | 64 %   |
+|                          | without the echo cancellation   | −120 dBFS  | 6.3 dB  | 30 %   |
+|                          | sidechain                       | −120 dBFS  | 7.1 dB  | 39 %   |
+
+- **Music:** DeepFilterNet3 alone removes it completely, with vocals too (this song); the echo cancellation adds nothing but the loss, twice as much as without it.
+- **Speech from the speakers:** DeepFilterNet3 alone leaves −71 to −85 dBFS of it (after the AGC up to 30 dB more), the echo cancellation is needed.
+- Part of the loss is DeepFilterNet3's own: with the echo it also loses 3–6 dB against the voice alone.
+
+**The sidechain:** DeepFilterNet3 analyzes the echo cancellation's output, as now, but its gains go to a mix of 25 % of that and 75 % of the raw microphone (delayed by the echo cancellation's 5 ms, so they line up; `DfTract::process_with`): the suppressor only steers which bands pass, it no longer turns them down itself. The deep filter stays off then, its coefficients are a filter for the analyzed spectrum, not the mix (with it the loss was 3–5 dB higher); the gains cover the lower frequencies too. Between a mix of 0 and 0.25 the difference is small, at 0.5 the loss rises. Alone it leaves more of an echo alone (speech −68 to −81 dBFS instead of −89 to −118), as its gains don't close fully where the analyzed signal is almost silent. *Adaptive*: the sidechain only while DeepFilterNet3's SNR estimate on the analyzed signal is above 10 dB (held 200 ms, the switch crossfaded over a frame), otherwise the chain as now; the estimate comes 30 ms before the output, so it switches in time. At 5 dB the voice keeps a little more (2.9 dB loss), but remains of the speech after the echo cancellation open it and leave −83 instead of −89 dBFS of a quiet echo. AEC3's linear output (only subtracted, without the suppressor) would be the better mix partner than the raw microphone, but sonora doesn't hand it out and in WebRTC it only covers the lowest band (up to 8 kHz).
+
+**Speech in what the speakers play** (2026-11-01, `examples/reference_vad.rs`): which of the two the echo cancellation should do follows from the reference, not from the microphone. DeepFilterNet3 on the reference tells them apart, and only its encoder is needed for the SNR estimate (`DfTract::analyze`, without the decoders, the deep filter and the synthesis: the same values in half the time, 110–150 µs per frame). Means over 3 s, of 28 windows of the video and of 1 min each of the music:
+
+| Encoder runs               | Per frame | Video: windows > 5 dB, highest | Song with vocals: highest | Without vocals: highest |
+| -------------------------- | --------- | ------------------------------ | ------------------------- | ----------------------- |
+| every frame                | 111 µs    | 7, +17.9 dB                    | +1.1 dB                   | −10.1 dB                |
+| runs of 10 of 40 frames    | 28 µs     | 7, +18.3 dB                    | −0.4 dB                   | −9.6 dB                 |
+| runs of 25 of 100 frames   | 28 µs     | 12, +22.1 dB                   | −0.5 dB                   | −7.3 dB                 |
+| runs of 10 of 80 frames    | 14 µs     | 8, +14.1 dB                    | +5.1 dB                   | −8.5 dB                 |
+
+- In runs of consecutive frames it can run a quarter of the time (about 0.3 % of a core, and only while the speakers play); an eighth and less, the song with vocals got above 5 dB in single windows.
+- Every second or fourth frame instead doesn't work: the model sees the signal two or four times as fast, and at four times it hardly recognizes speech anymore (6 instead of 42 seconds above 0 dB).
+- WebRTC's RNN VAD (in sonora's AGC2, 23 µs per frame) is no alternative: it takes music for speech (88 % of the frames of the music without vocals).
+
+**The design:**
+
+- The echo cancellation runs as now and also analyzes the reference with DeepFilterNet3's encoder, in runs of 25 of 100 frames, only while it isn't silent.
+- Speech in the reference (the 3 s mean above about 5 dB): the adaptive sidechain, the echo cancellation keeps removing it.
+- No speech in it (music, nothing): the sidechain with a low mix all the time, DeepFilterNet3 removes the music.
+- Asymmetric: speech mode as soon as a window has speech, and when the reference starts; music mode only after several seconds without speech. A wrong music mode lets the other side hear itself, a wrong speech mode only costs the voice a little.
+- The chain changes: DeepFilterNet3 needs the raw microphone (delayed by the echo cancellation's latency) besides the echo cancellation's output, which the `Stage` trait doesn't pass on; and the speech mode of the reference has to reach it. Mix and threshold become parameters.
+
+Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers), listening (the switching, the noise without the deep filter), and the delay of 3 s until music mode is left: to be measured how much of a call's first words gets through.
 
 - AGC2 against our AGC, compressor and limiter, on another recording: 6 dB quieter with its defaults, the same spread between quiet and loud speech, pauses 5 dB further below the speech, peaks up to 0 dBFS. Not better enough to give up our adjustable chain; the expander would bring the quieter pauses.
 
@@ -211,6 +261,8 @@ Three phases, each usable on its own. Each phase ends with a latency and listeni
    - [x] spike: AEC3 from sonora on a recording (see [Echo cancellation](#echo-cancellation))
    - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; sonora patched to its allocation-free PR until a release)
    - [x] live test: about 30 dB of the echo removed, the reference stream on the speakers' clock
-   - [ ] less choppy speech when talking into the playback: AEC3's configuration, once sonora takes it
+   - [x] offline: what the echo cancellation costs the voice in double talk, the sidechain against it, and DeepFilterNet3's encoder telling speech in the reference from music (see [Double talk](#double-talk-the-echo-cancellation-only-decides))
+   - [ ] less choppy speech when talking into the playback: the sidechain in the chain, switched by speech in the reference
+   - [ ] more recordings for it (rap, a podcast with music, a real call), listening tests
    - [ ] a test with only speech from the speakers, and over a longer call
    - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
