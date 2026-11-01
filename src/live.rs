@@ -56,12 +56,14 @@ pub struct Devices<'a> {
 /// Runs until SIGINT or SIGTERM. `reference` feeds the echo canceller of the chain with what the
 /// output device plays. The control interface keeps the devices chosen there in `settings_dir`,
 /// and Listen: its volume, and whether it was on if the user chose to keep that, which starts it
-/// again here.
+/// again here. `verbose` prints the counters and the latency every 10 s, not only when something
+/// went wrong.
 pub fn run(
     chain: Chain,
     mut reference: Reference,
     devices: Devices,
     settings_dir: Option<PathBuf>,
+    verbose: bool,
 ) -> Result<()> {
     pw::init();
     let switches = chain.switches();
@@ -291,7 +293,7 @@ pub fn run(
         "\"Voice Filter\" is ready, the chain adds {:.1} ms",
         samples_ms(chain_latency as f64)
     );
-    report_periodically(stats, chain_latency);
+    report_periodically(stats, chain_latency, verbose);
     mainloop.run();
     if disconnected.get() {
         bail!("Lost the connection to PipeWire");
@@ -860,12 +862,23 @@ fn format_param() -> Vec<u8> {
     .into_inner()
 }
 
-/// Prints the counters and the latency every 10 s while frames are processed.
-fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
+/// How often [`report_periodically`] looks at the counters.
+const REPORT_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Hands the longest processing time of a frame to the control interface every
+/// [`REPORT_INTERVAL`] and prints the counters and the latency while frames are processed:
+/// `verbose` every time, otherwise only when the chain failed on frames, or when the playback side
+/// filled in silence or dropped samples in the middle of a recording. At its start and end that's
+/// how the bridge settles, so an interval counts only if frames ran through all of it and the one
+/// before.
+fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
+    // a few frames less than the interval holds, the cycles don't line up with it exactly
+    let whole = REPORT_INTERVAL.as_secs() * (SAMPLE_RATE as u64 / FRAME_LEN as u64) * 99 / 100;
     ::std::thread::spawn(move || {
         let mut last = [0; 4];
+        let mut was_running = false;
         loop {
-            ::std::thread::sleep(Duration::from_secs(10));
+            ::std::thread::sleep(REPORT_INTERVAL);
             let now = [
                 stats.frames.load(Ordering::Relaxed),
                 stats.underruns.load(Ordering::Relaxed),
@@ -875,16 +888,19 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
             let max_ns = stats.max_frame_ns.swap(0, Ordering::Relaxed);
             stats.last_max_frame_ns.store(max_ns, Ordering::Relaxed);
             let max_ms = max_ns as f64 / 1e6;
-            if now[0] != last[0] {
+            let frames = now[0] - last[0];
+            let steady = was_running && frames >= whole;
+            let failed = now[3] != last[3];
+            let glitched = now[1] != last[1] || now[2] != last[2];
+            if frames > 0 && (verbose || failed || steady && glitched) {
                 let parts = stats.latency(chain_latency);
                 let total: i64 = parts.iter().map(|(_, samples)| samples).sum();
                 let parts = parts
                     .map(|(name, samples)| format!("{name} {:.1}", samples_ms(samples as f64)))
                     .join(" + ");
                 eprintln!(
-                    "{} frames, max {max_ms:.2} ms per frame, {} samples silence, {} dropped, \
+                    "{frames} frames, max {max_ms:.2} ms per frame, {} samples silence, {} dropped, \
                      {} errors",
-                    now[0] - last[0],
                     now[1] - last[1],
                     now[2] - last[2],
                     now[3] - last[3],
@@ -895,6 +911,7 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
                     stats.quantum.load(Ordering::Relaxed),
                 );
             }
+            was_running = frames > 0;
             last = now;
         }
     });

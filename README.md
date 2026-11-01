@@ -80,6 +80,7 @@ cargo install --path . --no-default-features    # without the GNOME app, no GTK 
 voice-filter inputs                   # lists the microphones, the chosen one marked with *
 voice-filter outputs                  # lists the output devices (speakers), the same way
 voice-filter run --input <name> --output <name>   # provides "Voice Filter", until Ctrl+C
+voice-filter run --verbose            # prints the latency and the dropouts every 10 s
 voice-filter ui                       # opens the GNOME app for a running `voice-filter run`
 ```
 

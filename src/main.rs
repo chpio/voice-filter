@@ -41,6 +41,10 @@ enum Command {
         /// outputs`; kept for the next runs. Without one so far, the default output.
         #[arg(long)]
         output: Option<String>,
+        /// Prints the frames, the longest processing time of one, the dropouts and the latency
+        /// every 10 s; without it only when there were dropouts or errors.
+        #[arg(long, short)]
+        verbose: bool,
     },
     /// Lists the microphones (and other audio sources) for `run --input`.
     Inputs,
@@ -111,7 +115,11 @@ fn main() -> Result<ExitCode> {
     let settings_dir = settings::dir();
     let settings_dir = settings_dir.as_deref();
     match args.command {
-        Command::Run { input, output } => {
+        Command::Run {
+            input,
+            output,
+            verbose,
+        } => {
             let input = device(
                 input,
                 settings_dir,
@@ -150,7 +158,13 @@ fn main() -> Result<ExitCode> {
                 input: input.as_deref(),
                 output: output.as_deref(),
             };
-            live::run(chain, reference, devices, settings_dir.map(Path::to_owned))?;
+            live::run(
+                chain,
+                reference,
+                devices,
+                settings_dir.map(Path::to_owned),
+                verbose,
+            )?;
         }
         Command::Inputs => list(live::Direction::Input, settings_dir, settings::load_input)?,
         Command::Outputs => list(live::Direction::Output, settings_dir, settings::load_output)?,
