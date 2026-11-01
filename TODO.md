@@ -28,11 +28,11 @@ Work items that don't change the design; the open design questions and TODOs are
 
 ## Audio path
 
-- [ ] `deep-filter-rt` allocates per frame, 866 times (counted on 60 s of speech with a counting
-  allocator): almost all in tract running the model, a few in `DfTract::process` (it clones its
-  spectrum tensors into the rolling buffers, `spec_buf.clone()`, and `DFState` makes its FFT
-  buffers per frame). Against the rule of no allocations in the audio path; the few of our own
-  aren't worth removing alone, tract's need a way to run the model on preallocated tensors.
+- [ ] `deep-filter-rt` allocates per frame, about 820 times (`cargo bench --bench stages`, on the
+  speech-like signal): almost all in tract running the model, `DfTract`'s own code keeps its STFT
+  buffers and rolling spectra (none at a limit of 0 dB, where the model doesn't run). Against the
+  rule of no allocations in the audio path; it needs a way to run tract's model on preallocated
+  tensors (it already runs on states kept between frames, `TypedSimpleState`).
 
 ## Releases
 

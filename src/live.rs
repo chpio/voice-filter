@@ -538,7 +538,6 @@ struct Graph {
     ports: HashMap<u32, (u32, bool)>,
     /// The output and input node of every link.
     links: HashMap<u32, (u32, u32)>,
-    /// The output stream's link into "Voice Filter".
     /// The output stream's link into "Voice Filter", with the two nodes.
     link: Option<(pw::link::Link, (u32, u32))>,
     recording: bool,
