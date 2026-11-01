@@ -445,34 +445,7 @@ impl DfTract {
     ///     - coefs: Real-valued DF coefficients estimates of shape `[n_ch, 1, 1, n_erb, 2]`.
     pub fn process_raw(&mut self) -> Result<(f32, Option<Tensor>, Option<Tensor>)> {
         let ch = self.spec_buf.shape()[0];
-        let spec = spec_view(&self.spec_buf, ch, self.n_freqs)?;
-
-        for (nsy_ch, mut erb_ch, mut cplx_ch, state) in izip!(
-            spec.outer_iter(),
-            tvalue_to_array_view_mut(&mut self.erb_buf).axis_iter_mut(Axis(0)),
-            tvalue_to_array_view_mut(&mut self.cplx_buf).axis_iter_mut(Axis(0)),
-            self.df_states.iter_mut()
-        ) {
-            let nsy_ch = nsy_ch.to_slice().unwrap();
-            state.feat_erb(nsy_ch, self.alpha, erb_ch.as_slice_mut().unwrap());
-            // the real parts, then the imaginary ones: the layout the encoder takes, so the
-            // buffer goes to it as it is
-            state.feat_cplx_t(
-                &nsy_ch[..self.nb_df],
-                self.alpha,
-                cplx_ch.as_slice_mut().unwrap(),
-            );
-        }
-        // Run encoder
-        let mut enc_emb = self
-            .enc
-            .run(tvec!(self.erb_buf.clone(), self.cplx_buf.clone()))?;
-
-        let lsnr = *enc_emb
-            .pop()
-            .unwrap()
-            .try_as_plain_ram()?
-            .to_scalar::<f32>()?;
+        let (lsnr, mut enc_emb) = self.encode()?;
         let c0 = enc_emb.pop().unwrap();
         let emb = enc_emb.pop().unwrap();
 
@@ -533,7 +506,15 @@ impl DfTract {
         ) {
             state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
         }
-        let spec = spec_view(&self.spec_buf, ch, n_freqs)?;
+        let (lsnr, _) = self.encode()?;
+        Ok(lsnr)
+    }
+
+    /// Runs the encoder on the spectrum in `self.spec_buf`: computes its features into the
+    /// encoder's inputs and runs it. Returns the local SNR estimate and the other outputs in their
+    /// order (`e0` to `e3`, the embedding and `c0`, so the last comes off first).
+    fn encode(&mut self) -> Result<(f32, TVec<TValue>)> {
+        let spec = spec_view(&self.spec_buf, self.spec_buf.shape()[0], self.n_freqs)?;
         for (nsy_ch, mut erb_ch, mut cplx_ch, state) in izip!(
             spec.outer_iter(),
             tvalue_to_array_view_mut(&mut self.erb_buf).axis_iter_mut(Axis(0)),
@@ -542,20 +523,23 @@ impl DfTract {
         ) {
             let nsy_ch = nsy_ch.to_slice().unwrap();
             state.feat_erb(nsy_ch, self.alpha, erb_ch.as_slice_mut().unwrap());
+            // the real parts, then the imaginary ones: the layout the encoder takes, so the
+            // buffer goes to it as it is
             state.feat_cplx_t(
                 &nsy_ch[..self.nb_df],
                 self.alpha,
                 cplx_ch.as_slice_mut().unwrap(),
             );
         }
-        let mut enc_emb = self
+        let mut outputs = self
             .enc
             .run(tvec!(self.erb_buf.clone(), self.cplx_buf.clone()))?;
-        Ok(*enc_emb
+        let lsnr = *outputs
             .pop()
             .unwrap()
             .try_as_plain_ram()?
-            .to_scalar::<f32>()?)
+            .to_scalar::<f32>()?;
+        Ok((lsnr, outputs))
     }
 
     /// Process a noisy time domain sample and return the enhanced sample via mutable argument.
