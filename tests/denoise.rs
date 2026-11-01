@@ -49,6 +49,19 @@ fn changes_the_attenuation_limit_at_runtime() {
 }
 
 #[test]
+fn has_no_estimate_at_a_limit_of_0_db() {
+    // the model doesn't run then, the stages after it go by the level as if it were off
+    let mut denoise = Denoise::new().unwrap().with_atten_lim(0.);
+    let speech = denoise.speech();
+    let ratio = ratio_db(&mut denoise, &mut 0x2545_f491);
+    assert!(ratio.abs() < 0.1, "{ratio} dB");
+    assert_eq!(speech.frames(), 0);
+    denoise.atten_lim().set(6.).unwrap();
+    ratio_db(&mut denoise, &mut 0x2545_f491);
+    assert_eq!(speech.frames(), 100);
+}
+
+#[test]
 fn plays_nothing_from_before_a_pause() {
     use ::std::sync::atomic::Ordering;
     use ::voice_filter::chain::Chain;

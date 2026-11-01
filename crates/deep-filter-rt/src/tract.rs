@@ -360,6 +360,8 @@ impl DfTract {
         }
     }
 
+    /// Limits how much the model attenuates, in dB; 100 and above don't limit it. Below 0.01 dB
+    /// the model doesn't run, the output is the input, delayed by [`Self::delay`] all the same.
     pub fn set_atten_lim(&mut self, db: f32) {
         let lim = db.abs();
         self.atten_lim = if lim >= 100. {
@@ -371,6 +373,12 @@ impl DfTract {
             log::debug!("Setting attenuation limit to {:.1} dB", lim);
             Some(10f32.powf(-lim / 20.))
         };
+    }
+
+    /// Whether the model runs: not with an attenuation limit below 0.01 dB, see
+    /// [`Self::set_atten_lim`].
+    pub fn attenuates(&self) -> bool {
+        self.atten_lim != Some(1.)
     }
 
     pub fn init(&mut self) -> Result<()> {
@@ -532,8 +540,17 @@ impl DfTract {
         }
         self.rolling_spec_buf_y.push_back(self.spec_buf.clone());
         self.rolling_spec_buf_x.push_back(self.spec_buf.clone());
-        if self.atten_lim.unwrap_or_default() == 1. {
-            enh.assign(&noisy);
+        if !self.attenuates() {
+            // the noisy spectrum, as far back as the enhanced one would be, so the delay stays
+            let spec_noisy = as_arrayview_complex(
+                self.rolling_spec_buf_x[self.noisy_index()]
+                    .to_plain_array_view::<f32>()
+                    .unwrap(),
+                &[self.ch, self.n_freqs],
+            )
+            .into_dimensionality::<Ix2>()
+            .unwrap();
+            synthesis(&mut self.df_states, spec_noisy, &mut enh);
             return Ok(35.);
         }
 
@@ -589,9 +606,7 @@ impl DfTract {
         };
 
         let spec_noisy = as_arrayview_complex(
-            self.rolling_spec_buf_x
-                .get(self.lookahead.max(self.df_order) - self.lookahead - 1)
-                .unwrap()
+            self.rolling_spec_buf_x[self.noisy_index()]
                 .to_plain_array_view::<f32>()
                 .unwrap(),
             &[self.ch, self.n_freqs],
@@ -620,17 +635,14 @@ impl DfTract {
             spec_enh.scaled_add(lim.into(), &spec_noisy);
         }
 
-        for (state, spec_ch, mut enh_out_ch) in izip!(
-            self.df_states.iter_mut(),
-            spec_enh.axis_iter(Axis(0)),
-            enh.axis_iter_mut(Axis(0)),
-        ) {
-            state.synthesis(
-                spec_ch.to_owned().as_slice_mut().unwrap(),
-                enh_out_ch.as_slice_mut().unwrap(),
-            );
-        }
+        synthesis(&mut self.df_states, spec_enh.view(), &mut enh);
         Ok(lsnr)
+    }
+
+    /// The frame of `rolling_spec_buf_x` the output belongs to, `lookahead` frames before the
+    /// newest.
+    fn noisy_index(&self) -> usize {
+        self.lookahead.max(self.df_order) - self.lookahead - 1
     }
 
     /// For some frames, processing may be skipped based on the current local snr and the defined
@@ -679,9 +691,7 @@ impl DfTract {
 
     pub fn get_spec_noisy(&self) -> ArrayView2<'_, Complex32> {
         as_arrayview_complex(
-            self.rolling_spec_buf_x
-                .get(self.lookahead.max(self.df_order) - self.lookahead - 1)
-                .unwrap()
+            self.rolling_spec_buf_x[self.noisy_index()]
                 .to_plain_array_view::<f32>()
                 .unwrap(),
             &[self.ch, self.n_freqs],
@@ -704,6 +714,25 @@ impl DfTract {
         )
         .into_dimensionality::<Ix2>()
         .unwrap()
+    }
+}
+
+/// Turns the enhanced spectrum `[ch, n_freqs]` back into samples, into `enh`, with the STFT
+/// states of the channels.
+fn synthesis(
+    states: &mut [DFState],
+    spec_enh: ArrayView2<Complex32>,
+    enh: &mut ArrayViewMut2<f32>,
+) {
+    for (state, spec_ch, mut enh_out_ch) in izip!(
+        states.iter_mut(),
+        spec_enh.axis_iter(Axis(0)),
+        enh.axis_iter_mut(Axis(0)),
+    ) {
+        state.synthesis(
+            spec_ch.to_owned().as_slice_mut().unwrap(),
+            enh_out_ch.as_slice_mut().unwrap(),
+        );
     }
 }
 

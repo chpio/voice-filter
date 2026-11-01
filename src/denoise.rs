@@ -22,9 +22,10 @@ pub struct Denoise {
     speech: Arc<Speech>,
 }
 
-/// How much speech the model hears, for the stages after it (the expander): its estimate of the
-/// local SNR of the frame it analyzes, in dB (−15 to 35), and how many frames it processed, so a
-/// reader sees when it stopped (switched off). The frame it analyzes is the newest, its output is
+/// How much speech the model hears, for the stages after it (AGC and expander): its estimate of
+/// the local SNR of the frame it analyzes, in dB (−15 to 35), and how many frames it processed, so
+/// a reader sees when it stopped (switched off, or the limit at 0 dB, where the model doesn't
+/// run). The frame it analyzes is the newest, its output is
 /// [`Stage::latency`] behind, so the estimate comes ahead of the audio it belongs to.
 #[derive(Debug)]
 pub struct Speech {
@@ -166,7 +167,11 @@ impl Stage for Denoise {
         let snr_db = self
             .df
             .process(self.noisy.view(), self.enhanced.view_mut())?;
-        self.speech.update(snr_db);
+        // at a limit of 0 dB the model doesn't run and has no estimate, the stages after it go by
+        // the level as if it were switched off
+        if self.df.attenuates() {
+            self.speech.update(snr_db);
+        }
         frame.copy_from_slice(self.enhanced.row(0).as_slice().unwrap());
         Ok(())
     }

@@ -29,12 +29,10 @@ fn vowel(len: usize) -> Vec<f32> {
         .collect()
 }
 
-#[test]
-fn delay_matches_the_measured_one() {
-    let mut df = DfTract::default();
+/// The lag of `df`'s output against the input with the highest cross-correlation, after the model
+/// settled.
+fn measured_delay(df: &mut DfTract) -> usize {
     let hop = df.hop_size;
-    assert_eq!(df.delay(), 1440);
-
     let input = vowel(200 * hop);
     let mut output = Vec::<f32>::with_capacity(input.len());
     let mut enh = Array2::zeros((1, hop));
@@ -44,14 +42,27 @@ fn delay_matches_the_measured_one() {
         output.extend(enh.iter());
     }
 
-    // the lag with the highest cross-correlation, after the model settled
     let max_lag = 2 * df.delay();
     let range = 50 * hop..input.len() - max_lag;
     let corr: Vec<f32> = (0..max_lag)
         .map(|lag| range.clone().map(|i| input[i] * output[i + lag]).sum())
         .collect();
-    let measured = (0..max_lag)
+    (0..max_lag)
         .max_by(|&a, &b| corr[a].total_cmp(&corr[b]))
-        .unwrap();
-    assert_eq!(measured, df.delay());
+        .unwrap()
+}
+
+#[test]
+fn delay_matches_the_measured_one() {
+    let mut df = DfTract::default();
+    assert_eq!(df.delay(), 1440);
+    assert_eq!(measured_delay(&mut df), df.delay());
+}
+
+#[test]
+fn keeps_the_delay_without_attenuation() {
+    // an attenuation limit of 0 dB skips the model and passes the input through
+    let mut df = DfTract::default();
+    df.set_atten_lim(0.);
+    assert_eq!(measured_delay(&mut df), df.delay());
 }
