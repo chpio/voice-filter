@@ -748,7 +748,13 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                 });
                 let (weak, name) = (weak.clone(), *name);
                 row.connect_enable_expansion_notify(move |row| {
-                    send_enabled(&weak, name, row.enables_expansion());
+                    let on = row.enables_expansion();
+                    // libadwaita expands the row when its switch turns on; switching a stage
+                    // shouldn't open its parameters (switched off, it was collapsed).
+                    if on {
+                        row.set_expanded(false);
+                    }
+                    send_enabled(&weak, name, on);
                 });
                 StageRow::Expander { row, scales, reset }
             };
