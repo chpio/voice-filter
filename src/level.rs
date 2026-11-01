@@ -1,7 +1,7 @@
 //! Levels of frames: their RMS level and the noise floor under them.
 
-use crate::FRAME_LEN;
 use crate::dsp::power_db;
+use crate::{FRAME_LEN, FRAME_S};
 
 /// The RMS level of a frame in dBFS, −120 for silence.
 pub fn frame_db(frame: &[f32; FRAME_LEN]) -> f32 {
@@ -71,7 +71,7 @@ impl Meter {
 
     /// Adds the level of a frame, in dBFS, and returns the meter's.
     pub fn push(&mut self, frame_db: f32) -> f32 {
-        let fall = METER_FALL_DB_PER_S * FRAME_LEN as f32 / crate::SAMPLE_RATE as f32;
+        let fall = METER_FALL_DB_PER_S * FRAME_S;
         self.db = frame_db.max(self.db - fall).max(-120.);
         self.db
     }

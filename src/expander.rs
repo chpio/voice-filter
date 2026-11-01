@@ -7,7 +7,7 @@ use crate::dsp::{db_to_gain, ramp};
 use crate::level;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
-use crate::{FRAME_LEN, SAMPLE_RATE};
+use crate::{FRAME_LEN, FRAME_S, SAMPLE_RATE};
 
 /// Keeps the noise down in speech pauses: what the noise suppression leaves of it, raised by the
 /// AGC and the make-up gain of the compressor. It turns everything down by its range while nobody
@@ -128,7 +128,7 @@ impl Stage for Expander {
             self.holding = self.holding.saturating_sub(FRAME_LEN);
             0.
         } else {
-            let step = range / RELEASE_S * FRAME_LEN as f32 / SAMPLE_RATE as f32;
+            let step = range / RELEASE_S * FRAME_S;
             (previous - step).max(-range)
         };
         if previous == self.gain_db {

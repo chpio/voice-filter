@@ -32,6 +32,8 @@ pub mod volume;
 pub const SAMPLE_RATE: u32 = 48000;
 /// The samples per frame, 10 ms at [`SAMPLE_RATE`]; the hop size of DeepFilterNet3.
 pub const FRAME_LEN: usize = 480;
+/// The length of a frame in seconds, 10 ms.
+pub const FRAME_S: f32 = FRAME_LEN as f32 / SAMPLE_RATE as f32;
 
 /// A number of samples at [`SAMPLE_RATE`] in milliseconds.
 pub fn samples_ms(samples: f64) -> f64 {

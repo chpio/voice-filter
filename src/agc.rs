@@ -2,12 +2,12 @@ use ::std::sync::Arc;
 
 use ::anyhow::{Result, ensure};
 
+use crate::FRAME_S;
 use crate::denoise::{Speech, SpeechReader};
 use crate::dsp::{db_to_gain, ramp};
 use crate::level::{self, NoiseFloor};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
-use crate::{FRAME_LEN, SAMPLE_RATE};
 
 /// Automatic gain control: brings the speech to a constant level, whatever the microphone and the
 /// distance to it. It follows the level of the speech only, so it keeps its gain in the pauses
@@ -72,8 +72,6 @@ const LEVEL_TAU: f32 = 0.3;
 /// down, so loud speech isn't too loud for long.
 const RISE_DB_PER_S: f32 = 6.;
 const FALL_DB_PER_S: f32 = 30.;
-
-const FRAME_S: f32 = FRAME_LEN as f32 / SAMPLE_RATE as f32;
 
 impl Agc {
     pub fn new() -> Self {

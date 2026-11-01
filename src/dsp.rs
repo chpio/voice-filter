@@ -8,6 +8,11 @@ pub fn db_to_gain(db: f32) -> f32 {
     (db * (::std::f32::consts::LN_10 / 20.)).exp()
 }
 
+/// The level of a gain factor in dB, the inverse of [`db_to_gain`].
+pub fn gain_to_db(gain: f32) -> f32 {
+    20. * gain.log10()
+}
+
 /// The level of a power (a mean square) in dB, −120 for silence.
 pub fn power_db(power: f32) -> f32 {
     10. * (power + 1e-12).log10()

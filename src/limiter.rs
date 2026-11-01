@@ -1,6 +1,6 @@
 use ::anyhow::Result;
 
-use crate::dsp::{db_to_gain, smoothing};
+use crate::dsp::{db_to_gain, gain_to_db, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -60,7 +60,7 @@ impl Stage for Limiter {
 
     /// Its gain at the end of the frame, in dB.
     fn trace(&self) -> Option<(&'static str, f32)> {
-        Some(("gain", 20. * self.gain.log10()))
+        Some(("gain", gain_to_db(self.gain)))
     }
 
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
