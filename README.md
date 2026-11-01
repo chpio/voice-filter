@@ -28,9 +28,12 @@ A single process reads the microphone, runs it through a chain of stages in 10 m
 plays the result into the virtual microphone:
 
 ```text
- Microphone ──▶ echo ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──▶ agc ──▶ compressor ──▶ expander ──▶ limiter ──▶ "Voice Filter" ──▶ apps
-                ▲
- Speakers ──────┘ (what they play, as the reference)
+ Microphone ──▶ echo ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──┐
+                ▲                                                  │
+ Speakers ──────┘ (what they play, as the reference)               │
+                                                                   │
+ ┌─────────────────────────────────────────────────────────────────┘
+ └─▶ agc ──▶ compressor ──▶ expander ──▶ limiter ──▶ "Voice Filter" ──▶ apps
 ```
 
 | Stage        | What it does                                                                      | Settings                               | Latency |
@@ -70,9 +73,12 @@ the PipeWire development files and, for the GNOME app, GTK 4 and libadwaita:
 | Debian/Ubuntu | `clang libpipewire-0.3-dev libgtk-4-dev libadwaita-1-dev` |
 
 ```bash
-cargo install --locked voice-filter                         # from crates.io, into ~/.cargo/bin
-cargo install --locked voice-filter --no-default-features   # without the GNOME app, no GTK needed
-cargo install --locked --path .                             # from a clone of the repository
+# from crates.io, into ~/.cargo/bin
+cargo install --locked voice-filter
+# the same without the GNOME app, no GTK needed
+cargo install --locked voice-filter --no-default-features
+# from a clone of the repository
+cargo install --locked --path .
 ```
 
 Built from the repository, the echo cancellation doesn't allocate memory while it runs. The
@@ -83,11 +89,16 @@ likely. That goes away with sonora's next release.
 ## Usage
 
 ```bash
-voice-filter inputs                   # lists the microphones, the chosen one marked with *
-voice-filter outputs                  # lists the output devices (speakers), the same way
-voice-filter run --input <name> --output <name>   # provides "Voice Filter", until Ctrl+C
-voice-filter run --verbose            # prints the latency and the dropouts every 10 s
-voice-filter ui                       # opens the GNOME app for a running `voice-filter run`
+# lists the microphones, the chosen one marked with *
+voice-filter inputs
+# lists the output devices (speakers), the same way
+voice-filter outputs
+# provides "Voice Filter", until Ctrl+C
+voice-filter run --input <name> --output <name>
+# the same, printing the latency and the dropouts every 10 s
+voice-filter run --verbose
+# opens the GNOME app for a running `voice-filter run`
+voice-filter ui
 ```
 
 1. Start `voice-filter run`. Without `--input` it reads the default input. A microphone given with
@@ -159,7 +170,8 @@ The info button on a row explains what the stage, the setting or the status valu
 
 ```bash
 voice-filter process in.wav out.wav
-voice-filter process in.wav out.wav --reference played.wav   # with what the speakers played
+# with what the speakers played, for the echo cancellation
+voice-filter process in.wav out.wav --reference played.wav
 ```
 
 Runs a WAV file (48 kHz, mixed down to mono) through the same chain and writes the result, lined
@@ -170,7 +182,8 @@ cancellation, record the microphone and the monitor of the speakers at the same 
 
 ```bash
 pw-record --target <microphone> --rate 48000 --channels 1 in.wav &
-pw-record --target <speakers> -P '{ stream.capture.sink = true }' --rate 48000 --channels 1 played.wav &
+pw-record --target <speakers> -P '{ stream.capture.sink = true }' \
+    --rate 48000 --channels 1 played.wav &
 ```
 
 ### D-Bus
@@ -201,10 +214,11 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 For example with `busctl`:
 
 ```bash
-busctl --user introspect net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1
-busctl --user get-property net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 Parameters
-busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetParameter ssd denoise limit 12
-busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetStageEnabled sb agc false
+vf="net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1"
+busctl --user introspect $vf
+busctl --user get-property $vf Parameters
+busctl --user call $vf SetParameter ssd denoise limit 12
+busctl --user call $vf SetStageEnabled sb agc false
 ```
 
 The interface may still change before 1.0.
@@ -213,9 +227,11 @@ The interface may still change before 1.0.
 
 ```bash
 cargo test --workspace
-cargo test --release -p deep-filter-rt   # the model runs about 10x faster in release builds
+# the model runs about 10x faster in release builds
+cargo test --release -p deep-filter-rt
 cargo clippy --workspace --all-targets
-cargo bench --bench stages [-- in.wav]   # processing time and allocations of every stage per frame
+# processing time and allocations of every stage per frame
+cargo bench --bench stages [-- in.wav]
 ```
 
 The design, the choice of models, the latency measurements and the roadmap are in
