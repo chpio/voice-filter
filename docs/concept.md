@@ -172,7 +172,7 @@ A recording from the USB microphone (speech at about −36 dBFS RMS, rather quie
 Separating by the speaker's own voice (target speaker extraction or personalized speech enhancement, conditioned on an enrollment of a few seconds of the voice) would be the actual solution. Open options as of 2026-10:
 
 - [VoxLock](https://github.com/arbazsiddiqui/voxlock): a 27 M parameter causal band-split RNN (from the REAL-TSE baseline), ONNX, 16 kHz, 24 ms plus chunk latency; but 60–110 % of a core by its own numbers (DeepFilterNet3 needs 2.5 %), and no license stated for the weights.
-- Personalized DeepFilterNet2 ([arXiv 2404.08022](https://arxiv.org/abs/2404.08022)), Personalized PercepNet, pDCCRN: papers without released weights. DeepFilterNet3 with a speaker embedding would fit the chain best, but means training it ourselves.
+- Personalized DeepFilterNet2 ([arXiv 2404.08022](https://arxiv.org/abs/2404.08022)), Personalized PercepNet, pDCCRN: papers without released weights. DeepFilterNet3 with a speaker embedding would fit the chain best, but means training it ourselves, which is ruled out (see the decisions under [Risks and open questions](#risks-and-open-questions)).
 - [WeSep](https://github.com/wenet-e2e/wesep): a toolkit for target speaker extraction, no pretrained models released yet.
 
 ## Voice enhancement
@@ -242,6 +242,7 @@ The biggest risk is latency: all stages together must stay live.
 - Echo cancellation: in our own process, not PipeWire's module (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
 - No ML restoration: it would cost a GPU or a whole CPU core, the chain stays slim (see [Voice enhancement](#voice-enhancement)).
+- No models trained ourselves, only released ones: personalized denoising that keeps only the user's voice needs an open model that runs in real time on little CPU, not DeepFilterNet3 trained with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
 - No presets for voice enhancement (such as "Call", "Stream", "Podcast"): there are no measurements of what each use needs, the defaults and the sliders in the app are enough.
 - No package for Arch (AUR).
 
@@ -253,7 +254,6 @@ The biggest risk is latency: all stages together must stay live.
 - [ ] A filter for steady tones before DeepFilterNet3 (fans), following their frequency as it changes with the load, so it doesn't take them for speech.
 - [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
-- [ ] Personalized denoising that keeps only the user's voice: wait for an open model that runs in real time on little CPU, or train DeepFilterNet3 with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
 - [ ] Can the weights be stored as fp16 or quantized to int8 (about half or a quarter of the size) without audible loss, and does `tract` support it for all operators?
 
 ## Roadmap
