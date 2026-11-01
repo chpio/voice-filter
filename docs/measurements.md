@@ -27,6 +27,27 @@ were measured, so they can be repeated. The decisions themselves are in the [con
   frame that comes out below −45 dBFS while the chain without the high-pass in front (echo
   cancellation off) keeps it above −30 dBFS.
 
+**Repeating them:** `examples/batch.rs` runs every file of a directory through the chain or some of
+its stages (`--only`, `--off`, `--set`, `--thresholds` for the skipping), each with a fresh state,
+`scripts/score.py` scores the outputs against the clean files, `examples/trace.rs` traces a
+recording per frame and `scripts/trace_stats.py` takes the pauses, the noise in them and the lost
+speech from traces:
+
+```bash
+# the Python packages, once (or `uv run scripts/score.py …`, which reads them from the script)
+python3 -m venv .venv && .venv/bin/pip install numpy scipy soundfile pesq pystoi
+# VoiceBank-DEMAND: two variants of the noise suppression alone, then their scores
+cargo run --release --example batch -- noisy_testset_wav/ out/default/ --only denoise
+cargo run --release --example batch -- noisy_testset_wav/ out/upstream/ --only denoise \
+  --thresholds -10,30,20
+.venv/bin/python scripts/score.py clean_testset_wav/ noisy_testset_wav/ out/default/ out/upstream/
+# a recording: a trace of each variant, the first one is what the others are measured against
+cargo run --release --example trace -- call.wav --off echo --interval 0.01 > now.tsv
+cargo run --release --example trace -- call.wav --off echo --interval 0.01 \
+  --set highpass.freq=60 > hp60.tsv
+.venv/bin/python scripts/trace_stats.py now.tsv hp60.tsv --events 5
+```
+
 ## Skipping frames by the estimated SNR
 
 Upstream's real-time defaults skip parts of the model by its estimate of the local SNR: zeros

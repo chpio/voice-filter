@@ -1,5 +1,7 @@
 /target/
 /CLAUDE.local.md
+# the Python packages of scripts/
+/.venv/
 
 # test recordings for the offline mode
 /*.wav

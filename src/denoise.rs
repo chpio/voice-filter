@@ -246,6 +246,22 @@ impl Denoise {
         self
     }
 
+    /// Skips parts of the model by its estimate of the local SNR (dB), as upstream's real-time
+    /// defaults do (−10, 30 and 20 dB), for measurements: zeros instead of its gains below
+    /// `zeros_below_db`, the frame unchanged above `unchanged_above_db`, no deep filter above
+    /// `no_df_above_db`. [`Denoise::new`] has −10 dB and nothing skipped above.
+    pub fn with_thresholds(
+        mut self,
+        zeros_below_db: f32,
+        unchanged_above_db: f32,
+        no_df_above_db: f32,
+    ) -> Self {
+        self.df.min_db_thresh = zeros_below_db;
+        self.df.max_db_erb_thresh = unchanged_above_db;
+        self.df.max_db_df_thresh = no_df_above_db;
+        self
+    }
+
     /// How much speech the model hears, updated with every frame it processes.
     pub fn speech(&self) -> Arc<Speech> {
         self.speech.clone()

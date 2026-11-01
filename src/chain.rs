@@ -25,12 +25,18 @@ use crate::stage::{Frame, Stage};
 /// pauses for speech (AEC3 filters it out too, but not while the echo cancellation is off), and
 /// the microphone the echo cancellation hands the noise suppression is filtered with it.
 pub fn build(atten_lim: Option<f32>) -> Result<(Chain, Reference)> {
-    let (echo, reference) = Echo::new();
-    let denoise = Denoise::new()?.with_sidechain(echo.sidechain());
-    let denoise = match atten_lim {
+    let denoise = Denoise::new()?;
+    build_with(match atten_lim {
         Some(db) => denoise.with_atten_lim(db),
         None => denoise,
-    };
+    })
+}
+
+/// [`build`] with a noise suppression the caller set up, e.g. with other thresholds for
+/// measurements ([`Denoise::with_thresholds`]).
+pub fn build_with(denoise: Denoise) -> Result<(Chain, Reference)> {
+    let (echo, reference) = Echo::new();
+    let denoise = denoise.with_sidechain(echo.sidechain());
     // the estimate of the noise suppression comes its latency ahead of the audio
     let agc = Agc::new().listening(denoise.speech(), denoise.latency() / FRAME_LEN)?;
     let compressor = Compressor::new().following(agc.target());

@@ -241,7 +241,13 @@ cargo bench --bench stages [-- in.wav]
 # level after every stage and the gains over time, as TSV, e.g. to try settings
 cargo run --release --example trace -- in.wav \
   [--set expander.threshold=6] [--off echo] > trace.tsv
+# every WAV of a directory through the chain or some stages, e.g. to score them on a test set
+cargo run --release --example batch -- in/ out/ [--only denoise] [--set denoise.level=-30]
+.venv/bin/python scripts/score.py clean/ noisy/ out/
 ```
+
+How the defaults of the noise suppression were measured, and how to repeat it, is in
+[docs/measurements.md](docs/measurements.md).
 
 The design, the choice of models, the latency measurements and the roadmap are in
 [docs/concept.md](docs/concept.md). The DeepFilterNet3 inference is vendored as its own crate,
