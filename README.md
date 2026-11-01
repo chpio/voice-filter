@@ -19,7 +19,7 @@ your voice without the echo of your speakers and the background noise, with a cl
 - **Test offline** with WAV files: the same chain, with the latency and processing time of every
   stage
 
-> **Status:** early and not released yet. Echo cancellation, noise suppression and voice
+> **Status:** early, 0.1.0 is the first release. Echo cancellation, noise suppression and voice
 > enhancement work. What's still open is in the [roadmap](docs/concept.md#roadmap).
 
 ## How it works
@@ -45,8 +45,8 @@ plays the result into the virtual microphone:
 | `expander`   | Turns the speech pauses down by 20 dB, opens for speech (level or DeepFilterNet3) | `range`, `threshold`, `hold`, `level`  |       – |
 | `limiter`    | Keeps the peaks below −1 dBFS                                                     | `ceiling`, `release`                   |    1 ms |
 
-The values above are the defaults. The settings change them while it runs, but aren't kept for
-the next run yet.
+The values above are the defaults. The settings change them while it runs and are kept for the
+next runs.
 
 Every stage can be switched off while it runs. A stage that is off is skipped (it uses no CPU) and
 its input plays instead, delayed by the stage's latency, so the total latency never changes.
@@ -60,9 +60,9 @@ Most of it is DeepFilterNet3's lookahead. The GNOME app shows the current value.
 
 ## Installation
 
-There are no packages yet, so build it from source. You need Rust 1.96 or newer (from
-[rustup](https://rustup.rs) if your distribution's is older), clang, the PipeWire development
-files and, for the GNOME app, GTK 4 and libadwaita:
+There are no distribution packages yet, install it with Cargo, from crates.io or from source. You
+need Rust 1.96 or newer (from [rustup](https://rustup.rs) if your distribution's is older), clang,
+the PipeWire development files and, for the GNOME app, GTK 4 and libadwaita:
 
 | Distribution  | Packages                                                  |
 | ------------- | --------------------------------------------------------- |
@@ -70,9 +70,15 @@ files and, for the GNOME app, GTK 4 and libadwaita:
 | Debian/Ubuntu | `clang libpipewire-0.3-dev libgtk-4-dev libadwaita-1-dev` |
 
 ```bash
-cargo install --path .                          # installs voice-filter into ~/.cargo/bin
-cargo install --path . --no-default-features    # without the GNOME app, no GTK needed
+cargo install --locked voice-filter                         # from crates.io, into ~/.cargo/bin
+cargo install --locked voice-filter --no-default-features   # without the GNOME app, no GTK needed
+cargo install --locked --path .                             # from a clone of the repository
 ```
+
+Built from the repository, the echo cancellation doesn't allocate memory while it runs. The
+version on crates.io still uses the last release of sonora (the Rust port of AEC3), which
+allocates in every 10 ms frame. It sounds the same, but on a busy system it makes dropouts more
+likely. That goes away with sonora's next release.
 
 ## Usage
 
@@ -201,7 +207,7 @@ busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.Vo
 busctl --user call net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1 SetStageEnabled sb agc false
 ```
 
-The interface may still change until the first release.
+The interface may still change before 1.0.
 
 ## Development
 
