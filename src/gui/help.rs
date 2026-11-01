@@ -174,6 +174,9 @@ const PARAMS: [(&str, &str, &str); 18] = [
     ),
 ];
 
+pub const LISTEN_VOLUME: &str = "How loud you hear yourself. Only for listening: apps get \
+    the voice at the level the filter brings it to.";
+
 pub const INPUT_LEVEL: &str = "How loud the microphone is, before the filter; the bar goes \
     from −60 to 0 dBFS.\n\nThe background noise is its quietest moment in the last 2 seconds, \
     what it picks up while you're silent. Below −60 dBFS is quiet; above −45 dBFS the noise \

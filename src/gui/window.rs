@@ -58,6 +58,10 @@ const POLL: Duration = Duration::from_secs(1);
 const POLL_LEVELS: Duration = Duration::from_millis(100);
 /// The range of the meters, in dBFS.
 const METER_MIN_DB: f64 = -60.;
+/// The width of a slider's scale, that of a meter too, so they line up.
+const SLIDER_WIDTH: i32 = 200;
+/// The width of a slider's value in characters, enough for the widest (`-40.0 dBFS`).
+const VALUE_CHARS: i32 = 10;
 /// Above this noise floor of the microphone (dBFS), for [`NOISY_POLLS`] polls in a row, the window
 /// says that it's noisy: the noise suppression leaves a hiss then (heard on a built-in microphone
 /// at −27 dBFS).
@@ -115,7 +119,8 @@ struct Widgets {
     echo_frames: Cell<(f64, f64)>,
     /// Its switch switches listening, it expands to its volume and whether it's kept.
     listen: adw::ExpanderRow,
-    listen_volume: gtk::Scale,
+    /// The slider of the volume of Listen, with its value, and the scale in it.
+    listen_volume: (gtk::Box, gtk::Scale),
     keep_listen: adw::SwitchRow,
     /// The meters of the microphone (its noise floor in the subtitle) and of the output.
     input_level: (adw::ActionRow, gtk::LevelBar),
@@ -212,7 +217,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         group
     };
     let volume_row = adw::ActionRow::builder().title("Volume").build();
-    volume_row.add_suffix(&widgets.listen_volume);
+    volume_row.add_suffix(&widgets.listen_volume.0);
+    volume_row.add_suffix(&help::button(help::LISTEN_VOLUME));
     widgets.listen.add_row(&volume_row);
     widgets.listen.add_row(&widgets.keep_listen);
     let page = adw::PreferencesPage::new();
@@ -252,7 +258,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Voice Filter")
-        .default_width(480)
+        .default_width(600)
         .default_height(720)
         .content(&toolbar)
         .build();
@@ -271,7 +277,7 @@ fn meter_row(title: &str, help: &str) -> (adw::ActionRow, gtk::LevelBar) {
     let bar = gtk::LevelBar::builder()
         .min_value(0.)
         .max_value(1.)
-        .width_request(220)
+        .width_request(SLIDER_WIDTH)
         .valign(gtk::Align::Center)
         .build();
     // one color: the default offsets color the low end like a warning
@@ -352,7 +358,7 @@ fn connect_controls(widgets: &Rc<Widgets>) {
         );
     });
     let weak = Rc::downgrade(widgets);
-    widgets.listen_volume.connect_value_changed(move |scale| {
+    widgets.listen_volume.1.connect_value_changed(move |scale| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
@@ -536,8 +542,14 @@ fn listen_volume() -> Parameter {
     }
 }
 
-/// The slider of a parameter, the default marked.
-fn slider(param: &Parameter) -> gtk::Scale {
+/// The slider of a parameter, the default marked: its value and the scale, in a box for the row,
+/// and the scale.
+///
+/// Both have a fixed width, the same in every row, so the sliders line up: expanding, the row
+/// shared its width between the title and the slider by their natural widths, a long title made
+/// the slider shorter, and the value drawn by the scale itself made it shorter by the width of
+/// the value's text.
+fn slider(param: &Parameter) -> (gtk::Box, gtk::Scale) {
     let scale = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
         param.min,
@@ -545,22 +557,35 @@ fn slider(param: &Parameter) -> gtk::Scale {
         param.step,
     );
     let digits = digits(param.step);
-    scale.set_draw_value(true);
-    scale.set_value_pos(gtk::PositionType::Left);
     scale.set_digits(digits as i32);
-    let unit = param.unit.clone();
-    scale.set_format_value_func(move |_, value| format_value(value, digits, &unit));
     scale.add_mark(param.default, gtk::PositionType::Bottom, None);
-    scale.set_width_request(220);
-    scale.set_hexpand(true);
+    scale.set_width_request(SLIDER_WIDTH);
     scale.set_valign(gtk::Align::Center);
+    // right-aligned next to the scale, with digits of the same width, so it doesn't jump
+    let value = gtk::Label::builder()
+        .width_chars(VALUE_CHARS)
+        .xalign(1.)
+        .valign(gtk::Align::Center)
+        .css_classes(["numeric"])
+        .build();
+    let unit = param.unit.clone();
+    scale.connect_value_changed(glib::clone!(
+        #[weak]
+        value,
+        move |scale| value.set_label(&format_value(scale.value(), digits, &unit))
+    ));
     scale.set_value(param.value);
-    scale
+    // set_value doesn't notify when the value is already the scale's minimum
+    value.set_label(&format_value(scale.value(), digits, &param.unit));
+    let slider = gtk::Box::builder().spacing(6).build();
+    slider.append(&value);
+    slider.append(&scale);
+    (slider, scale)
 }
 
 /// The slider of a parameter of a stage, sending what the user sets.
-fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
-    let scale = slider(param);
+fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> (gtk::Box, gtk::Scale) {
+    let (slider, scale) = slider(param);
     let (stage, name) = (param.stage.clone(), param.name.clone());
     let weak = widgets.clone();
     scale.connect_value_changed(move |scale| {
@@ -572,7 +597,7 @@ fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
             proxy.set_parameter(&stage, &name, value).await
         });
     });
-    scale
+    (slider, scale)
 }
 
 /// Builds the rows of the stages for the stages and parameters of `status`, unless they were
@@ -646,9 +671,9 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                 let scales = params
                     .iter()
                     .map(|param| {
-                        let scale = scale(&weak, param);
+                        let (slider, scale) = scale(&weak, param);
                         let param_row = adw::ActionRow::builder().title(&param.title).build();
-                        param_row.add_suffix(&scale);
+                        param_row.add_suffix(&slider);
                         if let Some(text) = help::param(name, &param.name) {
                             param_row.add_suffix(&help::button(text));
                         }
@@ -841,7 +866,7 @@ fn show(widgets: &Widgets, status: &Status) {
     show_levels(widgets, status);
     widgets.listen.set_enable_expansion(status.listen);
     widgets.keep_listen.set_active(status.keep_listen);
-    let volume = &widgets.listen_volume;
+    let volume = &widgets.listen_volume.1;
     if (volume.value() - status.listen_volume).abs() >= 0.5 && !volume.has_focus() {
         volume.set_value(status.listen_volume);
     }
