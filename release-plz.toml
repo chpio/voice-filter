@@ -2,12 +2,13 @@
 
 [workspace]
 # Only releases for changes users notice, the same commits that end up in the changelog: features,
-# fixes and dependency updates (`chore(deps): …`, as Renovate writes them, also by hand). Commits
-# that don't touch a file of the package (e.g. Renovate's action updates) are left out anyway.
+# fixes, performance improvements and dependency updates (`chore(deps): …`, as Renovate writes
+# them, also by hand). Commits that don't touch a file of the package (e.g. Renovate's action
+# updates) are left out anyway.
 # Release-plz doesn't compare Cargo.lock with the released package, so a commit that only changes
 # it counts only after a commit that changes the package; if there's none, release-plz adds a
 # commit `chore: update Cargo.lock dependencies` (or `Cargo.toml`) on its own.
-release_commits = '^(feat|fix|chore\(deps\)|chore: update Cargo\.(toml|lock) dependencies)'
+release_commits = '^(feat|fix|perf|chore\(deps\)|chore: update Cargo\.(toml|lock) dependencies)'
 pr_name = "chore: bump version (v{{ version }})"
 pr_branch_prefix = "release/"
 
@@ -33,6 +34,7 @@ body = """
 ## {{ version }}
 {%- set features = commits | filter(attribute="group", value="features") %}
 {%- set fixes = commits | filter(attribute="group", value="fixes") %}
+{%- set performance = commits | filter(attribute="group", value="performance") %}
 {%- if features | length > 0 %}
 
 ### Features
@@ -44,6 +46,13 @@ body = """
 
 ### Fixes
 {% for commit in fixes %}
+* {{ commit.message }}
+{%- endfor %}
+{%- endif %}
+{%- if performance | length > 0 %}
+
+### Performance
+{% for commit in performance %}
 * {{ commit.message }}
 {%- endfor %}
 {%- endif %}
@@ -59,6 +68,7 @@ sort_commits = "oldest"
 commit_parsers = [
     { message = "^feat", group = "features" },
     { message = "^fix", group = "fixes" },
+    { message = "^perf", group = "performance" },
     { message = '^(chore\(deps\)|chore: update Cargo\.(toml|lock) dependencies)', group = "deps" },
     { message = ".*", skip = true },
 ]
