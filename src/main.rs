@@ -3,19 +3,9 @@ use ::std::process::ExitCode;
 
 use ::anyhow::Result;
 use ::clap::{Parser, Subcommand};
-use ::voice_filter::agc::Agc;
-use ::voice_filter::chain::Chain;
-use ::voice_filter::compressor::Compressor;
-use ::voice_filter::deesser::DeEsser;
-use ::voice_filter::denoise::{self, Denoise};
-use ::voice_filter::echo::{Echo, Reference};
-use ::voice_filter::equalizer::Equalizer;
-use ::voice_filter::expander::Expander;
-use ::voice_filter::highpass::HighPass;
-use ::voice_filter::limiter::Limiter;
+use ::voice_filter::denoise;
 use ::voice_filter::param::Param;
-use ::voice_filter::stage::Stage;
-use ::voice_filter::{FRAME_LEN, live, offline, settings};
+use ::voice_filter::{chain, live, offline, settings};
 
 /// Live voice filter for PipeWire.
 #[derive(Parser)]
@@ -112,30 +102,6 @@ fn main() -> Result<ExitCode> {
     let args = Args::parse();
     let settings_dir = settings::dir();
     let settings_dir = settings_dir.as_deref();
-    let chain = || -> Result<(Chain, Reference)> {
-        let (echo, reference) = Echo::new();
-        let denoise = Denoise::new()?;
-        let denoise = match args.atten_lim {
-            Some(db) => denoise.with_atten_lim(db),
-            None => denoise,
-        };
-        // the estimate of the noise suppression comes its latency ahead of the audio
-        let agc = Agc::new().listening(denoise.speech(), denoise.latency() / FRAME_LEN)?;
-        let compressor = Compressor::new().following(agc.target());
-        let expander = Expander::new().listening(denoise.speech());
-        let chain = Chain::new(vec![
-            Box::new(echo),
-            Box::new(denoise),
-            Box::new(HighPass::new()),
-            Box::new(Equalizer::new()),
-            Box::new(DeEsser::new()),
-            Box::new(agc),
-            Box::new(compressor),
-            Box::new(expander),
-            Box::new(Limiter::new()),
-        ]);
-        Ok((chain, reference))
-    };
     match args.command {
         Command::Run { input, output } => {
             let input = device(
@@ -158,7 +124,7 @@ fn main() -> Result<ExitCode> {
                 Some(output) => eprintln!("Removing the echo of {output}"),
                 None => eprintln!("Removing the echo of the default output"),
             }
-            let (chain, reference) = chain()?;
+            let (chain, reference) = chain::build(args.atten_lim)?;
             if let Some(dir) = settings_dir {
                 let (switches, params) = (chain.switches(), chain.params());
                 for warning in settings::restore_chain(dir, &switches, &params)? {
@@ -185,7 +151,7 @@ fn main() -> Result<ExitCode> {
             output,
             reference: played,
         } => {
-            let (mut chain, mut reference) = chain()?;
+            let (mut chain, mut reference) = chain::build(args.atten_lim)?;
             let reference = played.as_deref().map(|path| (&mut reference, path));
             let report = offline::process_file(&mut chain, &input, &output, reference)?;
             println!("{report}");

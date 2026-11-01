@@ -4,9 +4,46 @@ use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::anyhow::Result;
 
 use crate::FRAME_LEN;
+use crate::agc::Agc;
+use crate::compressor::Compressor;
+use crate::deesser::DeEsser;
+use crate::denoise::Denoise;
 use crate::dsp::ramp;
+use crate::echo::{Echo, Reference};
+use crate::equalizer::Equalizer;
+use crate::expander::Expander;
+use crate::highpass::HighPass;
+use crate::limiter::Limiter;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
+
+/// The chain of the filter, as `run` and `process` use it: echo, denoise, highpass, eq, deesser,
+/// agc, compressor, expander and limiter, the noise suppression with the attenuation limit
+/// `atten_lim` (dB), if given. With the reference to feed the echo canceller.
+pub fn build(atten_lim: Option<f32>) -> Result<(Chain, Reference)> {
+    let (echo, reference) = Echo::new();
+    let denoise = Denoise::new()?;
+    let denoise = match atten_lim {
+        Some(db) => denoise.with_atten_lim(db),
+        None => denoise,
+    };
+    // the estimate of the noise suppression comes its latency ahead of the audio
+    let agc = Agc::new().listening(denoise.speech(), denoise.latency() / FRAME_LEN)?;
+    let compressor = Compressor::new().following(agc.target());
+    let expander = Expander::new().listening(denoise.speech());
+    let chain = Chain::new(vec![
+        Box::new(echo),
+        Box::new(denoise),
+        Box::new(HighPass::new()),
+        Box::new(Equalizer::new()),
+        Box::new(DeEsser::new()),
+        Box::new(agc),
+        Box::new(compressor),
+        Box::new(expander),
+        Box::new(Limiter::new()),
+    ]);
+    Ok((chain, reference))
+}
 
 /// The stages in the order the signal runs through them. Each one can be switched off at runtime
 /// (see [`Chain::switches`]) without changing the latency: its input is played instead, delayed by

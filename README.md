@@ -200,6 +200,7 @@ The interface may still change until the first release.
 cargo test --workspace
 cargo test --release -p deep-filter-rt   # the model runs about 10x faster in release builds
 cargo clippy --workspace --all-targets
+cargo bench --bench stages [-- in.wav]   # processing time and allocations of every stage per frame
 ```
 
 The design, the choice of models, the latency measurements and the roadmap are in

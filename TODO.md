@@ -31,10 +31,11 @@ Work items that don't change the design; the open design questions and TODOs are
 
 ## Audio path
 
-- [ ] `deep-filter-rt` allocates per frame: `DfTract::process` clones its spectrum tensors into
-  the rolling buffers (`spec_buf.clone()`), and tract may allocate when running the model. Against
-  the rule of no allocations in the audio path; count them like `tests/echo.rs` does and remove
-  them.
+- [ ] `deep-filter-rt` allocates per frame, 866 times (counted on 60 s of speech with a counting
+  allocator): almost all in tract running the model, a few in `DfTract::process` (it clones its
+  spectrum tensors into the rolling buffers, `spec_buf.clone()`, and `DFState` makes its FFT
+  buffers per frame). Against the rule of no allocations in the audio path; the few of our own
+  aren't worth removing alone, tract's need a way to run the model on preallocated tensors.
 
 ## Releases
 
