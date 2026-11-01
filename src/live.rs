@@ -305,14 +305,17 @@ pub fn run(
 const EPIPE: i32 = 32;
 
 const LISTEN_NODE_NAME: &str = "voice-filter-listen";
-/// Its own group, so its streams run in one cycle, and its own link group, so the session manager
-/// may link it to "Voice Filter" (it never links within a link group).
-const LISTEN_GROUP: &str = "voice-filter-listen";
 
 /// Plays what "Voice Filter" outputs on the default output while it lives: a capture stream from
 /// it and a playback stream, with a bridge between them whose only stage is the [`Volume`]. As it
 /// records from "Voice Filter" like an app, the filter runs while listening even if no app
 /// records.
+///
+/// The two streams are in no group: PipeWire puts the nodes of a group (or link group) on one
+/// driver, so the output device would run under the microphone's clock. A Bluetooth headset woken
+/// from suspend that way stayed silent until Listen was switched off and on again. The output
+/// device drives the playback stream itself, and the bridge hands over between the two clocks,
+/// as for the reference of the echo canceller.
 struct Listen {
     _capture: StreamRc,
     _playback: StreamRc,
@@ -335,8 +338,11 @@ impl Listen {
                 // without "Voice Filter" WirePlumber would link the default source, i.e. play
                 // the unfiltered microphone
                 ("node.dont-fallback", "true"),
-                (*pw::keys::NODE_GROUP, LISTEN_GROUP),
-                (*pw::keys::NODE_LINK_GROUP, LISTEN_GROUP),
+                // linked to the default source ("Voice Filter" often is), WirePlumber sets the
+                // target of a stream to follow the default (`target.node` -1) unless it has a
+                // link group or doesn't reconnect, then finds no target and destroys it
+                // (dont-fallback)
+                (*pw::keys::NODE_DONT_RECONNECT, "true"),
             ],
         )?;
         let playback_stream = stream(
@@ -344,11 +350,7 @@ impl Listen {
             LISTEN_NODE_NAME,
             description,
             None,
-            &[
-                (*pw::keys::MEDIA_CATEGORY, "Playback"),
-                (*pw::keys::NODE_GROUP, LISTEN_GROUP),
-                (*pw::keys::NODE_LINK_GROUP, LISTEN_GROUP),
-            ],
+            &[(*pw::keys::MEDIA_CATEGORY, "Playback")],
         )?;
         let mut samples = Vec::with_capacity(MAX_QUANTUM);
         let capture_listener = capture_stream
