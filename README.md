@@ -29,9 +29,9 @@ A single process reads the microphone, runs it through a chain of stages in 10 m
 plays the result into the virtual microphone:
 
 ```text
- Microphone ──▶ echo ──▶ denoise ──▶ highpass ──▶ eq ──▶ deesser ──┐
-                ▲                                                  │
- Speakers ──────┘ (what they play, as the reference)               │
+ Microphone ──▶ highpass ──▶ echo ──▶ denoise ──▶ eq ──▶ deesser ──┐
+                             ▲                                     │
+ Speakers ───────────────────┘ (what they play, as the reference)  │
                                                                    │
  ┌─────────────────────────────────────────────────────────────────┘
  └─▶ agc ──▶ compressor ──▶ expander ──▶ limiter ──▶ "Voice Filter" ──▶ apps
@@ -39,9 +39,9 @@ plays the result into the virtual microphone:
 
 | Stage        | What it does                                                                      | Settings                               | Latency |
 | ------------ | --------------------------------------------------------------------------------- | -------------------------------------- | ------: |
+| `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz, first of all             | `freq`                                 |       – |
 | `echo`       | Removes the echo of the speakers (AEC3, from what they play), keeps the voice     | the speakers, `protect`                |    5 ms |
-| `denoise`    | Removes background noise (DeepFilterNet3)                                         | `limit`                                |   30 ms |
-| `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz                           | `freq`                                 |       – |
+| `denoise`    | Removes background noise (DeepFilterNet3), hears a quiet voice raised to −35 dBFS | `limit`, `level`, `max-gain`           |   30 ms |
 | `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)                | `low-mid`, `presence`, `presence-freq` |       – |
 | `deesser`    | Tames harsh S sounds: turns down the band above 5 kHz while it dominates          | `freq`, `threshold`                    |    1 ms |
 | `agc`        | Brings the voice to a constant level (−18 dBFS), holds it in pauses, hum, typing  | `target`, `max-gain`, `threshold`      |       – |

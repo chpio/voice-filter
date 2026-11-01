@@ -17,9 +17,13 @@ use crate::limiter::Limiter;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
-/// The chain of the filter, as `run` and `process` use it: echo, denoise, highpass, eq, deesser,
+/// The chain of the filter, as `run` and `process` use it: highpass, echo, denoise, eq, deesser,
 /// agc, compressor, expander and limiter, the noise suppression with the attenuation limit
 /// `atten_lim` (dB), if given. With the reference to feed the echo canceller.
+///
+/// The high-pass comes first: the low rumble of a microphone made the noise suppression take
+/// pauses for speech (AEC3 filters it out too, but not while the echo cancellation is off), and
+/// the microphone the echo cancellation hands the noise suppression is filtered with it.
 pub fn build(atten_lim: Option<f32>) -> Result<(Chain, Reference)> {
     let (echo, reference) = Echo::new();
     let denoise = Denoise::new()?.with_sidechain(echo.sidechain());
@@ -32,9 +36,9 @@ pub fn build(atten_lim: Option<f32>) -> Result<(Chain, Reference)> {
     let compressor = Compressor::new().following(agc.target());
     let expander = Expander::new().listening(denoise.speech());
     let chain = Chain::new(vec![
+        Box::new(HighPass::new()),
         Box::new(echo),
         Box::new(denoise),
-        Box::new(HighPass::new()),
         Box::new(Equalizer::new()),
         Box::new(DeEsser::new()),
         Box::new(agc),

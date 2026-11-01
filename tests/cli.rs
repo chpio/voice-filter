@@ -70,9 +70,9 @@ fn processes_a_file_through_the_whole_chain() {
         assert_eq!(
             stages[..10],
             [
+                "highpass",
                 "echo",
                 "denoise",
-                "highpass",
                 "eq",
                 "deesser",
                 "agc",

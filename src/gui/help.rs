@@ -13,13 +13,14 @@ const STAGES: [(&str, &str); 9] = [
     (
         "denoise",
         "A neural network (DeepFilterNet3) separates the voice from the background noise, such \
-         as fans, keyboards or traffic, and removes the noise.\n\nAdds 30 ms of latency, the \
-         most of all stages.",
+         as fans, keyboards or traffic, and removes the noise. It hears a quiet microphone \
+         raised to a level it works at.\n\nAdds 30 ms of latency, the most of all stages.",
     ),
     (
         "highpass",
         "Removes everything below its frequency: rumble, footfall, bumps against the desk and \
-         the pops of P and B sounds. The voice itself lies above it.",
+         the pops of P and B sounds. The voice itself lies above it. It comes first, so the \
+         noise suppression doesn't take the rumble for a voice.",
     ),
     (
         "eq",
@@ -60,7 +61,7 @@ const STAGES: [(&str, &str); 9] = [
 ];
 
 /// What each parameter changes, by stage and parameter name.
-const PARAMS: [(&str, &str, &str); 19] = [
+const PARAMS: [(&str, &str, &str); 21] = [
     (
         "echo",
         "protect",
@@ -77,6 +78,20 @@ const PARAMS: [(&str, &str, &str); 19] = [
         "How far it may turn the noise down. 100 dB removes it entirely; around 20 to 30 dB \
          keeps a little of the background, which sounds more natural and loses less of the \
          voice.",
+    ),
+    (
+        "denoise",
+        "level",
+        "The level the noise suppression hears your voice at. It takes a voice that's too quiet \
+         for noise and mutes it, so it raises a quiet microphone to this level first and takes \
+         the gain back after it: what comes out stays as loud. Higher keeps more of a quiet \
+         voice, but lets more noise through in the pauses.",
+    ),
+    (
+        "denoise",
+        "max-gain",
+        "How far it may raise a quiet microphone for the noise suppression. 0 dB switches the \
+         raising off.",
     ),
     (
         "highpass",

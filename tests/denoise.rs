@@ -1,9 +1,9 @@
 mod common;
 
 use ::voice_filter::FRAME_LEN;
-use ::voice_filter::denoise::Denoise;
+use ::voice_filter::denoise::{Denoise, MAX_INPUT_GAIN_DB};
 use ::voice_filter::echo::{Echo, Reference};
-use ::voice_filter::stage::Stage;
+use ::voice_filter::stage::{Frame, Stage};
 use common::Noise;
 
 /// How much `denoise` turns 1 s of the noise down, in dB, compared over the last half.
@@ -169,4 +169,74 @@ fn takes_the_sidechain_only_while_the_speakers_play_and_you_talk() {
         protected(Some(100.), (false, true)),
         protected(None, (false, true))
     );
+}
+
+/// `vowel` 20 dB down (about −46 dBFS) over noise at about −95 dBFS, in frames, and a noise
+/// suppression that hears the voice at −26 dBFS, the level of `vowel`, so it raises it by its
+/// maximum of 20 dB.
+fn quiet_vowel(frames: usize) -> (Vec<Frame>, Denoise) {
+    let mut noise = Noise(0x2545_f491);
+    let input = (0..frames)
+        .map(|i| {
+            let mut frame = noise.frame();
+            for (n, x) in frame.iter_mut().enumerate() {
+                *x = 0.0003 * *x + 0.1 * vowel(i * FRAME_LEN + n);
+            }
+            frame
+        })
+        .collect();
+    let denoise = Denoise::new().unwrap();
+    param(&denoise, "level").set(-26.).unwrap();
+    (input, denoise)
+}
+
+fn param(denoise: &Denoise, name: &str) -> ::voice_filter::param::Param {
+    denoise
+        .params()
+        .into_iter()
+        .find(|param| param.name == name)
+        .unwrap()
+}
+
+#[test]
+fn takes_its_input_gain_off_the_output() {
+    // at a limit of 0 dB the model doesn't run, its output is the raised input, delayed
+    let (input, denoise) = quiet_vowel(300);
+    let mut denoise = denoise.with_atten_lim(0.);
+    let mut output = Vec::new();
+    for frame in &input {
+        let mut frame = *frame;
+        denoise.process(&mut frame).unwrap();
+        output.extend_from_slice(&frame);
+    }
+    let gain = denoise.input_gain_db();
+    assert!(gain > MAX_INPUT_GAIN_DB - 1., "{gain} dB");
+    let input: Vec<f32> = input.concat();
+    let delay = denoise.latency();
+    for (n, (x, y)) in input.iter().zip(&output[delay..]).enumerate() {
+        assert!((x - y).abs() < 1e-6, "sample {n}: {x} in, {y} out");
+    }
+}
+
+#[test]
+fn raises_only_a_quiet_voice() {
+    let (quiet, mut denoise) = quiet_vowel(300);
+    for mut frame in quiet {
+        denoise.process(&mut frame).unwrap();
+    }
+    let gain = denoise.input_gain_db();
+    assert!(gain > MAX_INPUT_GAIN_DB - 1., "{gain} dB");
+    // a loud voice, at its level, and steady noise: not at all
+    let mut loud = Denoise::new().unwrap();
+    for i in 0..300 {
+        let mut frame: Frame = ::std::array::from_fn(|n| vowel(i * FRAME_LEN + n));
+        loud.process(&mut frame).unwrap();
+    }
+    assert_eq!(loud.input_gain_db(), 0.);
+    let mut noisy = Denoise::new().unwrap();
+    let mut noise = Noise(0x2545_f491);
+    for _ in 0..300 {
+        noisy.process(&mut noise.frame().map(|x| 0.1 * x)).unwrap();
+    }
+    assert_eq!(noisy.input_gain_db(), 0.);
 }
