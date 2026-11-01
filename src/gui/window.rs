@@ -877,16 +877,7 @@ fn show_echo(widgets: &Widgets, status: &Status) {
             delay if delay < 4. => "less than 4 ms".to_owned(),
             delay => format!("about {delay:.0} ms"),
         };
-        // 2: something without speech, which the noise suppression removes by itself
-        let playing = if value("playback") == Some(2.) {
-            "music"
-        } else {
-            "speech"
-        };
-        format!(
-            "Hears {playing} from the speakers at {level:.0} dBFS, their echo comes back after \
-             {delay}"
-        )
+        format!("Hears the speakers at {level:.0} dBFS, their echo comes back after {delay}")
     };
     show_value(&widgets.echo_status, &subtitle);
 }

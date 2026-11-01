@@ -22,7 +22,6 @@ use crate::stage::{Frame, Stage};
 /// `atten_lim` (dB), if given. With the reference to feed the echo canceller.
 pub fn build(atten_lim: Option<f32>) -> Result<(Chain, Reference)> {
     let (echo, reference) = Echo::new();
-    let echo = echo.detecting()?;
     let denoise = Denoise::new()?.with_sidechain(echo.sidechain());
     let denoise = match atten_lim {
         Some(db) => denoise.with_atten_lim(db),

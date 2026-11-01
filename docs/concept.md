@@ -116,14 +116,11 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 - Every second or fourth frame instead doesn't work: the model sees the signal two or four times as fast, and at four times it hardly recognizes speech anymore (6 instead of 42 seconds above 0 dB).
 - WebRTC's RNN VAD (in sonora's AGC2, 23 µs per frame) is no alternative: it takes music for speech (88 % of the frames of the music without vocals).
 
-**In the chain** (2026-11-01):
+**In the chain, first version** (2026-11-01): the echo stage handed the noise suppression the raw microphone (delayed by its latency) and what the speakers play: silent, speech or music, the latter two from DeepFilterNet3's encoder on the reference (in runs of 25 of 100 frames, 0.08 ms per frame on average in the echo stage; speech when the playback starts and as soon as a single run is above 5 dB, the 3 s mean missed short passages of the video's speech; music after 10 s without). With speech the adaptive sidechain, with music the sidechain all the time, at Voice Protection (`protect`) 75 %.
 
-- The echo stage hands the noise suppression the raw microphone, delayed by its latency, and what the speakers play: silent (below −70 dBFS for 1 s, or no reference for 1 s), speech or music (`echo::Sidechain`, `Playback`). The app's status row of the echo cancellation says which.
-- It analyzes the reference with DeepFilterNet3's encoder in runs of 25 of 100 frames, only while it isn't silent: 0.08 ms per frame on average in the echo stage on the Bluetooth recording (0.06 before), at most 0.84 ms.
-- Speech in it: the adaptive sidechain, the echo cancellation keeps removing it. Music: the sidechain all the time. Silent: as before, with the deep filter.
-- Asymmetric: speech when the playback starts (it may be a call) and as soon as a single run's mean estimate is above the threshold (the 3 s mean of the measurement above missed short passages of the video's speech: music for 28 of its 84 s), music only after 10 s without (with 5 s still 15 s of the video). With that the video was music for 2 of 84 s (in a stretch of about 12 s without speech), the music speech for 10 s from its start, and once more for 10 s within the 45 s of the song with vocals. A wrong music mode lets the other side hear itself, a wrong speech mode only costs the voice a little while you talk.
-- Parameters of the echo stage: `protect` (Voice Protection, the share of the raw microphone, 25 %; 0 % is the chain as before) and `speech` (the threshold of the runs, 5 dB). The threshold of your voice in speech mode stays at 10 dB.
-- **Heard live:** in music mode more of the music came through than with the echo cancellation alone. Not where the music plays alone (−120 dBFS in every variant), but while you talk: the noise suppression is open then, and between syllables and in bands without the voice the music of the raw microphone passes. The loss above only counted the cells with the voice; the level of the cells without it, against the voice's (*gaps*), on the Bluetooth recording with the music 10 dB louder (instrumental) and the song with vocals at its louder take:
+**Heard live:** with music, more of it came through than with the echo cancellation alone. Measured in three steps:
+
+- *While you talk:* the noise suppression is open then, and between syllables and in bands without the voice the music of the raw microphone passes. The loss above only counted the cells with the voice; the level of the cells without it, against the voice's (*gaps*), on the Bluetooth recording with the music 10 dB louder (instrumental) and the song with vocals at its louder take:
 
   | Voice Protection          | Instrumental: loss, gaps | With vocals: loss, gaps |
   | ------------------------- | ------------------------ | ----------------------- |
@@ -133,9 +130,13 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
   | 50 %                      | 11.8 dB, −28.2 dB        | 14.7 dB, −28.9 dB       |
   | 75 % (the first default)  | 11.7 dB, −26.6 dB        | 14.4 dB, −27.2 dB       |
 
-  Most of the voice it keeps comes from leaving the deep filter out; above 25 % it hardly keeps more of it, while the music in the gaps rises by 5–7 dB. Hence 25 %. Better than the raw microphone would be AEC3's linear output: the echo subtracted, the voice untouched (next step: a patch of sonora that hands it out, first to measure how much of the music it removes).
+  Most of the voice it keeps comes from leaving the deep filter out; above 25 % it hardly keeps more of it, while the music in the gaps rises by 5–7 dB. Hence 25 %.
+- *Better partners for the mix, tried and dropped:* AEC3's linear output (the echo subtracted, before the suppressor; a local patch of sonora, which computes it but doesn't hand it out) removed only 2.4 dB of the music without vocals, 5.4 dB of the song with vocals and 5.5 dB of the video's speech, against 9–22 dB of AEC3 in all: its filter covers only the first ~50 ms of the echo, and the speakers distort. A mix band by band by DeepFilterNet3's gains (the raw microphone where they're high, the echo cancellation's output where they're low) lay on the same trade-off as Voice Protection: voice and music share the bands where the voice is.
+- *While you're silent:* through the whole chain (`trace --wav`, with AGC and compressor) the music without vocals alone came out at −62.5 dBFS without the sidechain, −51.2 dBFS at 25 % and −42.7 dBFS at 75 %: the gains don't close fully on the echo cancellation's output, and what they let through came from the raw microphone (the offline measurement above, 5 s of the echo alone without the AGC, didn't show it).
 
-Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers), listening live (the switching, the noise without the deep filter), and how much of a call's first words gets through after music (10 s after the music started it's music mode, the first run with speech switches back within up to 1 s).
+**In the chain now:** the sidechain only while the speakers play (the reference above −70 dBFS within the last second) and you talk (DeepFilterNet3's SNR above 10 dB, held 200 ms), whatever they play; while you're silent the echo cancellation acts fully (the music alone at −62.5 dBFS again, as without the sidechain), with silent speakers it's as before. With that music and speech from the speakers got the same, so the detector of speech in the reference went, with its parameter; `DfTract::analyze` stays in deep-filter-rt. The parameter of the echo stage: `protect` (25 %; 0 % is the chain as before).
+
+Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers) and listening live: whether the level of the music under the voice is heard to change with the phrases (about 11 dB between talking and pauses), and whether quiet word beginnings switch in time.
 
 - AGC2 against our AGC, compressor and limiter, on another recording: 6 dB quieter with its defaults, the same spread between quiet and loud speech, pauses 5 dB further below the speech, peaks up to 0 dBFS. Not better enough to give up our adjustable chain; the expander would bring the quieter pauses.
 
@@ -273,7 +274,7 @@ Three phases, each usable on its own. Each phase ends with a latency and listeni
    - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; sonora patched to its allocation-free PR until a release)
    - [x] live test: about 30 dB of the echo removed, the reference stream on the speakers' clock
    - [x] offline: what the echo cancellation costs the voice in double talk, the sidechain against it, and DeepFilterNet3's encoder telling speech in the reference from music (see [Double talk](#double-talk-the-echo-cancellation-only-decides))
-   - [x] less choppy speech when talking into the playback: the sidechain in the chain, switched by speech in the reference (offline; live still to listen to)
+   - [x] less choppy speech when talking into the playback: the sidechain in the chain while you talk (Voice Protection, 25 %; live still to listen to)
    - [ ] more recordings for it (rap, a podcast with music, a real call), listening tests
    - [ ] a test with only speech from the speakers, and over a longer call
    - other voices (Hush with Full and Gate modes, or a personalized model) are postponed

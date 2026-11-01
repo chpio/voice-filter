@@ -18,10 +18,10 @@ Work items that don't change the design; the open design questions and TODOs are
   while it let speech from a phone through in an earlier test.
 - [ ] Over a longer call: the reference stream and the microphone run on different clocks, check
   that AEC3 keeps up with the drift.
-- [ ] Less choppy speech when talking into the playback: AEC3's suppressor takes the voice down with
-  the echo. Once sonora's builder takes an AEC3 configuration
-  ([PR #41](https://github.com/dignifiedquire/sonora/pull/41)), patch to it, record talking into a
-  video (microphone and monitor at once) and compare settings offline.
+- [ ] Less choppy speech when talking into the playback: Voice Protection keeps part of the voice
+  while you talk (see the concept, "Double talk"). Still to try: AEC3's own configuration for it
+  (its suppressor while the near end dominates), once sonora's builder takes one
+  ([PR #41](https://github.com/dignifiedquire/sonora/pull/41)).
 - [ ] Keep the echo stage running while it's switched off (0.04 ms per frame): it pauses like the
   others, misses what the speakers play and takes about 4 s to remove the echo fully after being
   switched on again. Needs a way for a stage to opt out of pausing.

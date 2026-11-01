@@ -2317,8 +2317,6 @@ dependencies = [
  "rtrb",
  "serde",
  "sonora",
- "sonora-agc2",
- "sonora-simd",
  "tempfile",
  "zbus",
 ]

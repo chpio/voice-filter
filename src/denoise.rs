@@ -7,7 +7,7 @@ use ::ndarray::Array2;
 
 use crate::atomic::AtomicF32;
 use crate::dsp::ramp;
-use crate::echo::{Playback, Sidechain};
+use crate::echo::Sidechain;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -185,11 +185,11 @@ impl Stage for Denoise {
 
     /// With a [`Sidechain`] (see [`Denoise::with_sidechain`]) the model analyzes the echo
     /// cancellation's output as always, but where the echo cancellation's suppressor would take
-    /// the voice with the echo, its gains go to a mix with the raw microphone instead: all the
-    /// time while the speakers play something without speech (music, which the model removes by
-    /// itself), while they play speech only while you talk (above [`VOICE_DB`], held for
-    /// [`VOICE_HOLD_FRAMES`]). Without the deep filter then: its coefficients are a filter for the
-    /// analyzed spectrum. Switching crossfades the mix over a frame.
+    /// the voice with the echo, its gains go to a mix with the raw microphone instead: while the
+    /// speakers play and you talk (above [`VOICE_DB`], held for [`VOICE_HOLD_FRAMES`]). Without
+    /// the deep filter then: its coefficients are a filter for the analyzed spectrum. Switching
+    /// crossfades the mix over a frame. While you're silent the echo cancellation acts fully: with
+    /// the mix all the time, music came through in the pauses, 11 dB louder.
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let Some(sidechain) = self.sidechain.clone() else {
             return self.process_with(frame, None, true);
@@ -199,13 +199,7 @@ impl Stage for Denoise {
         let fresh = frames != self.sidechain_frames;
         self.sidechain_frames = frames;
         let protect = sidechain.protect();
-        let active = fresh
-            && protect > 0.
-            && match sidechain.playback() {
-                Playback::Silent => false,
-                Playback::Music => true,
-                Playback::Speech => self.voice_hold > 0,
-            };
+        let active = fresh && protect > 0. && sidechain.playing() && self.voice_hold > 0;
         let mix = if active { 1. - protect } else { 1. };
         if mix >= 1. && self.mix_before >= 1. {
             self.process_with(frame, None, true)?;
@@ -235,9 +229,9 @@ impl Stage for Denoise {
     }
 }
 
-/// The estimate above which the sidechain takes it for your voice while the speakers play speech,
-/// in dB: at 5 dB remains of the speech after the echo cancellation opened it too, and left more of
-/// a quiet echo (−83 instead of −89 dBFS).
+/// The estimate above which the sidechain takes it for your voice while the speakers play, in dB:
+/// at 5 dB remains of speech from the speakers after the echo cancellation opened it too, and left
+/// more of a quiet echo (−83 instead of −89 dBFS).
 pub const VOICE_DB: f32 = 10.;
 /// How long it stays with the voice after it, in frames (200 ms).
 pub const VOICE_HOLD_FRAMES: usize = 20;

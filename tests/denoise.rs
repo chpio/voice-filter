@@ -1,6 +1,6 @@
 use ::voice_filter::FRAME_LEN;
 use ::voice_filter::denoise::Denoise;
-use ::voice_filter::echo::{Echo, Reference, SPEECH_HOLD_FRAMES};
+use ::voice_filter::echo::{Echo, Reference};
 use ::voice_filter::stage::{Frame, Stage};
 
 /// White noise at about −25 dBFS, from a fixed seed in `state` (xorshift).
@@ -89,24 +89,54 @@ fn plays_nothing_from_before_a_pause() {
     }
 }
 
-/// What `denoise` makes of `frames` frames of a microphone picking up noise of its own and, with
-/// `played`, noise the speakers play, after `echo` (whose sidechain `denoise` may take).
+/// Something like a voice, sample `n`: harmonics of 150 Hz shaped by two formants (700 and
+/// 1200 Hz), in syllables of 200 ms with 50 ms between them; at a third of its level the model
+/// didn't take it for speech.
+fn vowel(n: usize) -> f32 {
+    let t = n as f32 / ::voice_filter::SAMPLE_RATE as f32;
+    let in_syllable = (t % 0.25) / 0.2;
+    if in_syllable >= 1. {
+        return 0.;
+    }
+    let envelope = (::std::f32::consts::PI * in_syllable).sin();
+    let formant = |f: f32, center: f32| (-((f - center) / 200.).powi(2)).exp();
+    let harmonics: f32 = (1..=20)
+        .map(|k| {
+            let f = 150. * k as f32;
+            (formant(f, 700.) + 0.6 * formant(f, 1200.) + 0.05)
+                * (::std::f32::consts::TAU * f * t).sin()
+        })
+        .sum();
+    0.06 * envelope * harmonics
+}
+
+/// What `denoise` makes of `frames` frames of a microphone picking up a voice ([`vowel`], with
+/// `voice`; quiet noise otherwise) and, with `played`, quiet noise the speakers play (about
+/// −65 dBFS, above the silence of the reference), after `echo` (whose sidechain `denoise` may
+/// take). Louder, AEC3 turned the synthetic voice down by 9 dB, even without its echo, and the
+/// model didn't take it for speech anymore.
 fn after_echo(
     echo: &mut Echo,
     reference: &mut Reference,
     denoise: &mut Denoise,
     frames: usize,
-    played: bool,
+    (voice, played): (bool, bool),
 ) -> Vec<f32> {
     let (mut own, mut speakers) = (0x2545_f491, 0x1234_5678);
     let mut out = Vec::new();
-    for _ in 0..frames {
+    for i in 0..frames {
         let mut frame = noise(&mut own);
+        for (n, x) in frame.iter_mut().enumerate() {
+            *x *= 0.03;
+            if voice {
+                *x += vowel(i * FRAME_LEN + n);
+            }
+        }
         if played {
-            let playing = noise(&mut speakers);
+            let playing = noise(&mut speakers).map(|x| 0.01 * x);
             reference.push(&playing);
             for (x, p) in frame.iter_mut().zip(&playing) {
-                *x += 0.3 * p;
+                *x += p;
             }
         }
         echo.process(&mut frame).unwrap();
@@ -116,39 +146,34 @@ fn after_echo(
     out
 }
 
-#[test]
-fn takes_the_sidechain_only_while_the_speakers_play() {
-    // silent speakers: exactly as without the sidechain
-    let (mut echo, mut reference) = Echo::new();
-    let mut with = Denoise::new().unwrap().with_sidechain(echo.sidechain());
-    let silent = after_echo(&mut echo, &mut reference, &mut with, 200, false);
-    let (mut echo, mut reference) = Echo::new();
-    let mut without = Denoise::new().unwrap();
-    assert_eq!(
-        silent,
-        after_echo(&mut echo, &mut reference, &mut without, 200, false)
-    );
+/// The output of `after_echo` with Voice Protection at `protect` (%), or without the sidechain.
+fn protected(protect: Option<f32>, signals: (bool, bool)) -> Vec<f32> {
+    let (echo, mut reference) = Echo::new();
+    let mut echo = echo;
+    let mut denoise = Denoise::new().unwrap();
+    if let Some(protect) = protect {
+        let params = echo.params();
+        let param = params.iter().find(|p| p.name == "protect").unwrap();
+        param.set(protect).unwrap();
+        denoise = denoise.with_sidechain(echo.sidechain());
+    }
+    // AEC3 suppresses strongly in its first 2.5 s, before it knows the echo path
+    after_echo(&mut echo, &mut reference, &mut denoise, 500, signals)
 }
 
 #[test]
-fn protects_nothing_at_0_percent() {
-    let run = |protect: Option<f32>| {
-        let (echo, mut reference) = Echo::new();
-        let mut echo = echo.detecting().unwrap();
-        // the noise it mutes completely, whatever the gains go to; limited it lets part of it
-        // through, of what the gains go to
-        let mut denoise = Denoise::new().unwrap().with_atten_lim(6.);
-        if let Some(protect) = protect {
-            let params = echo.params();
-            let param = params.iter().find(|p| p.name == "protect").unwrap();
-            param.set(protect).unwrap();
-            denoise = denoise.with_sidechain(echo.sidechain());
-        }
-        // long enough for the noise from the speakers to count as music
-        let frames = SPEECH_HOLD_FRAMES + 200;
-        after_echo(&mut echo, &mut reference, &mut denoise, frames, true)
-    };
-    let plain = run(None);
-    assert_eq!(run(Some(0.)), plain);
-    assert_ne!(run(Some(100.)), plain);
+fn takes_the_sidechain_only_while_the_speakers_play_and_you_talk() {
+    let plain = protected(None, (true, true));
+    // with the speakers and the voice it takes it, at 0 % it's as without
+    assert_ne!(protected(Some(100.), (true, true)), plain);
+    assert_eq!(protected(Some(0.), (true, true)), plain);
+    // silent speakers, or no voice: exactly as without the sidechain
+    assert_eq!(
+        protected(Some(100.), (true, false)),
+        protected(None, (true, false))
+    );
+    assert_eq!(
+        protected(Some(100.), (false, true)),
+        protected(None, (false, true))
+    );
 }
