@@ -202,6 +202,10 @@ pub struct DfTract {
     rolling_spec_buf_y: VecDeque<Tensor>, // Enhanced stage 1 spec buf
     rolling_spec_buf_x: VecDeque<Tensor>, // Noisy spec buf
     skip_counter: usize, // Increment when wanting to skip processing due to low RMS
+    // The STFT states and the spectrum of the signal the gains go to in `process_with`, when it's
+    // not the analyzed one (only their analysis is used, the synthesis is `df_states`')
+    apply_states: Vec<DFState>,
+    apply_spec_buf: Tensor,
 }
 
 impl Default for DfTract {
@@ -271,6 +275,7 @@ impl DfTract {
         };
         let spec_shape = [1, 1, 1, n_freqs, 2];
         let spec_buf = unsafe { Tensor::uninitialized_dt(f32::datum_type(), &spec_shape)? };
+        let apply_spec_buf = spec_buf.clone();
         let erb_buf = TValue::from(unsafe {
             Tensor::uninitialized_dt(f32::datum_type(), &[1, 1, 1, nb_erb])?
         });
@@ -330,6 +335,8 @@ impl DfTract {
             post_filter: rp.post_filter,
             post_filter_beta: rp.post_filter_beta,
             skip_counter: 0,
+            apply_states: Vec::new(),
+            apply_spec_buf,
         };
         m.init()?;
         #[cfg(feature = "timings")]
@@ -408,6 +415,18 @@ impl DfTract {
                 self.df_states.push(state)
             }
         }
+        self.apply_states = (0..ch)
+            .map(|_| {
+                DFState::new(
+                    self.sr,
+                    self.fft_size,
+                    self.hop_size,
+                    self.nb_erb,
+                    self.min_nb_erb_freqs,
+                )
+            })
+            .collect();
+        self.apply_spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.erb_buf = TValue::from(Tensor::zero::<f32>(&[ch, 1, 1, self.nb_erb])?);
         self.cplx_buf = TValue::from(Tensor::zero::<f32>(&[ch, 2, 1, self.nb_df])?);
@@ -501,8 +520,61 @@ impl DfTract {
         Ok((lsnr, m, coefs))
     }
 
+    /// Only the local SNR estimate of a frame, in dB: the STFT and the encoder, without the
+    /// decoders, the deep filter and the synthesis, for a signal that is only analyzed (e.g.
+    /// whether what the speakers play has speech). The rolling buffers stay as they are, so an
+    /// instance does either this or [`Self::process`].
+    pub fn analyze(&mut self, noisy: ArrayView2<f32>) -> Result<f32> {
+        let (ch, n_freqs) = (self.ch, self.n_freqs);
+        for (ns_ch, mut spec, state) in izip!(
+            noisy.axis_iter(Axis(0)),
+            spec_view_mut(&mut self.spec_buf, ch, n_freqs)?.outer_iter_mut(),
+            self.df_states.iter_mut(),
+        ) {
+            state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
+        }
+        let spec = spec_view(&self.spec_buf, ch, n_freqs)?;
+        for (nsy_ch, mut erb_ch, mut cplx_ch, state) in izip!(
+            spec.outer_iter(),
+            tvalue_to_array_view_mut(&mut self.erb_buf).axis_iter_mut(Axis(0)),
+            tvalue_to_array_view_mut(&mut self.cplx_buf).axis_iter_mut(Axis(0)),
+            self.df_states.iter_mut()
+        ) {
+            let nsy_ch = nsy_ch.to_slice().unwrap();
+            state.feat_erb(nsy_ch, self.alpha, erb_ch.as_slice_mut().unwrap());
+            state.feat_cplx_t(
+                &nsy_ch[..self.nb_df],
+                self.alpha,
+                cplx_ch.as_slice_mut().unwrap(),
+            );
+        }
+        let mut enc_emb = self
+            .enc
+            .run(tvec!(self.erb_buf.clone(), self.cplx_buf.clone()))?;
+        Ok(*enc_emb
+            .pop()
+            .unwrap()
+            .try_as_plain_ram()?
+            .to_scalar::<f32>()?)
+    }
+
     /// Process a noisy time domain sample and return the enhanced sample via mutable argument.
-    pub fn process(&mut self, noisy: ArrayView2<f32>, mut enh: ArrayViewMut2<f32>) -> Result<f32> {
+    pub fn process(&mut self, noisy: ArrayView2<f32>, enh: ArrayViewMut2<f32>) -> Result<f32> {
+        self.process_with(noisy, None, true, enh)
+    }
+
+    /// [`Self::process`], but the model analyzes `noisy` while its gains go to `apply`, a
+    /// signal of the same shape that contains the same speech (e.g. `noisy` with the echo
+    /// suppressed, `apply` with it only subtracted): what passes is decided on `noisy`, what
+    /// comes out is `apply`. With `df` false the deep filter isn't applied, its coefficients are
+    /// a filter for the analyzed spectrum; the gains then cover the lower frequencies too.
+    pub fn process_with(
+        &mut self,
+        noisy: ArrayView2<f32>,
+        apply: Option<ArrayView2<f32>>,
+        df_on: bool,
+        mut enh: ArrayViewMut2<f32>,
+    ) -> Result<f32> {
         debug_assert_eq!(noisy.len_of(Axis(0)), enh.len_of(Axis(0)));
         debug_assert_eq!(noisy.len_of(Axis(1)), enh.len_of(Axis(1)));
         debug_assert_eq!(noisy.len_of(Axis(1)), self.hop_size);
@@ -535,8 +607,20 @@ impl DfTract {
         ) {
             state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
         }
-        copy_tensor(&self.spec_buf, &mut spec_y)?;
-        copy_tensor(&self.spec_buf, &mut spec_x)?;
+        if let Some(apply) = apply {
+            for (ap_ch, mut spec, state) in izip!(
+                apply.axis_iter(Axis(0)),
+                spec_view_mut(&mut self.apply_spec_buf, ch, n_freqs)?.outer_iter_mut(),
+                self.apply_states.iter_mut(),
+            ) {
+                state.analysis(ap_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
+            }
+            copy_tensor(&self.apply_spec_buf, &mut spec_y)?;
+            copy_tensor(&self.apply_spec_buf, &mut spec_x)?;
+        } else {
+            copy_tensor(&self.spec_buf, &mut spec_y)?;
+            copy_tensor(&self.spec_buf, &mut spec_x)?;
+        }
         self.rolling_spec_buf_y.push_back(spec_y);
         self.rolling_spec_buf_x.push_back(spec_x);
         if !self.attenuates() {
@@ -578,7 +662,7 @@ impl DfTract {
         // This spectrum will only be used for the upper frequencies
         let spec = &self.rolling_spec_buf_y[self.df_order - 1];
         copy_tensor(spec, &mut self.spec_buf)?;
-        if let Some(coefs) = coefs {
+        if let Some(coefs) = coefs.filter(|_| df_on) {
             df(
                 &self.rolling_spec_buf_x,
                 coefs,
