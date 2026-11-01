@@ -2,7 +2,7 @@
 
 Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore. How to use it is in the [README](../README.md).
 
-**Status** (2026-10-31): phase 1 is done and most of phase 2. The live filter runs as the virtual microphone "Voice Filter" with DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor and limiter, controlled from a GNOME app over D-Bus. Missing from phase 2: presets. See the [roadmap](#roadmap).
+**Status** (2026-11-01): phases 1 and 2 are done, most of phase 3. The live filter runs as the virtual microphone "Voice Filter" with echo cancellation, DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus. Missing from phase 3: AEC3's configuration and more tests. See the [roadmap](#roadmap).
 
 **Contents:** [Goal and requirements](#goal-and-requirements) · [Signal chain](#signal-chain) · [Model choice](#model-choice) · [Echo cancellation](#echo-cancellation) · [Suppressing other voices](#suppressing-other-voices) · [Voice enhancement](#voice-enhancement) · [GPU strategy](#gpu-strategy) · [Architecture](#architecture) · [Risks and open questions](#risks-and-open-questions) · [Roadmap](#roadmap)
 
@@ -12,7 +12,7 @@ A live voice filter for Linux that shows up in PipeWire as a virtual microphone.
 
 - **Live:** total latency below 40 ms if possible, so conversations stay natural.
 - **Features:** remove echo, remove noise, enhance the voice; optionally suppress other voices (postponed, see [Suppressing other voices](#suppressing-other-voices)).
-- **Hardware:** runs entirely on the CPU. The GPU is only an optional accelerator for heavy add-on stages.
+- **Hardware:** runs entirely on the CPU, with little load (the whole chain about 3 % of a core); no GPU.
 - **Platform:** Arch Linux, GNOME on Wayland, PipeWire.
 - **Operation:** stages and modes can be switched at runtime, without clicks.
 
@@ -25,8 +25,7 @@ The signal passes through all stages in a fixed order. Echo comes first, because
 3. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter)
 4. **Suppress other voices** (optional, postponed) – Hush, modes Off · Full · Gate, about 11 ms more
 5. **Enhance the voice** – high-pass, EQ, de-esser, AGC, compressor, expander, limiter
-6. **Restoration** (optional, later) – ML model such as Stream.FM, GPU required
-7. **Virtual microphone "Voice Filter"** – selected in Discord, the browser or OBS
+6. **Virtual microphone "Voice Filter"** – selected in Discord, the browser or OBS
 
 Voice enhancement comes after denoising, so the compressor doesn't bring up the noise.
 
@@ -109,7 +108,7 @@ Separating by the speaker's own voice (target speaker extraction or personalized
 
 ## Voice enhancement
 
-Classic DSP brings the biggest audible gain and runs live with practically no CPU load. ML restoration is a later, optional stage.
+Classic DSP brings the biggest audible gain and runs live with practically no CPU load. ML restoration isn't planned (see level 2).
 
 **Level 1: classic DSP (part of the first version)**
 
@@ -123,25 +122,22 @@ Classic DSP brings the biggest audible gain and runs live with practically no CP
 |     6 | Expander   | Quiet speech pauses                     | −20 dB unless the level is above −50 dBFS or DeepFilterNet3's local SNR above 0 dB (it's 30 ms ahead, so it opens before a word), hold 200 ms, closes over 150 ms |
 |     7 | Limiter    | No clipping                             | −1 dBFS, 1 ms lookahead, release 50 ms                                                                                                                            |
 
-The AGC comes before the compressor (the first draft had it the other way round): the compressor then sees a known level, so its threshold and make-up gain can be fixed relative to the AGC's target. The de-esser goes after the EQ, whose presence boost brings out the S sounds, and before the AGC: it detects the S sounds relative to the total energy, so it doesn't depend on the level. The expander comes after the compressor: the AGC holds its gain in the pauses and the compressor's make-up gain raises what the noise suppression leaves, so the noise became audible there. It opens for the level like a classic expander and also where DeepFilterNet3 hears speech, which catches quieter speech. The AGC measures only what DeepFilterNet3 hears as speech too (its local SNR above 0 dB), so louder noise that passes its noise floor doesn't change the gain; on two recordings the estimate also dropped below 0 dB within words (143 of the 160 frames it left out of a live recording, some at −13 dBFS), which lowered the gain by 1 dB on average and up to 9 dB, while it left out only 17 frames in 89 s that weren't next to speech. It is in for testing live, with its threshold adjustable (−20 dB turns it off). DeepFilterNet3's estimate alone wasn't enough: live it cut quiet speech and word ends now and then, on three recordings up to 20 % of the quieter speech; with the level too none on two of them and 1.7 % on a very quiet one, while short pauses between sentences went 10–20 dB down. WebRTC's AGC2, compared on a recording, kept the pauses 5 dB further below the speech than our AGC and compressor, with the same evenness of the speech, but less to adjust. The values are the defaults, each one adjustable at runtime from the GNOME app; presets are to follow.
+The AGC comes before the compressor (the first draft had it the other way round): the compressor then sees a known level, so its threshold and make-up gain can be fixed relative to the AGC's target. The de-esser goes after the EQ, whose presence boost brings out the S sounds, and before the AGC: it detects the S sounds relative to the total energy, so it doesn't depend on the level. The expander comes after the compressor: the AGC holds its gain in the pauses and the compressor's make-up gain raises what the noise suppression leaves, so the noise became audible there. It opens for the level like a classic expander and also where DeepFilterNet3 hears speech, which catches quieter speech. The AGC measures only what DeepFilterNet3 hears as speech too (its local SNR above 0 dB), so louder noise that passes its noise floor doesn't change the gain; on two recordings the estimate also dropped below 0 dB within words (143 of the 160 frames it left out of a live recording, some at −13 dBFS), which lowered the gain by 1 dB on average and up to 9 dB, while it left out only 17 frames in 89 s that weren't next to speech. It is in for testing live, with its threshold adjustable (−20 dB turns it off). DeepFilterNet3's estimate alone wasn't enough: live it cut quiet speech and word ends now and then, on three recordings up to 20 % of the quieter speech; with the level too none on two of them and 1.7 % on a very quiet one, while short pauses between sentences went 10–20 dB down. WebRTC's AGC2, compared on a recording, kept the pauses 5 dB further below the speech than our AGC and compressor, with the same evenness of the speech, but less to adjust. The values are the defaults, each one adjustable at runtime from the GNOME app. No presets: without measurements of what each use needs, they'd only be guesses (see Decided).
 
-**Level 2: ML restoration ("studio voice")**
+**Level 2: ML restoration ("studio voice"), not planned**
 
-Goal: remove reverb, reconstruct missing highs, repair compression artifacts. There's hardly anything mature that is both live and open. The best candidate is [Stream.FM](https://arxiv.org/html/2512.19442v1) (research paper, late 2025):
+Goal: remove reverb, reconstruct missing highs, repair compression artifacts. There's hardly anything mature that is both live and open. The best candidate was [Stream.FM](https://arxiv.org/html/2512.19442v1) (research paper, late 2025):
 
 - Removes noise and reverb, adds highs, repairs codec artifacts.
 - Latency 24 to 48 ms.
 - Real time on an RTX 4080; on a Ryzen 7 9800X3D only barely (factor 0.88). Probably not on a laptop processor.
 - Code open according to the paper; weights and license still unclear.
 
+Dropped for its cost: it needs a GPU or a whole CPU core, while the chain runs on about 3 % of one. The chain stays slim.
+
 ## GPU strategy
 
-The base runs on the CPU only. A GPU only pays off for heavy models such as the ML restoration.
-
-- **Why not for everything:** live audio comes in 10 ms frames. For such small models, the transfer to the GPU costs more than the computation itself.
-- **Where it makes sense:** level 2 restoration (Stream.FM or similar), which doesn't run in real time on the CPU.
-- **AMD:** via ONNX Runtime with ROCm or MIGraphX, or Rust-native via `burn` with the `wgpu` backend. Whether Stream.FM runs on it needs to be checked.
-- **Fallback:** if there's no suitable GPU, the stage is disabled. The rest of the chain runs unchanged.
+None: the chain runs on the CPU only. Live audio comes in 10 ms frames, and for models as small as DeepFilterNet3 the transfer to the GPU costs more than the computation itself. Only a heavy model such as the ML restoration would have needed one, and it isn't planned.
 
 ## Architecture
 
@@ -170,17 +166,18 @@ The biggest risk is latency: all stages together must stay live.
 | Gate mode cuts off quiet speech of your own                                   | Syllables go missing                | Open fast, close slowly; adjustable floor                       |
 | hush-vani is a third-party project                                            | Maintenance uncertain               | Encapsulate behind an interchangeable interface; ONNX as plan B |
 | DeepFilterNet3 outdated on crates.io, upstream dormant since 2024             | Real-time part only usable from git | Vendored as `deep-filter-rt`, published ourselves               |
-| Stream.FM: weights, license, ROCm unclear                                     | Level 2 may not be feasible         | Check first, then decide                                        |
 
 **Decided:**
 
 - Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that (the de-esser added 1 ms to the chain since); at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms, a quantum of 480 up to another 11 ms (see PipeWire details).
-- Echo cancellation: PipeWire module first, our own process as a TODO (see [Echo cancellation](#echo-cancellation)).
+- Echo cancellation: in our own process, not PipeWire's module (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
+- No ML restoration: it would cost a GPU or a whole CPU core, the chain stays slim (see [Voice enhancement](#voice-enhancement)).
+- No presets for voice enhancement (such as "Call", "Stream", "Podcast"): there are no measurements of what each use needs, the defaults and the sliders in the app are enough.
+- No package for Arch (AUR).
 
 **Open questions:**
 
-- [ ] Presets for voice enhancement (e.g. "Call", "Stream", "Podcast")?
 - [ ] Default attenuation limit of DeepFilterNet3, to be chosen by listening in the GNOME app (it can change at runtime). Unlimited (the model's default) sounds dull: in a first test recording the speech above 1 kHz lost about 20 dB, with a limit of 12 dB about 11 dB, while the pauses lost 13 and 8 dB. That recording clipped (0.16 % of the samples), which may account for part of it.
 - [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
@@ -189,16 +186,15 @@ The biggest risk is latency: all stages together must stay live.
 
 ## Roadmap
 
-Four phases, each usable on its own. Each phase ends with a latency and listening test.
+Three phases, each usable on its own. Each phase ends with a latency and listening test.
 
 1. **Base** – done
    - [x] vendor `deep-filter-rt`
    - [x] PipeWire node with DeepFilterNet3
    - [x] offline mode for WAV tests
    - [x] latency measurement per stage
-2. **Voice** – in progress
+2. **Voice** – done
    - [x] high-pass, EQ, de-esser, AGC, compressor, expander, limiter
-   - [ ] presets
    - [x] D-Bus interface and GNOME app
    - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
 3. **Echo**
@@ -208,7 +204,3 @@ Four phases, each usable on its own. Each phase ends with a latency and listenin
    - [ ] less choppy speech when talking into the playback: AEC3's configuration, once sonora takes it
    - [ ] a test with only speech from the speakers, and over a longer call
    - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
-4. **Restoration**
-   - [ ] evaluate Stream.FM or similar, GPU backend for AMD, optional as a stage
-
-After that: a package for Arch (AUR).

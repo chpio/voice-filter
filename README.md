@@ -20,7 +20,7 @@ your voice without the echo of your speakers and the background noise, with a cl
   stage
 
 > **Status:** early and not released yet. Echo cancellation, noise suppression and voice
-> enhancement work. Presets are next, see the [roadmap](docs/concept.md#roadmap).
+> enhancement work. What's still open is in the [roadmap](docs/concept.md#roadmap).
 
 ## How it works
 
