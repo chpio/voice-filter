@@ -46,3 +46,61 @@ fn suppresses_white_noise() {
         "noise only reduced from rms {rms_in} to {rms_out}"
     );
 }
+
+/// 1 s of white noise, frame by frame.
+fn frames() -> Vec<Array2<f32>> {
+    white_noise(100 * 480, 0.1)
+        .as_chunks::<480>()
+        .0
+        .iter()
+        .map(|frame| Array2::from_shape_vec((1, 480), frame.to_vec()).unwrap())
+        .collect()
+}
+
+#[test]
+fn analyzes_with_the_estimate_of_process() {
+    let (mut full, mut encoder) = (DfTract::default(), DfTract::default());
+    let mut enh = Array2::zeros((1, 480));
+    for noisy in frames() {
+        let lsnr = full.process(noisy.view(), enh.view_mut()).unwrap();
+        assert_eq!(encoder.analyze(noisy.view()).unwrap(), lsnr);
+    }
+}
+
+#[test]
+fn processes_the_same_with_the_analyzed_signal_as_the_one_to_apply_to() {
+    let (mut plain, mut with) = (DfTract::default(), DfTract::default());
+    let (mut a, mut b) = (Array2::zeros((1, 480)), Array2::zeros((1, 480)));
+    for noisy in frames() {
+        plain.process(noisy.view(), a.view_mut()).unwrap();
+        with.process_with(noisy.view(), Some(noisy.view()), true, b.view_mut())
+            .unwrap();
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn applies_the_gains_to_the_other_signal() {
+    // the gains and the deep filter are linear in what they're applied to: twice the signal gives
+    // twice the output; limited, so it lets part of the noise through
+    for df in [true, false] {
+        let (mut once, mut twice) = (DfTract::default(), DfTract::default());
+        once.set_atten_lim(6.);
+        twice.set_atten_lim(6.);
+        let (mut a, mut b) = (Array2::zeros((1, 480)), Array2::zeros((1, 480)));
+        let mut energy = 0.;
+        for noisy in frames() {
+            let double = &noisy * 2.;
+            once.process_with(noisy.view(), Some(noisy.view()), df, a.view_mut())
+                .unwrap();
+            twice
+                .process_with(noisy.view(), Some(double.view()), df, b.view_mut())
+                .unwrap();
+            for (x, y) in a.iter().zip(&b) {
+                assert!((2. * x - y).abs() < 1e-5, "{x} {y}");
+            }
+            energy += a.iter().map(|x| x * x).sum::<f32>();
+        }
+        assert!(energy > 1., "{energy}");
+    }
+}

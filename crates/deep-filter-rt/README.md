@@ -29,6 +29,16 @@ let lsnr = df.process(noisy.view(), enhanced.view_mut())?; // local SNR estimate
 it); lower values keep more of the original voice. `RuntimeParams` sets it and the other
 parameters up front, for `DfTract::new`.
 
+Two variants for more than plain noise suppression:
+
+- `DfTract::analyze` returns only the local SNR estimate of a frame, running the encoder alone
+  (about half the time of `process`), e.g. to tell whether a signal has speech.
+- `DfTract::process_with` analyzes one signal and applies the gains to another of the same shape
+  that contains the same speech, e.g. the output of an echo canceller and the microphone before
+  it; the deep filter can be left out, its coefficients are a filter for the analyzed spectrum.
+
+An instance does either `analyze` or `process`/`process_with`, they share its state.
+
 Debug builds run the model about 10 times slower than release builds. The feature `timings` logs
 the processing time per frame.
 
