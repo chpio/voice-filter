@@ -1,9 +1,12 @@
 //! The binary's offline mode, end to end with the whole chain.
 
+mod common;
+
 use ::std::path::Path;
 use ::std::process::{Command, Output};
 
 use ::voice_filter::{SAMPLE_RATE, offline};
+use common::Noise;
 
 /// Runs the binary with `args`, without the user's settings.
 fn voice_filter(state: &Path, args: &[&Path]) -> Output {
@@ -16,15 +19,11 @@ fn voice_filter(state: &Path, args: &[&Path]) -> Output {
 
 /// 1 s of a tone in noise, at about -20 dBFS.
 fn signal() -> Vec<f32> {
-    let mut seed = 0x2545_f491u32;
+    let mut noise = Noise(0x2545_f491);
     (0..SAMPLE_RATE as usize)
         .map(|i| {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
             let t = i as f32 / SAMPLE_RATE as f32;
-            0.1 * (2. * ::std::f32::consts::PI * 220. * t).sin()
-                + 0.01 * (seed as f32 / u32::MAX as f32 * 2. - 1.)
+            0.1 * (2. * ::std::f32::consts::PI * 220. * t).sin() + 0.01 * noise.sample()
         })
         .collect()
 }

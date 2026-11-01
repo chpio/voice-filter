@@ -1,3 +1,5 @@
+mod common;
+
 use ::anyhow::Result;
 use ::hound::{SampleFormat, WavSpec, WavWriter};
 use ::voice_filter::chain::Chain;
@@ -5,6 +7,7 @@ use ::voice_filter::echo::Echo;
 use ::voice_filter::offline;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
+use common::Noise;
 
 /// Delays the signal by whole samples, across frame boundaries.
 struct Delay {
@@ -97,18 +100,6 @@ fn rejects_other_sample_rates() {
     assert!(err.contains("44100 Hz"), "{err}");
 }
 
-/// White noise at about -25 dBFS RMS, the same for every seed.
-fn noise(len: usize, mut seed: u32) -> Vec<f32> {
-    (0..len)
-        .map(|_| {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            (seed as f32 / u32::MAX as f32 * 2. - 1.) * 0.1
-        })
-        .collect()
-}
-
 fn energy(samples: &[f32]) -> f64 {
     samples.iter().map(|&x| (x as f64).powi(2)).sum()
 }
@@ -123,7 +114,7 @@ fn removes_the_echo_of_the_reference_file() {
     );
     // 5 s of what the speakers played, the microphone picks it up 4 ms later at a third
     let len = 5 * SAMPLE_RATE as usize;
-    let reference = noise(len, 0x2545_f491);
+    let reference = Noise(0x2545_f491).samples(len);
     let echo: Vec<f32> = (0..len)
         .map(|i| i.checked_sub(192).map_or(0., |n| 0.3 * reference[n]))
         .collect();
@@ -162,7 +153,7 @@ fn removes_the_echo_of_the_reference_file() {
 
 #[test]
 fn leaves_the_input_alone_without_a_reference() {
-    let input = noise(50 * FRAME_LEN, 7);
+    let input = Noise(7).samples(50 * FRAME_LEN);
     let (stage, _feed) = Echo::new();
     let mut chain = Chain::new(vec![Box::new(stage)]);
     let (output, _) = offline::process(&mut chain, &input, None).unwrap();

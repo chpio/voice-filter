@@ -4,6 +4,7 @@ use ::std::sync::Arc;
 use ::voice_filter::agc::{self, Agc};
 use ::voice_filter::denoise::Speech;
 use ::voice_filter::dsp::db_to_gain;
+use ::voice_filter::level;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
 
@@ -30,10 +31,6 @@ fn syllables(level_db: f32, frames: usize) -> Vec<Frame> {
     bursts(level_db, 30, 10, frames)
 }
 
-fn rms_db(frame: &Frame) -> f32 {
-    10. * (frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32).log10()
-}
-
 /// Runs the frames through a new AGC and returns the level of the last frame.
 fn settled_level(frames: Vec<Frame>) -> (f32, Agc) {
     let mut agc = Agc::new();
@@ -41,7 +38,7 @@ fn settled_level(frames: Vec<Frame>) -> (f32, Agc) {
     for mut frame in frames {
         agc.process(&mut frame).unwrap();
         if frame.iter().any(|&x| x != 0.) {
-            last = rms_db(&frame);
+            last = level::frame_db(&frame);
         }
     }
     (last, agc)
@@ -140,7 +137,7 @@ fn follows_its_target_and_maximum_gain() {
     for mut frame in syllables(-40., 1000) {
         agc.process(&mut frame).unwrap();
         if frame.iter().any(|&x| x != 0.) {
-            last = rms_db(&frame);
+            last = level::frame_db(&frame);
         }
     }
     assert!((last - -24.).abs() < 1., "{last} dBFS");

@@ -1,23 +1,16 @@
+mod common;
+
 use ::voice_filter::FRAME_LEN;
 use ::voice_filter::denoise::Denoise;
 use ::voice_filter::echo::{Echo, Reference};
-use ::voice_filter::stage::{Frame, Stage};
-
-/// White noise at about −25 dBFS, from a fixed seed in `state` (xorshift).
-fn noise(state: &mut u32) -> Frame {
-    ::std::array::from_fn(|_| {
-        *state ^= *state << 13;
-        *state ^= *state >> 17;
-        *state ^= *state << 5;
-        (*state as f32 / u32::MAX as f32 * 2. - 1.) * 0.1
-    })
-}
+use ::voice_filter::stage::Stage;
+use common::Noise;
 
 /// How much `denoise` turns 1 s of the noise down, in dB, compared over the last half.
-fn ratio_db(denoise: &mut Denoise, state: &mut u32) -> f32 {
+fn ratio_db(denoise: &mut Denoise, noise: &mut Noise) -> f32 {
     let (mut energy_in, mut energy_out) = (0., 0.);
     for i in 0..100 {
-        let mut frame = noise(state);
+        let mut frame = noise.frame();
         let input = frame;
         denoise.process(&mut frame).unwrap();
         if i >= 50 {
@@ -32,7 +25,7 @@ fn ratio_db(denoise: &mut Denoise, state: &mut u32) -> f32 {
 fn reports_the_model_delay_and_suppresses_noise() {
     let mut denoise = Denoise::new().unwrap();
     assert_eq!(denoise.latency(), 1440);
-    let ratio = ratio_db(&mut denoise, &mut 0x2545_f491);
+    let ratio = ratio_db(&mut denoise, &mut Noise(0x2545_f491));
     assert!(ratio < -20., "{ratio} dB");
 }
 
@@ -41,11 +34,11 @@ fn changes_the_attenuation_limit_at_runtime() {
     // the output level follows the limit: about -6 dB, then fully suppressed
     let mut denoise = Denoise::new().unwrap().with_atten_lim(6.);
     let atten_lim = denoise.atten_lim();
-    let mut state = 0x2545_f491;
-    let limited = ratio_db(&mut denoise, &mut state);
+    let mut noise = Noise(0x2545_f491);
+    let limited = ratio_db(&mut denoise, &mut noise);
     assert!((-7. ..-5.).contains(&limited), "{limited} dB");
     atten_lim.set(::voice_filter::denoise::UNLIMITED).unwrap();
-    let unlimited = ratio_db(&mut denoise, &mut state);
+    let unlimited = ratio_db(&mut denoise, &mut noise);
     assert!(unlimited < -20., "{unlimited} dB");
 }
 
@@ -54,11 +47,11 @@ fn has_no_estimate_at_a_limit_of_0_db() {
     // the model doesn't run then, the stages after it go by the level as if it were off
     let mut denoise = Denoise::new().unwrap().with_atten_lim(0.);
     let speech = denoise.speech();
-    let ratio = ratio_db(&mut denoise, &mut 0x2545_f491);
+    let ratio = ratio_db(&mut denoise, &mut Noise(0x2545_f491));
     assert!(ratio.abs() < 0.1, "{ratio} dB");
     assert_eq!(speech.frames(), 0);
     denoise.atten_lim().set(6.).unwrap();
-    ratio_db(&mut denoise, &mut 0x2545_f491);
+    ratio_db(&mut denoise, &mut Noise(0x2545_f491));
     assert_eq!(speech.frames(), 100);
 }
 
@@ -70,9 +63,9 @@ fn plays_nothing_from_before_a_pause() {
     // white noise it lets through, limited to 6 dB, then off and silence
     let mut chain = Chain::new(vec![Box::new(Denoise::new().unwrap().with_atten_lim(6.))]);
     let enabled = chain.switches()[0].1.clone();
-    let mut state = 0x2545_f491;
+    let mut noise = Noise(0x2545_f491);
     for _ in 0..100 {
-        chain.process(&mut noise(&mut state)).unwrap();
+        chain.process(&mut noise.frame()).unwrap();
     }
     enabled.store(false, Ordering::Relaxed);
     for _ in 0..10 {
@@ -122,10 +115,10 @@ fn after_echo(
     frames: usize,
     (voice, played): (bool, bool),
 ) -> Vec<f32> {
-    let (mut own, mut speakers) = (0x2545_f491, 0x1234_5678);
+    let (mut own, mut speakers) = (Noise(0x2545_f491), Noise(0x1234_5678));
     let mut out = Vec::new();
     for i in 0..frames {
-        let mut frame = noise(&mut own);
+        let mut frame = own.frame();
         for (n, x) in frame.iter_mut().enumerate() {
             *x *= 0.03;
             if voice {
@@ -133,7 +126,7 @@ fn after_echo(
             }
         }
         if played {
-            let playing = noise(&mut speakers).map(|x| 0.01 * x);
+            let playing = speakers.frame().map(|x| 0.01 * x);
             reference.push(&playing);
             for (x, p) in frame.iter_mut().zip(&playing) {
                 *x += p;

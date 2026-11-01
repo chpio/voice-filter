@@ -1,9 +1,12 @@
+mod common;
+
 use ::std::alloc::{GlobalAlloc, Layout, System};
 use ::std::cell::Cell;
 
 use ::voice_filter::FRAME_LEN;
 use ::voice_filter::echo::{Echo, LATENCY, Reference, SILENCE_FRAMES};
 use ::voice_filter::stage::{Frame, Stage};
+use common::Noise;
 
 /// Counts the allocations of the current thread, so the test harness's other threads don't
 /// count.
@@ -29,20 +32,6 @@ unsafe impl GlobalAlloc for Counting {
 
 #[global_allocator]
 static GLOBAL: Counting = Counting;
-
-/// White noise from a fixed seed, at about -24 dBFS.
-struct Noise(u32);
-
-impl Noise {
-    fn frame(&mut self) -> Frame {
-        ::std::array::from_fn(|_| {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 17;
-            self.0 ^= self.0 << 5;
-            (self.0 as f32 / u32::MAX as f32 * 2. - 1.) * 0.1
-        })
-    }
-}
 
 fn energy(frame: &[f32]) -> f64 {
     frame.iter().map(|&x| (x as f64).powi(2)).sum()
