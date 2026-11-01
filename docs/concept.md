@@ -49,6 +49,13 @@ There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates
 - Reduced to the inference: the core (`lib.rs`) and the `tract` inference (`tract.rs`), about 1,700 of upstream's 7,900 lines and 10 of its 28 dependencies. Updated from tract 0.21 to 0.23, the output differs from upstream's by at most 1.6e-7 (−114 dB), i.e. rounding.
 - The model (8.6 MB) stays embedded and fits the 10 MB limit of crates.io. The low-latency variant (36 MB) doesn't; if we need it, it has to be loaded at runtime (or shrunk, see the open questions).
 
+**DeepFilterNet3 on recordings** (2026-11-01, raw recordings of a USB microphone and of a laptop's built-in one, speech, a minute of silence, speech, run through the chain with `examples/trace.rs`):
+
+- **Zero mask:** where the model estimates a local SNR below −10 dB (`min_db_thresh`, upstream's default), `DfTract` applies zeros instead of its gains, the frame comes out as exact silence. In the pauses of the USB microphone that took 10–12 s after the speech. Before, the model let part of the noise through, the AGC's gain held from the speech (+27 to +30 dB) and the compressor's make-up raised it above the microphone's own level (median −51 and −55 dBFS against −65 and −67), and the estimate above 0 dB in 8 % of the frames (up to 30 % in a second) kept opening the expander: heard live as strongly raised noise that went silent after a while.
+- **It depends on the level:** the complex features are divided by the square root of their mean magnitude (`band_unit_norm`), so they grow with the level, and the model judges by it. The built-in microphone at a low volume (speech at −58 dBFS) was muted all the time, speech included; 20 dB more and only a quarter of its speech frames were. The USB microphone 20 dB quieter (speech at −62 dBFS): 99 % muted. Louder input is muted less in the pauses too (the USB microphone 10 dB louder: 5 % of the pause instead of 71 %), so the noise stays. Speech should reach it at about −45 to −35 dBFS.
+- **Tones:** the built-in microphone sits close to the laptop's fans, which add tones at 1.3–1.7 kHz, 20–30 dB above the noise around them, in pairs (two fans). After about 10 s of a pause the estimate rose from −12 to about 0 dB, the model stopped muting and let them through, at −43 dBFS after the AGC and compressor; a steady tone looks like a held vowel.
+- **The expander against it** (simulated on the frames): speech threshold 6 dB and opening above −40 dBFS kept the pauses of the built-in microphone at about −63 dBFS instead of −44 (closed 62 % of the time instead of 9 %) and those of the USB microphone silent, while 2–5 % of the quieter speech frames were turned down (1.6–3.1 % with the defaults), the loud ones none. With −45 dBFS the fan noise still opened it. Not the default yet: to be checked on more recordings and on clean speech.
+
 ## Echo cancellation
 
 Echo cancellation needs the signal the speakers are playing as a reference: an adaptive filter learns how the room changes the sound on its way from the speakers to the microphone, predicts the echo from the reference and subtracts it; a second step suppresses the residual echo. With headphones there's no echo, the stage can stay off.
@@ -179,6 +186,9 @@ The biggest risk is latency: all stages together must stay live.
 **Open questions:**
 
 - [ ] Default attenuation limit of DeepFilterNet3, to be chosen by listening in the GNOME app (it can change at runtime). Unlimited (the model's default) sounds dull: in a first test recording the speech above 1 kHz lost about 20 dB, with a limit of 12 dB about 11 dB, while the pauses lost 13 and 8 dB. That recording clipped (0.16 % of the samples), which may account for part of it.
+- [ ] Defaults of the expander: speech threshold 6 dB and opening above −40 dBFS (see [DeepFilterNet3 on recordings](#model-choice)), once more recordings and clean speech confirm it.
+- [ ] A gain before DeepFilterNet3, or a hint in the app, so the speech reaches it at a level it works at (about −45 to −35 dBFS); too quiet, it mutes the speech.
+- [ ] A filter for steady tones before DeepFilterNet3 (fans), following their frequency as it changes with the load, so it doesn't take them for speech.
 - [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
 - [ ] Personalized denoising that keeps only the user's voice: wait for an open model that runs in real time on little CPU, or train DeepFilterNet3 with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
