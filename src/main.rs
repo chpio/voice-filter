@@ -16,8 +16,16 @@ struct Args {
     /// Limits how much the noise suppression attenuates, in dB; 100 and above don't limit it.
     /// Lower values keep more of the original voice, e.g. its highs. `run` keeps it for the next
     /// runs, like a limit set in the app; without it, `run` takes the kept one and `process` 100.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, value_parser = db)]
     atten_lim: Option<f32>,
+}
+
+/// A value in dB from the command line: a number, not NaN.
+fn db(value: &str) -> Result<f32, String> {
+    match value.parse::<f32>() {
+        Ok(db) if !db.is_nan() => Ok(db),
+        _ => Err(format!("{value} isn't a number")),
+    }
 }
 
 #[derive(Subcommand)]
