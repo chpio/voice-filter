@@ -53,8 +53,15 @@ pub struct DFState {
     pub erb: Vec<usize>, // frequencies bandwidth (in bands) per ERB band
     analysis_mem: Vec<f32>,
     analysis_scratch: Vec<Complex32>,
+    /// The windowed input of the forward FFT, allocated once.
+    analysis_buf: Vec<f32>,
     synthesis_mem: Vec<f32>,
     synthesis_scratch: Vec<Complex32>,
+    /// The output of the inverse FFT, allocated once.
+    synthesis_buf: Vec<f32>,
+    /// A copy of the spectrum for [`DFState::synthesis_from`], the inverse FFT overwrites its
+    /// input.
+    synthesis_spec: Vec<Complex32>,
     mean_norm_state: Vec<f32>,
     unit_norm_state: Vec<f32>,
 }
@@ -114,6 +121,9 @@ impl DFState {
         let synthesis_mem = vec![0.; fft_size - frame_size];
         let analysis_scratch = forward.make_scratch_vec();
         let synthesis_scratch = backward.make_scratch_vec();
+        let analysis_buf = forward.make_input_vec();
+        let synthesis_buf = backward.make_output_vec();
+        let synthesis_spec = backward.make_input_vec();
 
         let erb = erb_fb(sr, fft_size, nb_bands, min_nb_freqs);
 
@@ -138,8 +148,11 @@ impl DFState {
             erb,
             analysis_mem,
             analysis_scratch,
+            analysis_buf,
             synthesis_mem,
             synthesis_scratch,
+            synthesis_buf,
+            synthesis_spec,
             window,
             wnorm,
             mean_norm_state,
@@ -168,6 +181,18 @@ impl DFState {
         debug_assert_eq!(input.len(), self.freq_size);
         debug_assert_eq!(output.len(), self.frame_size);
         frame_synthesis(input, output, self)
+    }
+
+    /// [`Self::synthesis`] without changing `input`: it works on a copy, in a buffer of the
+    /// state.
+    pub fn synthesis_from(&mut self, input: &[Complex32], output: &mut [f32]) {
+        debug_assert_eq!(input.len(), self.freq_size);
+        debug_assert_eq!(output.len(), self.frame_size);
+        // taken out for the call and put back, an empty Vec doesn't allocate
+        let mut spec = ::std::mem::take(&mut self.synthesis_spec);
+        spec.copy_from_slice(input);
+        frame_synthesis(&mut spec, output, self);
+        self.synthesis_spec = spec;
     }
 
     pub fn init_norm_states(&mut self, nb_df_freqs: usize) {
@@ -320,16 +345,18 @@ where
 }
 
 fn process_frame(input: &[f32], output: &mut [f32], state: &mut DFState) {
-    let mut freq_mem = vec![Complex32::default(); state.freq_size];
+    let mut freq_mem = ::std::mem::take(&mut state.synthesis_spec);
     frame_analysis(input, &mut freq_mem, state);
     frame_synthesis(&mut freq_mem, output, state);
+    state.synthesis_spec = freq_mem;
 }
 
 fn frame_analysis(input: &[f32], output: &mut [Complex32], state: &mut DFState) {
     debug_assert_eq!(input.len(), state.frame_size);
     debug_assert_eq!(output.len(), state.freq_size);
 
-    let mut buf = state.fft_forward.make_input_vec();
+    // overwritten as a whole, the FFT uses it as scratch space
+    let buf = &mut state.analysis_buf;
     // First part of the window on the previous frame
     let (buf_first, buf_second) = buf.split_at_mut(state.window_size - state.frame_size);
     let (window_first, window_second) = state.window.split_at(state.window_size - state.frame_size);
@@ -360,7 +387,7 @@ fn frame_analysis(input: &[f32], output: &mut [Complex32], state: &mut DFState) 
     }
     state
         .fft_forward
-        .process_with_scratch(&mut buf, output, &mut state.analysis_scratch)
+        .process_with_scratch(buf, output, &mut state.analysis_scratch)
         .expect("FFT forward failed");
     // Apply normalization in analysis only
     let norm = state.wnorm;
@@ -370,16 +397,17 @@ fn frame_analysis(input: &[f32], output: &mut [Complex32], state: &mut DFState) 
 }
 
 fn frame_synthesis(input: &mut [Complex32], output: &mut [f32], state: &mut DFState) {
-    let mut x = state.fft_inverse.make_output_vec();
+    // overwritten as a whole by the FFT
+    let x = &mut state.synthesis_buf;
     match state
         .fft_inverse
-        .process_with_scratch(input, &mut x, &mut state.synthesis_scratch)
+        .process_with_scratch(input, x, &mut state.synthesis_scratch)
     {
         Err(realfft::FftError::InputValues(_, _)) => (),
         Err(e) => panic!("Error during fft_inverse: {:?}", e),
         Ok(_) => (),
     }
-    apply_window_in_place(&mut x, &state.window);
+    apply_window_in_place(x, &state.window);
     let (x_first, x_second) = x.split_at(state.frame_size);
     for ((&xi, &mem), out) in x_first
         .iter()

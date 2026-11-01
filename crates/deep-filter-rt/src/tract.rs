@@ -196,10 +196,12 @@ pub struct DfTract {
     pub df_states: Vec<DFState>,
     pub spec_buf: Tensor, // Real-valued spectrogram buffer of shape [n_ch, 1, 1, n_freqs, 2]
     erb_buf: TValue,      // Real-valued ERB feature buffer of shape [n_ch, 1, 1, n_erb]
-    cplx_buf: TValue,     // Real-valued complex spectrum shape for DF of shape [n_ch, 1, nb_df, 2]
+    // Complex spectrum for DF as the encoder takes it, of shape [n_ch, 2, 1, nb_df]: the real
+    // parts first, then the imaginary ones
+    cplx_buf: TValue,
     rolling_spec_buf_y: VecDeque<Tensor>, // Enhanced stage 1 spec buf
     rolling_spec_buf_x: VecDeque<Tensor>, // Noisy spec buf
-    skip_counter: usize,  // Increment when wanting to skip processing due to low RMS
+    skip_counter: usize, // Increment when wanting to skip processing due to low RMS
 }
 
 impl Default for DfTract {
@@ -273,7 +275,7 @@ impl DfTract {
             Tensor::uninitialized_dt(f32::datum_type(), &[1, 1, 1, nb_erb])?
         });
         let cplx_buf = TValue::from(unsafe {
-            Tensor::uninitialized_dt(f32::datum_type(), &[1, 1, nb_df, 2])?
+            Tensor::uninitialized_dt(f32::datum_type(), &[1, 2, 1, nb_df])?
         });
 
         let model_type = config.section(Some("train")).unwrap().get("model").unwrap();
@@ -408,7 +410,7 @@ impl DfTract {
         }
         self.spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.erb_buf = TValue::from(Tensor::zero::<f32>(&[ch, 1, 1, self.nb_erb])?);
-        self.cplx_buf = TValue::from(Tensor::zero::<f32>(&[ch, 1, self.nb_df, 2])?);
+        self.cplx_buf = TValue::from(Tensor::zero::<f32>(&[ch, 2, 1, self.nb_df])?);
 
         Ok(())
     }
@@ -423,33 +425,29 @@ impl DfTract {
     ///     - gains: Gain estimates of shape `[n_ch, 1, 1, n_erb]`.
     ///     - coefs: Real-valued DF coefficients estimates of shape `[n_ch, 1, 1, n_erb, 2]`.
     pub fn process_raw(&mut self) -> Result<(f32, Option<Tensor>, Option<Tensor>)> {
-        let spec = self.spec_buf.to_plain_array_view()?;
-        let ch = spec.len_of(Axis(0));
+        let ch = self.spec_buf.shape()[0];
+        let spec = spec_view(&self.spec_buf, ch, self.n_freqs)?;
 
         for (nsy_ch, mut erb_ch, mut cplx_ch, state) in izip!(
-            spec.axis_iter(Axis(0)),
+            spec.outer_iter(),
             tvalue_to_array_view_mut(&mut self.erb_buf).axis_iter_mut(Axis(0)),
             tvalue_to_array_view_mut(&mut self.cplx_buf).axis_iter_mut(Axis(0)),
             self.df_states.iter_mut()
         ) {
-            let nsy_ch = as_slice_complex(nsy_ch.as_slice().unwrap());
+            let nsy_ch = nsy_ch.to_slice().unwrap();
             state.feat_erb(nsy_ch, self.alpha, erb_ch.as_slice_mut().unwrap());
-            state.feat_cplx(
+            // the real parts, then the imaginary ones: the layout the encoder takes, so the
+            // buffer goes to it as it is
+            state.feat_cplx_t(
                 &nsy_ch[..self.nb_df],
                 self.alpha,
-                as_slice_mut_complex(cplx_ch.as_slice_mut().unwrap()),
+                cplx_ch.as_slice_mut().unwrap(),
             );
         }
         // Run encoder
-        let mut enc_emb = self.enc.run(tvec!(
-            self.erb_buf.clone(),
-            TValue::from(
-                self.cplx_buf
-                    .clone()
-                    .into_tensor()
-                    .permute_axes(&[0, 3, 1, 2])?
-            )
-        ))?;
+        let mut enc_emb = self
+            .enc
+            .run(tvec!(self.erb_buf.clone(), self.cplx_buf.clone()))?;
 
         let lsnr = *enc_emb
             .pop()
@@ -526,30 +524,24 @@ impl DfTract {
         }
 
         // Signal model: y = f(s + n) = f(x)
-        self.rolling_spec_buf_y.pop_front();
-        self.rolling_spec_buf_x.pop_front();
-        for (ns_ch, mut rbuf, state) in izip!(
+        // the oldest frames get the newest spectrum, so the buffers don't allocate
+        let mut spec_y = self.rolling_spec_buf_y.pop_front().unwrap();
+        let mut spec_x = self.rolling_spec_buf_x.pop_front().unwrap();
+        let (ch, n_freqs) = (self.ch, self.n_freqs);
+        for (ns_ch, mut spec, state) in izip!(
             noisy.axis_iter(Axis(0)),
-            self.spec_buf
-                .to_plain_array_view_mut()?
-                .axis_iter_mut(Axis(0)),
+            spec_view_mut(&mut self.spec_buf, ch, n_freqs)?.outer_iter_mut(),
             self.df_states.iter_mut(),
         ) {
-            let spec = as_slice_mut_complex(rbuf.as_slice_mut().unwrap());
-            state.analysis(ns_ch.as_slice().unwrap(), spec);
+            state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
         }
-        self.rolling_spec_buf_y.push_back(self.spec_buf.clone());
-        self.rolling_spec_buf_x.push_back(self.spec_buf.clone());
+        copy_tensor(&self.spec_buf, &mut spec_y)?;
+        copy_tensor(&self.spec_buf, &mut spec_x)?;
+        self.rolling_spec_buf_y.push_back(spec_y);
+        self.rolling_spec_buf_x.push_back(spec_x);
         if !self.attenuates() {
             // the noisy spectrum, as far back as the enhanced one would be, so the delay stays
-            let spec_noisy = as_arrayview_complex(
-                self.rolling_spec_buf_x[self.noisy_index()]
-                    .to_plain_array_view::<f32>()
-                    .unwrap(),
-                &[self.ch, self.n_freqs],
-            )
-            .into_dimensionality::<Ix2>()
-            .unwrap();
+            let spec_noisy = spec_view(&self.rolling_spec_buf_x[self.noisy_index()], ch, n_freqs)?;
             synthesis(&mut self.df_states, spec_noisy, &mut enh);
             return Ok(35.);
         }
@@ -557,32 +549,24 @@ impl DfTract {
         let (lsnr, gains, coefs) = self.process_raw()?;
 
         let (apply_erb, _, _) = self.apply_stages(lsnr);
-        let mut spec = self
-            .rolling_spec_buf_y
-            .get_mut(self.df_order - 1)
-            .unwrap()
-            .to_plain_array_view_mut()?;
-        if let Some(gains) = gains {
-            let mut gains = gains.into_plain_array()?;
+        let mut spec = spec_view_mut(
+            self.rolling_spec_buf_y.get_mut(self.df_order - 1).unwrap(),
+            ch,
+            n_freqs,
+        )?;
+        if let Some(mut gains) = gains {
+            let mut gains = gains.to_plain_array_view_mut::<f32>()?;
             if gains.shape()[0] < noisy.shape()[0] {
                 // Mask was reduced to single channel
                 let gain_slc = gains.as_slice_mut().unwrap();
-                for mut spec_ch in spec.axis_iter_mut(Axis(0)) {
-                    self.df_states[0].apply_mask(
-                        as_slice_mut_complex(spec_ch.as_slice_mut().unwrap()),
-                        gain_slc,
-                    );
+                for mut spec_ch in spec.outer_iter_mut() {
+                    self.df_states[0].apply_mask(spec_ch.as_slice_mut().unwrap(), gain_slc);
                 }
             } else {
                 // Same number of channels of gains and spec
-                for (gains_ch, mut spec_ch) in
-                    gains.axis_iter(Axis(0)).zip(spec.axis_iter_mut(Axis(0)))
-                {
+                for (gains_ch, mut spec_ch) in gains.axis_iter(Axis(0)).zip(spec.outer_iter_mut()) {
                     let gain_slc = gains_ch.as_slice().unwrap();
-                    self.df_states[0].apply_mask(
-                        as_slice_mut_complex(spec_ch.as_slice_mut().unwrap()),
-                        gain_slc,
-                    );
+                    self.df_states[0].apply_mask(spec_ch.as_slice_mut().unwrap(), gain_slc);
                 }
             }
             self.skip_counter = 0;
@@ -592,8 +576,8 @@ impl DfTract {
         }
 
         // This spectrum will only be used for the upper frequencies
-        let spec = self.rolling_spec_buf_y.get_mut(self.df_order - 1).unwrap();
-        self.spec_buf.clone_from(spec);
+        let spec = &self.rolling_spec_buf_y[self.df_order - 1];
+        copy_tensor(spec, &mut self.spec_buf)?;
         if let Some(coefs) = coefs {
             df(
                 &self.rolling_spec_buf_x,
@@ -605,20 +589,8 @@ impl DfTract {
             )?;
         };
 
-        let spec_noisy = as_arrayview_complex(
-            self.rolling_spec_buf_x[self.noisy_index()]
-                .to_plain_array_view::<f32>()
-                .unwrap(),
-            &[self.ch, self.n_freqs],
-        )
-        .into_dimensionality::<Ix2>()
-        .unwrap();
-        let mut spec_enh = as_arrayview_mut_complex(
-            self.spec_buf.to_plain_array_view_mut::<f32>().unwrap(),
-            &[self.ch, self.n_freqs],
-        )
-        .into_dimensionality::<Ix2>()
-        .unwrap();
+        let spec_noisy = spec_view(&self.rolling_spec_buf_x[self.noisy_index()], ch, n_freqs)?;
+        let mut spec_enh = spec_view_mut(&mut self.spec_buf, ch, n_freqs)?;
 
         // Run post filter
         if apply_erb && self.post_filter {
@@ -690,31 +662,54 @@ impl DfTract {
     }
 
     pub fn get_spec_noisy(&self) -> ArrayView2<'_, Complex32> {
-        as_arrayview_complex(
-            self.rolling_spec_buf_x[self.noisy_index()]
-                .to_plain_array_view::<f32>()
-                .unwrap(),
-            &[self.ch, self.n_freqs],
+        spec_view(
+            &self.rolling_spec_buf_x[self.noisy_index()],
+            self.ch,
+            self.n_freqs,
         )
-        .into_dimensionality::<Ix2>()
         .unwrap()
     }
     pub fn get_spec_enh(&self) -> ArrayView2<'_, Complex32> {
-        as_arrayview_complex(
-            self.spec_buf.to_plain_array_view::<f32>().unwrap(),
-            &[self.ch, self.n_freqs],
-        )
-        .into_dimensionality::<Ix2>()
-        .unwrap()
+        spec_view(&self.spec_buf, self.ch, self.n_freqs).unwrap()
     }
     pub fn get_mut_spec_enh(&mut self) -> ArrayViewMut2<'_, Complex32> {
-        as_arrayview_mut_complex(
-            self.spec_buf.to_plain_array_view_mut::<f32>().unwrap(),
-            &[self.ch, self.n_freqs],
-        )
-        .into_dimensionality::<Ix2>()
-        .unwrap()
+        spec_view_mut(&mut self.spec_buf, self.ch, self.n_freqs).unwrap()
     }
+}
+
+/// The values of an f32 tensor as a flat slice. Unlike a view of ndarray it doesn't allocate:
+/// ndarray keeps the shape of more than 4 dimensions on the heap, and the spectra have 5.
+fn plain(tensor: &Tensor) -> Result<&[f32]> {
+    tensor.try_as_plain_ram()?.as_slice::<f32>()
+}
+
+/// [`plain`], mutable.
+fn plain_mut(tensor: &mut Tensor) -> Result<&mut [f32]> {
+    // checks that the storage is plain and holds f32
+    tensor.try_as_plain_ram_mut()?.as_slice_mut::<f32>()?;
+    // SAFETY: checked just before, and `tensor` stays borrowed mutably as long as the slice
+    Ok(unsafe { tensor.as_slice_mut_unchecked::<f32>() })
+}
+
+/// A spectrum of shape `[ch, 1, 1, n_freqs, 2]` as `[ch, n_freqs]` complex values, without
+/// allocating (see [`plain`]).
+fn spec_view(tensor: &Tensor, ch: usize, n_freqs: usize) -> Result<ArrayView2<'_, Complex32>> {
+    Ok(ArrayView2::from_shape(
+        (ch, n_freqs),
+        as_slice_complex(plain(tensor)?),
+    )?)
+}
+
+/// [`spec_view`], mutable.
+fn spec_view_mut(
+    tensor: &mut Tensor,
+    ch: usize,
+    n_freqs: usize,
+) -> Result<ArrayViewMut2<'_, Complex32>> {
+    Ok(ArrayViewMut2::from_shape(
+        (ch, n_freqs),
+        as_slice_mut_complex(plain_mut(tensor)?),
+    )?)
 }
 
 /// Turns the enhanced spectrum `[ch, n_freqs]` back into samples, into `enh`, with the STFT
@@ -729,11 +724,19 @@ fn synthesis(
         spec_enh.axis_iter(Axis(0)),
         enh.axis_iter_mut(Axis(0)),
     ) {
-        state.synthesis(
-            spec_ch.to_owned().as_slice_mut().unwrap(),
+        state.synthesis_from(
+            spec_ch.as_slice().unwrap(),
             enh_out_ch.as_slice_mut().unwrap(),
         );
     }
+}
+
+/// Copies the values of `from` into `to`, an f32 tensor of the same shape, without allocating
+/// (unlike `clone`, which `clone_from` falls back to).
+fn copy_tensor(from: &Tensor, to: &mut Tensor) -> Result<()> {
+    debug_assert_eq!(from.shape(), to.shape());
+    plain_mut(to)?.copy_from_slice(plain(from)?);
+    Ok(())
 }
 
 /// Deep Filtering.
@@ -761,20 +764,14 @@ fn df(
     debug_assert_eq!(df_order, coefs.shape()[2]);
     debug_assert_eq!(ch, spec_out.shape()[0]);
     debug_assert!(spec.len() >= df_order);
-    let mut o_f: ArrayViewMut2<Complex32> =
-        as_arrayview_mut_complex(spec_out.to_plain_array_view_mut::<f32>()?, &[ch, n_freqs])
-            .into_dimensionality()?;
+    let mut o_f = spec_view_mut(spec_out, ch, n_freqs)?;
     // Zero relevant frequency bins of output
     o_f.slice_mut(s![.., ..nb_df]).fill(Complex32::default());
     let coefs_arr: ArrayView3<Complex32> =
         as_arrayview_complex(coefs.to_plain_array_view::<f32>()?, &[ch, nb_df, df_order])
             .into_dimensionality()?;
     // Transform spec to an complex array and iterate over time frames of spec and coefs
-    let spec_iter = spec.iter().map(|s| {
-        as_arrayview_complex(s.to_plain_array_view::<f32>().unwrap(), &[ch, n_freqs])
-            .into_dimensionality::<Ix2>()
-            .unwrap()
-    });
+    let spec_iter = spec.iter().map(|s| spec_view(s, ch, n_freqs).unwrap());
     // Iterate over DF frames
     for (s_f, c_f) in spec_iter.zip(coefs_arr.axis_iter(Axis(2))) {
         // Iterate over channels
