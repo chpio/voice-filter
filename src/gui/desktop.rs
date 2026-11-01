@@ -64,20 +64,32 @@ pub fn update_icon_cache(data_home: &Path) {
     }
 }
 
-/// A path as an argument of `Exec`: quoted if it has a character the desktop entry spec reserves,
-/// with `"`, `` ` ``, `$` and `\` escaped inside the quotes.
+/// A path as an argument of `Exec`, as the desktop entry spec wants it: quoted if it has a
+/// character the spec reserves, with `"`, `` ` ``, `$` and `\` escaped by a backslash inside the
+/// quotes; then escaped as every value of a key, which escapes those backslashes again (GLib
+/// rejects the whole entry otherwise); `%` doubled, it starts a field code.
 pub fn quote(path: &str) -> String {
     let reserved = |c: char| " \t\n\"'\\><~|&;$*?#()`".contains(c);
-    if !path.contains(reserved) {
-        return path.to_owned();
+    let quoted = path.contains(reserved);
+    let mut arg = String::new();
+    if quoted {
+        arg.push('"');
     }
-    let mut quoted = String::from('"');
     for c in path.chars() {
-        if "\"`$\\".contains(c) {
-            quoted.push('\\');
+        match c {
+            '"' | '`' | '$' => {
+                arg.push_str(r"\\");
+                arg.push(c);
+            }
+            '\\' => arg.push_str(r"\\\\"),
+            '\n' => arg.push_str(r"\n"),
+            '\t' => arg.push_str(r"\t"),
+            '%' => arg.push_str("%%"),
+            c => arg.push(c),
         }
-        quoted.push(c);
     }
-    quoted.push('"');
-    quoted
+    if quoted {
+        arg.push('"');
+    }
+    arg
 }

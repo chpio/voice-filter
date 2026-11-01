@@ -35,5 +35,22 @@ fn quotes_paths_for_exec() {
         "/usr/bin/voice-filter"
     );
     assert_eq!(desktop::quote("/a b/v"), "\"/a b/v\"");
-    assert_eq!(desktop::quote("/a$b/\"v\""), "\"/a\\$b/\\\"v\\\"\"");
+    assert_eq!(desktop::quote(r#"/a$b/"v""#), r#""/a\\$b/\\"v\\"""#);
+    assert_eq!(desktop::quote(r"/a\b"), r#""/a\\\\b""#);
+    assert_eq!(desktop::quote("/100%/v"), "/100%%/v");
+}
+
+#[test]
+fn glib_reads_the_path_back_from_exec() {
+    use ::gtk::glib;
+
+    let dir = ::tempfile::tempdir().unwrap();
+    let exe = r#"/opt/a "b" $c `d` \e 'f'/voice-filter"#;
+    let [entry, _] = desktop::install(dir.path(), Path::new(exe)).unwrap();
+    let file = glib::KeyFile::new();
+    file.load_from_file(entry, glib::KeyFileFlags::NONE)
+        .unwrap();
+    let exec = file.string("Desktop Entry", "Exec").unwrap();
+    let argv = glib::shell_parse_argv(exec.as_str()).unwrap();
+    assert_eq!(argv, [exe, "ui"].map(::std::ffi::OsString::from));
 }
