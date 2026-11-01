@@ -314,14 +314,16 @@ impl Service {
         self.stats.quantum.load(Ordering::Relaxed)
     }
 
-    /// The longest processing time of a frame in ms, over the last 10 s; the `max` of `total` in
+    /// The longest processing time of a frame in ms, over the last 10 s (updated every second);
+    /// the `max` of `total` in
     /// [`Self::frame_times`].
     #[zbus(property(emits_changed_signal = "false"))]
     pub fn max_frame_time(&self) -> f64 {
         self.stats.frame_times[0].last().max_ns as f64 / 1e6
     }
 
-    /// The processing time of a frame over the last 10 s, in ms: part, mean, 95th and 99th
+    /// The processing time of a frame over the last 10 s (updated every second), in ms: part,
+    /// mean, 95th and 99th
     /// percentile (rounded up by at most 1.6 %) and the longest. The parts are `total`,
     /// `highpass`, `echo`, `denoise` (0 when the chain doesn't have them) and `other`, the stages
     /// after them and what's measured around the chain.

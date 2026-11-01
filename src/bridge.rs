@@ -64,8 +64,8 @@ pub const FRAME_TIME_PARTS: [&str; 5] = ["total", "highpass", "echo", "denoise",
 const TIMED: [&str; 3] = ["highpass", "echo", "denoise"];
 
 impl Stats {
-    /// The processing time of a frame in its parts ([`FRAME_TIME_PARTS`]), over the interval
-    /// before the last [`FrameTime::publish`].
+    /// The processing time of a frame in its parts ([`FRAME_TIME_PARTS`]), over the window of
+    /// the last [`Window::push`](crate::frame_time::Window::push).
     pub fn frame_times(&self) -> impl Iterator<Item = (&'static str, Summary)> {
         FRAME_TIME_PARTS
             .into_iter()

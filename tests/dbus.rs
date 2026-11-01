@@ -5,6 +5,7 @@ use ::std::sync::{Arc, Mutex};
 
 use ::voice_filter::bridge::Stats;
 use ::voice_filter::dbus::{Control, Service};
+use ::voice_filter::frame_time::Window;
 use ::voice_filter::live::Device;
 use ::voice_filter::param::Param;
 use ::voice_filter::settings;
@@ -334,9 +335,9 @@ fn reports_the_counters_quantum_and_frame_time() {
         time.record(ns);
     }
     stats.frame_times[0].record(1_250_000);
-    stats.frame_times.iter().for_each(|time| {
-        time.publish();
-    });
+    for time in &stats.frame_times {
+        Window::default().push(time);
+    }
     // the names the app reads
     let counters = service.counters();
     assert_eq!(counters.len(), 4);

@@ -24,7 +24,7 @@ use crate::bridge::{Capture, FRAME_TIME_PARTS, Playback, Stats, bridge};
 use crate::chain::Chain;
 use crate::dbus::{self, Control, Service};
 use crate::echo::Reference;
-use crate::frame_time::FrameTime;
+use crate::frame_time::{WINDOW_SECONDS, Window};
 use crate::param::Param;
 use crate::settings;
 use crate::volume::{self, Volume};
@@ -864,11 +864,13 @@ fn format_param() -> Vec<u8> {
     .into_inner()
 }
 
-/// How often [`report_periodically`] looks at the counters.
-const REPORT_INTERVAL: Duration = Duration::from_secs(10);
+/// How often [`report_periodically`] looks at the counters; it hands the processing time to the
+/// control interface every second, over this window.
+const REPORT_INTERVAL: Duration = Duration::from_secs(WINDOW_SECONDS as u64);
 
-/// Hands the processing time of the frames to the control interface every [`REPORT_INTERVAL`]
-/// ([`FrameTime::publish`]) and prints the counters and the latency while frames are processed:
+/// Hands the processing time of the frames over the last [`REPORT_INTERVAL`] to the control
+/// interface every second ([`Window::push`]) and, every [`REPORT_INTERVAL`], prints the counters,
+/// the latency and the processing time while frames are processed:
 /// `verbose` every time, otherwise only when the chain failed on frames, or when the playback side
 /// filled in silence or dropped samples in the middle of a recording. At its start and end that's
 /// how the bridge settles, so an interval counts only if frames ran through all of it and the one
@@ -879,15 +881,20 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
     ::std::thread::spawn(move || {
         let mut last = [0; 4];
         let mut was_running = false;
-        loop {
-            ::std::thread::sleep(REPORT_INTERVAL);
+        let mut windows: [Window; FRAME_TIME_PARTS.len()] = Default::default();
+        for second in (1..=WINDOW_SECONDS).cycle() {
+            ::std::thread::sleep(Duration::from_secs(1));
+            let times: [_; FRAME_TIME_PARTS.len()] =
+                ::std::array::from_fn(|part| windows[part].push(&stats.frame_times[part]));
+            if second != WINDOW_SECONDS {
+                continue;
+            }
             let now = [
                 stats.frames.load(Ordering::Relaxed),
                 stats.underruns.load(Ordering::Relaxed),
                 stats.dropped.load(Ordering::Relaxed),
                 stats.errors.load(Ordering::Relaxed),
             ];
-            let times = stats.frame_times.each_ref().map(FrameTime::publish);
             let max_ms = times[0].max_ns as f64 / 1e6;
             let frames = now[0] - last[0];
             let steady = was_running && frames >= whole;

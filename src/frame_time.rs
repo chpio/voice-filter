@@ -1,8 +1,8 @@
 //! Processing times of frames: a histogram the audio path fills lock-free, one atomic add per
-//! frame, from which the report thread reads the mean, percentiles and the longest time of an
-//! interval.
+//! frame ([`FrameTime`]), and a window over the last seconds of it the report thread keeps
+//! ([`Window`]), from which it reads the mean, percentiles and the longest time.
 
-use ::std::sync::atomic::{AtomicU64, Ordering};
+use ::std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Buckets per doubling of the time: a bucket spans at most 1/64 of its values, so a percentile
 /// is rounded up by at most 1.6 %.
@@ -11,17 +11,20 @@ const SUB_BITS: u32 = 6;
 /// last one.
 const BUCKETS: usize = ((30 - SUB_BITS as usize) << SUB_BITS) + (2 << SUB_BITS);
 
-/// The processing times of the frames since the last [`FrameTime::publish`], and the summary of
-/// the interval before for other readers.
+/// The seconds a [`Window`] spans.
+pub const WINDOW_SECONDS: usize = 10;
+
+/// The processing times of the frames since the last [`Window::push`], and the summary of the
+/// window at it for other readers.
 pub struct FrameTime {
-    buckets: [AtomicU64; BUCKETS],
+    buckets: [AtomicU32; BUCKETS],
     sum_ns: AtomicU64,
     max_ns: AtomicU64,
     last: [AtomicU64; 5],
 }
 
-/// The processing times of the frames of an interval, in nanoseconds; the percentiles rounded up
-/// by at most 1.6 %, never above `max_ns`.
+/// The processing times of the frames of a window, in nanoseconds; the percentiles rounded up by
+/// at most 1.6 %, never above `max_ns`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Summary {
     pub frames: u64,
@@ -34,7 +37,7 @@ pub struct Summary {
 impl Default for FrameTime {
     fn default() -> Self {
         Self {
-            buckets: ::std::array::from_fn(|_| AtomicU64::new(0)),
+            buckets: ::std::array::from_fn(|_| AtomicU32::new(0)),
             sum_ns: AtomicU64::new(0),
             max_ns: AtomicU64::new(0),
             last: Default::default(),
@@ -50,54 +53,7 @@ impl FrameTime {
         self.max_ns.fetch_max(ns, Ordering::Relaxed);
     }
 
-    /// Summarizes the frames since the last call, starts a new interval and keeps the summary for
-    /// [`Self::last`]. A frame recorded meanwhile may count partly in the next interval.
-    pub fn publish(&self) -> Summary {
-        let mut counts = [0; BUCKETS];
-        for (count, bucket) in counts.iter_mut().zip(&self.buckets) {
-            *count = bucket.swap(0, Ordering::Relaxed);
-        }
-        let sum_ns = self.sum_ns.swap(0, Ordering::Relaxed);
-        let max_ns = self.max_ns.swap(0, Ordering::Relaxed);
-        let frames: u64 = counts.iter().sum();
-        let summary = if frames == 0 {
-            Summary::default()
-        } else {
-            let percentile = |percent: u64| {
-                // the frame at this rank, counted from the fastest, 1-based
-                let rank = (frames * percent).div_ceil(100);
-                let mut seen = 0;
-                let index = counts
-                    .iter()
-                    .position(|&count| {
-                        seen += count;
-                        seen >= rank
-                    })
-                    .unwrap_or(BUCKETS - 1);
-                upper_edge(index).min(max_ns)
-            };
-            Summary {
-                frames,
-                mean_ns: sum_ns / frames,
-                p95_ns: percentile(95),
-                p99_ns: percentile(99),
-                max_ns,
-            }
-        };
-        let values = [
-            summary.frames,
-            summary.mean_ns,
-            summary.p95_ns,
-            summary.p99_ns,
-            summary.max_ns,
-        ];
-        for (last, value) in self.last.iter().zip(values) {
-            last.store(value, Ordering::Relaxed);
-        }
-        summary
-    }
-
-    /// What the last [`Self::publish`] returned.
+    /// What the last [`Window::push`] returned.
     pub fn last(&self) -> Summary {
         let [frames, mean_ns, p95_ns, p99_ns, max_ns] =
             ::std::array::from_fn(|i| self.last[i].load(Ordering::Relaxed));
@@ -106,6 +62,97 @@ impl FrameTime {
             mean_ns,
             p95_ns,
             p99_ns,
+            max_ns,
+        }
+    }
+}
+
+/// The last [`WINDOW_SECONDS`] pushes of a [`FrameTime`], in the thread that pushes them: the
+/// counts of every push and their sum, so a push only takes the oldest out and the new one in.
+/// Allocated once, a push doesn't allocate.
+pub struct Window {
+    /// The counts of the buckets per push, the oldest at `next`; a push of more than `u16::MAX`
+    /// frames in a bucket keeps that many (100 frames run per second).
+    pushes: Box<[[u16; BUCKETS]]>,
+    sums_ns: [u64; WINDOW_SECONDS],
+    maxes_ns: [u64; WINDOW_SECONDS],
+    /// The counts of all of `pushes` per bucket.
+    counts: Box<[u32; BUCKETS]>,
+    next: usize,
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self {
+            pushes: vec![[0; BUCKETS]; WINDOW_SECONDS].into_boxed_slice(),
+            sums_ns: [0; WINDOW_SECONDS],
+            maxes_ns: [0; WINDOW_SECONDS],
+            counts: Box::new([0; BUCKETS]),
+            next: 0,
+        }
+    }
+}
+
+impl Window {
+    /// Takes the frames recorded in `time` since the last push (starting it over) into the window
+    /// in place of the oldest push, summarizes the window and keeps that for
+    /// [`FrameTime::last`]. A frame recorded meanwhile may count partly in the next push.
+    pub fn push(&mut self, time: &FrameTime) -> Summary {
+        let slot = self.next;
+        self.next = (slot + 1) % WINDOW_SECONDS;
+        let push = &mut self.pushes[slot];
+        // three loops: the ones over plain arrays vectorize, the atomics don't
+        for (count, &old) in self.counts.iter_mut().zip(push.iter()) {
+            *count -= u32::from(old);
+        }
+        for (new, bucket) in push.iter_mut().zip(&time.buckets) {
+            *new = bucket.swap(0, Ordering::Relaxed).min(u16::MAX.into()) as u16;
+        }
+        for (count, &new) in self.counts.iter_mut().zip(push.iter()) {
+            *count += u32::from(new);
+        }
+        self.sums_ns[slot] = time.sum_ns.swap(0, Ordering::Relaxed);
+        self.maxes_ns[slot] = time.max_ns.swap(0, Ordering::Relaxed);
+
+        let summary = self.summary();
+        let values = [
+            summary.frames,
+            summary.mean_ns,
+            summary.p95_ns,
+            summary.p99_ns,
+            summary.max_ns,
+        ];
+        for (last, value) in time.last.iter().zip(values) {
+            last.store(value, Ordering::Relaxed);
+        }
+        summary
+    }
+
+    fn summary(&self) -> Summary {
+        let frames: u64 = self.counts.iter().map(|&count| u64::from(count)).sum();
+        if frames == 0 {
+            return Summary::default();
+        }
+        let max_ns = self.maxes_ns.iter().copied().max().unwrap_or_default();
+        let percentile = |percent: u64| {
+            // the frame at this rank, counted from the fastest, 1-based
+            let rank = (frames * percent).div_ceil(100);
+            let mut seen = 0;
+            let index = self
+                .counts
+                .iter()
+                .position(|&count| {
+                    seen += u64::from(count);
+                    seen >= rank
+                })
+                .unwrap_or(BUCKETS - 1);
+            upper_edge(index).min(max_ns)
+        };
+        Summary {
+            frames,
+            mean_ns: self.sums_ns.iter().sum::<u64>() / frames,
+            p95_ns: percentile(95),
+            p99_ns: percentile(99),
             max_ns,
         }
     }
