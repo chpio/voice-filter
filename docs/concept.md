@@ -47,7 +47,7 @@ There's a pure Rust implementation of Hush ([hush-vani](https://crates.io/crates
 - Copied without its history from upstream commit `d375b2d` (2024-10-17): `libDF` and the DeepFilterNet3 model, into `crates/deep-filter-rt`; its `NOTICE.md` names the origin. The upstream history stays available on GitHub; taking it over would have brought about 470 foreign, unsigned commits without conventional commit prefixes and an older model version (8 MB) into this repo, while the code gets reworked heavily anyway. In the workspace a change of its API and the caller go into one commit; it can still be split off into a repo of its own later.
 - The model is stored unpacked in `models/DeepFilterNet3/` (three ONNX files and `config.ini`) instead of upstream's `DeepFilterNet3_onnx.tar.gz`: the weights barely compress (gzip saves 7 %, zstd, xz or brotli at most 1 % more), git and crates.io compress anyway, `config.ini` stays readable in diffs and the crates for unpacking the archive can go. Not in Git LFS: the files hardly ever change, and LFS would break builds from clones without git-lfs (`include_bytes!` would embed the pointer files) and every mirror would need LFS.
 - Reduced to the inference: the core (`lib.rs`) and the `tract` inference (`tract.rs`), about 1,700 of upstream's 7,900 lines and 10 of its 28 dependencies. Updated from tract 0.21 to 0.23, the output differs from upstream's by at most 1.6e-7 (−114 dB), i.e. rounding.
-- The model (8.6 MB) stays embedded and fits the 10 MB limit of crates.io. The low-latency variant (36 MB) doesn't; if we need it, it has to be loaded at runtime (or shrunk, see the open questions).
+- The model (8.6 MB) stays embedded and fits the 10 MB limit of crates.io. The low-latency variant (36 MB) doesn't, and isn't used (see the decisions under [Risks and open questions](#risks-and-open-questions)).
 
 **DeepFilterNet3 on recordings** (2026-11-01, raw recordings of a USB microphone and of a laptop's built-in one, speech, a minute of silence, speech, run through the chain with `examples/trace.rs`):
 
@@ -242,6 +242,8 @@ The biggest risk is latency: all stages together must stay live.
 - Echo cancellation: in our own process, not PipeWire's module (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
 - No ML restoration: it would cost a GPU or a whole CPU core, the chain stays slim (see [Voice enhancement](#voice-enhancement)).
+- No low-latency variant of DeepFilterNet3: measured on the VoiceBank-DEMAND test set (824 sentences, the noise suppression alone, both models on every frame, without `DfTract` skipping frames by the estimated SNR), it delays by 10 instead of 30 ms, but needs about five times the CPU (1.8 instead of 0.37 ms per 10 ms frame: it makes up for the missing lookahead with a larger network) for the same quality (PESQ 3.07 against 3.16, STOI 0.950 against 0.945, SI-SDR 18.7 against 18.9 dB), and at 39 MB it can't be embedded.
+- No quantized weights (fp16, int8): the model fits the crate and needs less than 3 % of a core; it would only have mattered to embed the low-latency variant.
 - No models trained ourselves, only released ones: personalized denoising that keeps only the user's voice needs an open model that runs in real time on little CPU, not DeepFilterNet3 trained with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
 - No presets for voice enhancement (such as "Call", "Stream", "Podcast"): there are no measurements of what each use needs, the defaults and the sliders in the app are enough.
 - No package for Arch (AUR).
@@ -253,8 +255,6 @@ The biggest risk is latency: all stages together must stay live.
 - [ ] A gain before DeepFilterNet3, or a hint in the app, so the speech reaches it at a level it works at (about −45 to −35 dBFS); too quiet, it mutes the speech.
 - [ ] A filter for steady tones before DeepFilterNet3 (fans), following their frequency as it changes with the load, so it doesn't take them for speech.
 - [ ] Should the chain also filter incoming audio (speaker side)?
-- [ ] Does the low-latency variant of DeepFilterNet3 lower the latency noticeably, and at what cost?
-- [ ] Can the weights be stored as fp16 or quantized to int8 (about half or a quarter of the size) without audible loss, and does `tract` support it for all operators?
 
 ## Roadmap
 
