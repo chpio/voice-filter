@@ -73,8 +73,7 @@ jobs:
 
   # Releases the version in Cargo.toml if it isn't on crates.io yet, i.e. after the release PR got
   # merged: `cargo publish`, then the tag `vX.Y.Z` and the Gitea release (both through the API).
-  # Does nothing on the other pushes, and nothing at all while release-plz.toml has
-  # `release = false`.
+  # Does nothing on the other pushes.
   release:
     needs: [check, test]
     if: github.event_name == 'push'
