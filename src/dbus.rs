@@ -2,19 +2,18 @@
 //! go to the audio path through atomics, and the status of the live filter.
 
 use ::std::collections::HashMap;
-use ::std::path::PathBuf;
+use ::std::path::{Path, PathBuf};
 use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::std::sync::{Arc, Mutex, mpsc};
 
 use ::anyhow::{Context as _, Result, anyhow};
 use ::zbus::{connection, fdo, interface};
 
-use crate::SAMPLE_RATE;
 use crate::bridge::Stats;
 use crate::echo::EchoStatus;
 use crate::live::Device;
 use crate::param::Param;
-use crate::settings;
+use crate::{samples_ms, settings};
 
 /// The well-known name; only one process can own it, so it also keeps a second instance from
 /// running.
@@ -66,23 +65,42 @@ pub struct Service {
 }
 
 impl Service {
+    /// Keeps a setting for the next runs with `save`, if there's a directory for the settings.
+    fn save(&self, save: impl FnOnce(&Path) -> Result<()>) -> fdo::Result<()> {
+        match &self.settings_dir {
+            Some(dir) => save(dir).map_err(failed),
+            None => Ok(()),
+        }
+    }
+
     /// Keeps whether Listen is on, if [`Self::keep_listen`], or forgets it.
     fn save_listen(&self) -> fdo::Result<()> {
-        let Some(dir) = &self.settings_dir else {
-            return Ok(());
-        };
-        settings::save_listen(dir, self.keep_listen.then_some(self.listening))
-            .map_err(|err| fdo::Error::Failed(format!("{err:#}")))
+        self.save(|dir| settings::save_listen(dir, self.keep_listen.then_some(self.listening)))
     }
 
     /// Keeps the stages and parameters as they are now for the next runs.
     fn save_chain(&self) -> fdo::Result<()> {
-        let Some(dir) = &self.settings_dir else {
-            return Ok(());
-        };
-        settings::save_chain(dir, &self.switches, &self.params)
-            .map_err(|err| fdo::Error::Failed(format!("{err:#}")))
+        self.save(|dir| settings::save_chain(dir, &self.switches, &self.params))
     }
+}
+
+/// Fails unless `name` is one of `devices` or empty, for the default device.
+fn check_device(name: &str, devices: &Mutex<Vec<Device>>) -> fdo::Result<()> {
+    let known = devices
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|device| device.name == name);
+    if name.is_empty() || known {
+        Ok(())
+    } else {
+        Err(fdo::Error::InvalidArgs(format!("no device {name}")))
+    }
+}
+
+/// A failure as a D-Bus error, with its causes.
+fn failed(err: ::anyhow::Error) -> fdo::Error {
+    fdo::Error::Failed(format!("{err:#}"))
 }
 
 /// A parameter on the bus: stage, name, title, unit, minimum, maximum, step, default and value.
@@ -102,10 +120,6 @@ fn listed(devices: &Mutex<Vec<Device>>) -> Vec<(String, String, i32)> {
             )
         })
         .collect()
-}
-
-fn ms(samples: i64) -> f64 {
-    samples as f64 * 1e3 / SAMPLE_RATE as f64
 }
 
 /// The settings change the live filter immediately, the status properties (latency, counters)
@@ -138,10 +152,7 @@ impl Service {
     /// Sets a setting of a stage, within its range; the stage applies it with the next frame. Kept
     /// for the next runs.
     pub fn set_parameter(&mut self, stage: &str, name: &str, value: f64) -> fdo::Result<()> {
-        let (_, param) = self
-            .params
-            .iter()
-            .find(|(of, param)| *of == stage && param.name == name)
+        let param = Param::find(&self.params, stage, name)
             .ok_or_else(|| fdo::Error::InvalidArgs(format!("no parameter {name} of {stage}")))?;
         param
             .set(value as f32)
@@ -159,7 +170,7 @@ impl Service {
 
     #[zbus(property)]
     pub fn set_listen(&mut self, on: bool) -> fdo::Result<()> {
-        (self.send)(Control::SetListen(on)).map_err(|err| fdo::Error::Failed(err.to_string()))?;
+        (self.send)(Control::SetListen(on)).map_err(failed)?;
         self.listening = on;
         if self.keep_listen {
             self.save_listen()?;
@@ -191,11 +202,7 @@ impl Service {
         self.listen_volume
             .set(db as f32)
             .map_err(|err| fdo::Error::InvalidArgs(err.to_string()))?;
-        if let Some(dir) = &self.settings_dir {
-            settings::save_listen_volume(dir, db as f32)
-                .map_err(|err| fdo::Error::Failed(format!("{err:#}")))?;
-        }
-        Ok(())
+        self.save(|dir| settings::save_listen_volume(dir, db as f32))
     }
 
     /// The stages in the order of the chain and whether they're on.
@@ -228,22 +235,11 @@ impl Service {
 
     #[zbus(property)]
     pub fn set_input(&mut self, name: String) -> fdo::Result<()> {
-        let known = self
-            .inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|input| input.name == name);
-        if !name.is_empty() && !known {
-            return Err(fdo::Error::InvalidArgs(format!("no input {name}")));
-        }
-        (self.send)(Control::SetInput(name.clone()))
-            .map_err(|err| fdo::Error::Failed(err.to_string()))?;
-        if let Some(dir) = &self.settings_dir {
-            settings::save_input(dir, &name).map_err(|err| fdo::Error::Failed(err.to_string()))?;
-        }
+        check_device(&name, &self.inputs)?;
+        (self.send)(Control::SetInput(name.clone())).map_err(failed)?;
+        // it reads from it now, even if keeping it fails
         self.input = name;
-        Ok(())
+        self.save(|dir| settings::save_input(dir, &self.input))
     }
 
     /// The microphones to choose from: `node.name`, description and priority (the session
@@ -263,22 +259,10 @@ impl Service {
 
     #[zbus(property)]
     pub fn set_output(&mut self, name: String) -> fdo::Result<()> {
-        let known = self
-            .outputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|output| output.name == name);
-        if !name.is_empty() && !known {
-            return Err(fdo::Error::InvalidArgs(format!("no output {name}")));
-        }
-        (self.send)(Control::SetOutput(name.clone()))
-            .map_err(|err| fdo::Error::Failed(err.to_string()))?;
-        if let Some(dir) = &self.settings_dir {
-            settings::save_output(dir, &name).map_err(|err| fdo::Error::Failed(err.to_string()))?;
-        }
+        check_device(&name, &self.outputs)?;
+        (self.send)(Control::SetOutput(name.clone())).map_err(failed)?;
         self.output = name;
-        Ok(())
+        self.save(|dir| settings::save_output(dir, &self.output))
     }
 
     /// The output devices to choose from, like [`Self::inputs`].
@@ -291,18 +275,12 @@ impl Service {
     /// `bridge`, `chain` and `app`.
     #[zbus(property(emits_changed_signal = "false"))]
     pub fn latency(&self) -> HashMap<String, f64> {
-        let stats = &self.stats;
-        let parts = [
-            ("microphone", stats.capture_delay.load(Ordering::Relaxed)),
-            ("bridge", stats.bridge_delay.load(Ordering::Relaxed)),
-            ("chain", self.chain_latency as i64),
-            ("app", stats.playback_delay.load(Ordering::Relaxed)),
-        ];
+        let parts = self.stats.latency(self.chain_latency);
         let total = parts.iter().map(|(_, samples)| samples).sum();
         parts
             .into_iter()
             .chain([("total", total)])
-            .map(|(name, samples)| (name.to_owned(), ms(samples)))
+            .map(|(name, samples)| (name.to_owned(), samples_ms(samples as f64)))
             .collect()
     }
 
