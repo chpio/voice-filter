@@ -127,7 +127,12 @@ impl Stage for Expander {
             let step = range / RELEASE_S * FRAME_LEN as f32 / SAMPLE_RATE as f32;
             (previous - step).max(-range)
         };
-        if previous == 0. && self.gain_db == 0. {
+        if previous == self.gain_db {
+            // open, or closed with a gain that stays
+            if previous < 0. {
+                let gain = db_to_gain(previous);
+                frame.iter_mut().for_each(|sample| *sample *= gain);
+            }
             return Ok(());
         }
         // a ramp in dB over the frame, no steps

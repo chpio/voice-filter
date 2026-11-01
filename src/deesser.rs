@@ -134,6 +134,8 @@ impl Stage for DeEsser {
             self.applied_freq = freq;
         }
         let threshold = self.threshold.get();
+        // the threshold as a ratio of the band's power to the input's
+        let threshold_share = 10f32.powf(threshold / 10.);
         let detector = smoothing(DETECTOR_TAU);
         let attack = smoothing(ATTACK_TAU);
         let release = smoothing(RELEASE_TAU);
@@ -141,16 +143,27 @@ impl Stage for DeEsser {
         let mut work = [0.; TAPS - 1 + FRAME_LEN];
         work[..TAPS - 1].copy_from_slice(&self.history);
         work[TAPS - 1..].copy_from_slice(frame);
-        for (i, out) in frame.iter_mut().enumerate() {
-            let window = &work[i..i + TAPS];
-            let delayed = window[DELAY];
-            let low: f32 = window.iter().zip(&self.taps).map(|(x, tap)| x * tap).sum();
+        // the low-pass of the whole frame, tap by tap: the samples don't depend on each other, so
+        // it vectorizes (a sum over the taps per sample doesn't, floats add in order)
+        let mut low = [0.; FRAME_LEN];
+        for (k, tap) in self.taps.iter().enumerate() {
+            for (low, x) in low.iter_mut().zip(&work[k..k + FRAME_LEN]) {
+                *low += x * tap;
+            }
+        }
+        for (i, (out, low)) in frame.iter_mut().zip(low).enumerate() {
+            let delayed = work[i + DELAY];
             let band = delayed - low;
 
             self.power += (delayed * delayed - self.power) * detector;
             self.band_power += (band * band - self.band_power) * detector;
-            let share_db = 10. * ((self.band_power + 1e-12) / (self.power + 1e-12)).log10();
-            let wanted = reduction_db(share_db, threshold);
+            let (band_power, power) = (self.band_power + 1e-12, self.power + 1e-12);
+            // the logarithm only above the threshold, below it there's nothing to turn down
+            let wanted = if band_power > threshold_share * power {
+                reduction_db(10. * (band_power / power).log10(), threshold)
+            } else {
+                0.
+            };
             let speed = if wanted < self.reduction_db {
                 attack
             } else {

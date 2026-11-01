@@ -121,9 +121,16 @@ impl Stage for Compressor {
         let release = smoothing(RELEASE_TAU);
         let (threshold, ratio) = (self.threshold.get(), self.ratio.get());
         let makeup = makeup_db(self.target.get(), threshold, ratio);
+        // the power (with the 1e-12 of `power_db`) below which the curve doesn't turn down: the
+        // logarithm only above it
+        let knee_power = 10f32.powf((threshold - KNEE_DB / 2.) / 10.);
         for sample in frame.iter_mut() {
             self.power += (*sample * *sample - self.power) * detector;
-            let wanted = reduction_db(power_db(self.power), threshold, ratio);
+            let wanted = if self.power + 1e-12 > knee_power {
+                reduction_db(power_db(self.power), threshold, ratio)
+            } else {
+                0.
+            };
             let speed = if wanted < self.reduction_db {
                 attack
             } else {

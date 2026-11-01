@@ -68,10 +68,15 @@ impl Stage for Limiter {
         let mut work = [0.; LOOKAHEAD + FRAME_LEN];
         work[..LOOKAHEAD].copy_from_slice(&self.delay);
         work[LOOKAHEAD..].copy_from_slice(frame);
-        for (i, out) in frame.iter_mut().enumerate() {
-            let peak = work[i..=i + LOOKAHEAD]
-                .iter()
-                .fold(0f32, |peak, x| peak.max(x.abs()));
+        // the peak of each sample and the LOOKAHEAD after it, for the whole frame offset by
+        // offset, so it vectorizes
+        let mut peaks = [0f32; FRAME_LEN];
+        for offset in 0..=LOOKAHEAD {
+            for (peak, x) in peaks.iter_mut().zip(&work[offset..offset + FRAME_LEN]) {
+                *peak = peak.max(x.abs());
+            }
+        }
+        for (i, (out, peak)) in frame.iter_mut().zip(peaks).enumerate() {
             let wanted = if peak > ceiling { ceiling / peak } else { 1. };
             let rate = if wanted < self.gain { attack } else { release };
             self.gain += (wanted - self.gain) * rate;

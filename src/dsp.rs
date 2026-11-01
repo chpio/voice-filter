@@ -3,9 +3,9 @@
 
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
-/// The factor of a gain in dB.
+/// The factor of a gain in dB. With `exp`, which is faster than `powf`.
 pub fn db_to_gain(db: f32) -> f32 {
-    10f32.powf(db / 20.)
+    (db * (::std::f32::consts::LN_10 / 20.)).exp()
 }
 
 /// The level of a power (a mean square) in dB, −120 for silence.
