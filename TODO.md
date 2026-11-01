@@ -36,6 +36,7 @@ Work items that don't change the design; the open design questions and TODOs are
 
 ## Releases
 
-- [ ] Before the first release: check the release PR title `chore: bump version (v{{ version }})` in
-  `release-plz.toml` with two packages. If one PR releases voice-filter and deep-filter-rt with
-  different versions, release-plz probably can't fill in `version`.
+- [ ] The release PR title `chore: bump version (v{{ version }})` in `release-plz.toml` works while
+  voice-filter and deep-filter-rt get the same version (0.1.0, 0.1.1); once one PR releases them
+  with different versions (e.g. a breaking change of deep-filter-rt), release-plz probably can't
+  fill in `version`: check that PR's title.
