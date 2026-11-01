@@ -266,8 +266,8 @@ pub fn band_unit_norm_t(xs: &[Complex32], state: &mut [f32], alpha: f32, out: &m
         o_im.iter_mut(),
     ) {
         *s = x.norm() * (1. - alpha) + *s * alpha;
-        *o_re /= s.sqrt();
-        *o_im /= s.sqrt();
+        *o_re = x.re / s.sqrt();
+        *o_im = x.im / s.sqrt();
     }
 }
 
