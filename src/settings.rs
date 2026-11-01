@@ -128,9 +128,7 @@ fn restore_line(
     let value = value.trim();
     match key.split_once('.') {
         Some((stage, name)) => {
-            let (_, param) = params
-                .iter()
-                .find(|(of, param)| *of == stage && param.name == name)
+            let param = Param::find(params, stage, name)
                 .ok_or_else(|| format!("no parameter {name} of {stage}"))?;
             let value = value
                 .parse()

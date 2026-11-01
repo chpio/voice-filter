@@ -2,8 +2,9 @@ use ::std::sync::Arc;
 
 use ::anyhow::Result;
 
-use crate::agc::db_to_gain;
-use crate::denoise::Speech;
+use crate::denoise::{Speech, SpeechReader};
+use crate::dsp::{db_to_gain, ramp};
+use crate::level;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -20,9 +21,7 @@ use crate::{FRAME_LEN, SAMPLE_RATE};
 /// counts. It stays open for the hold time after, so it doesn't close between words, then closes
 /// over [`RELEASE_S`].
 pub struct Expander {
-    speech: Arc<Speech>,
-    /// The frames of `speech` at the last frame, to see whether it still runs.
-    speech_frames: u64,
+    speech: SpeechReader,
     range: Param,
     threshold: Param,
     /// In ms.
@@ -53,8 +52,7 @@ impl Expander {
     /// hears.
     pub fn new() -> Self {
         Self {
-            speech: Arc::new(Speech::new()),
-            speech_frames: 0,
+            speech: SpeechReader::new(Arc::new(Speech::new())),
             range: Param::new("range", "Range", "dB", (0., 40., 1.), RANGE_DB),
             threshold: Param::new(
                 "threshold",
@@ -72,7 +70,10 @@ impl Expander {
 
     /// Hears speech where the noise suppression does ([`crate::denoise::Denoise::speech`]).
     pub fn listening(self, speech: Arc<Speech>) -> Self {
-        Self { speech, ..self }
+        Self {
+            speech: SpeechReader::new(speech),
+            ..self
+        }
     }
 
     /// The current gain in dB, from minus the range up to 0.
@@ -82,12 +83,10 @@ impl Expander {
 
     /// Whether the frame holds speech: by its level, or by the noise suppression while it runs.
     fn speaks(&mut self, frame: &Frame) -> bool {
-        let frames = self.speech.frames();
-        let running = frames != self.speech_frames;
-        self.speech_frames = frames;
-        let power = frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
-        10. * (power + 1e-12).log10() > self.level.get()
-            || running && self.speech.snr_db() > self.threshold.get()
+        // read every frame, so it sees whether the noise suppression still runs
+        let snr_db = self.speech.read();
+        level::frame_db(frame) > self.level.get()
+            || snr_db.is_some_and(|snr_db| snr_db > self.threshold.get())
     }
 }
 
@@ -132,9 +131,8 @@ impl Stage for Expander {
             return Ok(());
         }
         // a ramp in dB over the frame, no steps
-        for (i, sample) in frame.iter_mut().enumerate() {
-            let t = (i + 1) as f32 / FRAME_LEN as f32;
-            *sample *= db_to_gain(previous + (self.gain_db - previous) * t);
+        for (sample, db) in frame.iter_mut().zip(ramp(previous, self.gain_db)) {
+            *sample *= db_to_gain(db);
         }
         Ok(())
     }

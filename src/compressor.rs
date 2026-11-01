@@ -1,7 +1,7 @@
 use ::anyhow::Result;
 
-use crate::SAMPLE_RATE;
-use crate::agc::{TARGET_DB, db_to_gain};
+use crate::agc;
+use crate::dsp::{db_to_gain, power_db, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
@@ -60,11 +60,6 @@ pub fn makeup_db(target_db: f32, threshold_db: f32, ratio: f32) -> f32 {
     -reduction_db(target_db + 3., threshold_db, ratio)
 }
 
-/// The smoothing factor per sample of a time constant in seconds.
-fn coefficient(tau: f32) -> f32 {
-    1. - (-1. / (tau * SAMPLE_RATE as f32)).exp()
-}
-
 impl Compressor {
     pub fn new() -> Self {
         Self {
@@ -78,13 +73,7 @@ impl Compressor {
                 THRESHOLD_DB,
             ),
             ratio: Param::new("ratio", "Ratio", ":1", (1., 10., 0.1), RATIO),
-            target: Param::new(
-                "target",
-                "Target Level",
-                "dBFS",
-                (-30., -12., 0.5),
-                TARGET_DB,
-            ),
+            target: agc::target_param(),
         }
     }
 
@@ -127,15 +116,14 @@ impl Stage for Compressor {
     }
 
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
-        let detector = coefficient(DETECTOR_TAU);
-        let attack = coefficient(ATTACK_TAU);
-        let release = coefficient(RELEASE_TAU);
+        let detector = smoothing(DETECTOR_TAU);
+        let attack = smoothing(ATTACK_TAU);
+        let release = smoothing(RELEASE_TAU);
         let (threshold, ratio) = (self.threshold.get(), self.ratio.get());
         let makeup = makeup_db(self.target.get(), threshold, ratio);
         for sample in frame.iter_mut() {
             self.power += (*sample * *sample - self.power) * detector;
-            let level_db = 10. * (self.power + 1e-12).log10();
-            let wanted = reduction_db(level_db, threshold, ratio);
+            let wanted = reduction_db(power_db(self.power), threshold, ratio);
             let speed = if wanted < self.reduction_db {
                 attack
             } else {

@@ -55,6 +55,20 @@ pub struct Stats {
     pending: AtomicU64,
 }
 
+impl Stats {
+    /// The latency from the microphone to the app in samples, in its parts: `microphone` (from the
+    /// device to the capture stream), `bridge`, `chain` (`chain_latency`) and `app` (from the
+    /// output stream to the app).
+    pub fn latency(&self, chain_latency: usize) -> [(&'static str, i64); 4] {
+        [
+            ("microphone", self.capture_delay.load(Ordering::Relaxed)),
+            ("bridge", self.bridge_delay.load(Ordering::Relaxed)),
+            ("chain", chain_latency as i64),
+            ("app", self.playback_delay.load(Ordering::Relaxed)),
+        ]
+    }
+}
+
 /// The capture side: collects samples into frames and runs the chain on them.
 pub struct Capture {
     chain: Chain,

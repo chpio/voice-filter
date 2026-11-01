@@ -1,7 +1,6 @@
 use ::anyhow::Result;
 
-use crate::FRAME_LEN;
-use crate::agc::db_to_gain;
+use crate::dsp::{db_to_gain, ramp};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
@@ -45,9 +44,8 @@ impl Stage for Volume {
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let (from, to) = (self.gain, db_to_gain(self.volume.get()));
         self.gain = to;
-        for (i, sample) in frame.iter_mut().enumerate() {
-            let t = (i + 1) as f32 / FRAME_LEN as f32;
-            *sample *= from + (to - from) * t;
+        for (sample, gain) in frame.iter_mut().zip(ramp(from, to)) {
+            *sample *= gain;
         }
         Ok(())
     }

@@ -8,7 +8,7 @@ use ::zbus::proxy::CacheProperties;
 
 use super::help;
 use super::proxy::{Parameter, Status, VoiceFilterProxy};
-use crate::SAMPLE_RATE;
+use crate::samples_ms;
 
 /// The stages the window shows: name in the chain and title; what they do is in the descriptions
 /// of their groups and behind the info button of their row ([`help`]), so the rows stay short.
@@ -345,11 +345,10 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             return;
         };
         let on = row.enables_expansion();
-        glib::spawn_future_local(async move {
-            if let Err(err) = proxy.set_listen(on).await {
-                eprintln!("Could not switch listening: {err}");
-            }
-        });
+        send(
+            "switch listening",
+            async move { proxy.set_listen(on).await },
+        );
     });
     let weak = Rc::downgrade(widgets);
     widgets.listen_volume.connect_value_changed(move |scale| {
@@ -357,10 +356,8 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             return;
         };
         let db = scale.value();
-        glib::spawn_future_local(async move {
-            if let Err(err) = proxy.set_listen_volume(db).await {
-                eprintln!("Could not set the volume of listening: {err}");
-            }
+        send("set the volume of listening", async move {
+            proxy.set_listen_volume(db).await
         });
     });
     let weak = Rc::downgrade(widgets);
@@ -369,10 +366,8 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             return;
         };
         let keep = row.is_active();
-        glib::spawn_future_local(async move {
-            if let Err(err) = proxy.set_keep_listen(keep).await {
-                eprintln!("Could not keep listening: {err}");
-            }
+        send("keep listening", async move {
+            proxy.set_keep_listen(keep).await
         });
     });
     connect_device(widgets, Device::Input);
@@ -411,13 +406,10 @@ fn connect_device(widgets: &Rc<Widgets>, device: Device) {
         let Some(name) = names.borrow().get(row.selected() as usize).cloned() else {
             return;
         };
-        glib::spawn_future_local(async move {
-            let result = match device {
+        send(format!("switch to {name}"), async move {
+            match device {
                 Device::Input => proxy.set_input(&name).await,
                 Device::Output => proxy.set_output(&name).await,
-            };
-            if let Err(err) = result {
-                eprintln!("Could not switch to {name}: {err}");
             }
         });
     });
@@ -498,9 +490,19 @@ fn send_enabled(widgets: &::std::rc::Weak<Widgets>, stage: &str, enabled: bool) 
         return;
     };
     let stage = stage.to_owned();
+    send(format!("switch {stage}"), async move {
+        proxy.set_stage_enabled(&stage, enabled).await
+    });
+}
+
+/// Sends a change to the filter in the background; prints why it failed, after "Could not".
+fn send(
+    what: impl ::std::fmt::Display + 'static,
+    change: impl Future<Output = ::zbus::Result<()>> + 'static,
+) {
     glib::spawn_future_local(async move {
-        if let Err(err) = proxy.set_stage_enabled(&stage, enabled).await {
-            eprintln!("Could not switch {stage}: {err}");
+        if let Err(err) = change.await {
+            eprintln!("Could not {what}: {err}");
         }
     });
 }
@@ -565,10 +567,8 @@ fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> gtk::Scale {
             return;
         };
         let (stage, name, value) = (stage.clone(), name.clone(), scale.value());
-        glib::spawn_future_local(async move {
-            if let Err(err) = proxy.set_parameter(&stage, &name, value).await {
-                eprintln!("Could not set {name} of {stage}: {err}");
-            }
+        send(format!("set {name} of {stage}"), async move {
+            proxy.set_parameter(&stage, &name, value).await
         });
     });
     scale
@@ -860,7 +860,7 @@ fn show(widgets: &Widgets, status: &Status) {
     ));
     let count = |name: &str| status.counters.get(name).copied().unwrap_or_default();
     // the counters are in samples, which say little to the user
-    let count_ms = |name: &str| count(name) as f64 * 1e3 / SAMPLE_RATE as f64;
+    let count_ms = |name: &str| samples_ms(count(name) as f64);
     widgets.dropouts.set_subtitle(&format!(
         "{:.0} ms of silence, {:.0} ms dropped, {} errors",
         count_ms("silence"),

@@ -1,10 +1,9 @@
 use ::anyhow::Result;
 
-use crate::FRAME_LEN;
-use crate::SAMPLE_RATE;
-use crate::agc::db_to_gain;
+use crate::dsp::{db_to_gain, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
+use crate::{FRAME_LEN, SAMPLE_RATE};
 
 /// A peak limiter with lookahead: it sees a peak [`LOOKAHEAD`] samples before it plays it and
 /// lowers the gain in time, so the output stays below its ceiling ([`CEILING_DB`] by default)
@@ -61,9 +60,8 @@ impl Stage for Limiter {
 
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let ceiling = db_to_gain(self.ceiling.get());
-        let attack = 1. - (-1. / (ATTACK_TAU * SAMPLE_RATE as f32)).exp();
-        let release_tau = self.release.get() / 1000.;
-        let release = 1. - (-1. / (release_tau * SAMPLE_RATE as f32)).exp();
+        let attack = smoothing(ATTACK_TAU);
+        let release = smoothing(self.release.get() / 1000.);
 
         // the delayed samples followed by the new ones, so every output sample sees the next
         // LOOKAHEAD samples

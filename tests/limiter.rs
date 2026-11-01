@@ -1,5 +1,5 @@
 use ::voice_filter::FRAME_LEN;
-use ::voice_filter::agc::db_to_gain;
+use ::voice_filter::dsp::db_to_gain;
 use ::voice_filter::limiter::{CEILING_DB, LOOKAHEAD, Limiter};
 use ::voice_filter::stage::{Frame, Stage};
 

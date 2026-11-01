@@ -1,11 +1,11 @@
 //! Levels of frames: their RMS level and the noise floor under them.
 
 use crate::FRAME_LEN;
+use crate::dsp::power_db;
 
 /// The RMS level of a frame in dBFS, −120 for silence.
 pub fn frame_db(frame: &[f32; FRAME_LEN]) -> f32 {
-    let power = frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
-    10. * (power + 1e-12).log10()
+    power_db(frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32)
 }
 
 /// The noise floor: the quietest frame level of the last 2 s. Longer than a syllable or a word,

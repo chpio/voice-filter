@@ -43,6 +43,19 @@ impl Param {
         }
     }
 
+    /// The parameter `name` of `stage` among the parameters of a chain, as
+    /// [`crate::chain::Chain::params`] gives them.
+    pub fn find<'a>(
+        params: &'a [(&'static str, Param)],
+        stage: &str,
+        name: &str,
+    ) -> Option<&'a Param> {
+        params
+            .iter()
+            .find(|(of, param)| *of == stage && param.name == name)
+            .map(|(_, param)| param)
+    }
+
     pub fn get(&self) -> f32 {
         self.value.load()
     }

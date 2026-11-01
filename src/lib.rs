@@ -12,6 +12,7 @@ pub mod compressor;
 pub mod dbus;
 pub mod deesser;
 pub mod denoise;
+pub mod dsp;
 pub mod echo;
 pub mod equalizer;
 pub mod expander;
@@ -31,3 +32,8 @@ pub mod volume;
 pub const SAMPLE_RATE: u32 = 48000;
 /// The samples per frame, 10 ms at [`SAMPLE_RATE`]; the hop size of DeepFilterNet3.
 pub const FRAME_LEN: usize = 480;
+
+/// A number of samples at [`SAMPLE_RATE`] in milliseconds.
+pub fn samples_ms(samples: f64) -> f64 {
+    samples * 1e3 / SAMPLE_RATE as f64
+}

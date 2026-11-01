@@ -3,13 +3,14 @@ use ::std::sync::Arc;
 
 use ::voice_filter::agc::{self, Agc};
 use ::voice_filter::denoise::Speech;
+use ::voice_filter::dsp::db_to_gain;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
 
 /// Frames of a 440 Hz sine with the given RMS level, `on` frames of it and then `off` frames of
 /// silence, repeated. [`syllables`] for speech: a steady tone is noise to the AGC.
 fn bursts(level_db: f32, on: usize, off: usize, frames: usize) -> Vec<Frame> {
-    let amplitude = agc::db_to_gain(level_db) * 2f32.sqrt();
+    let amplitude = db_to_gain(level_db) * 2f32.sqrt();
     (0..frames)
         .map(|f| {
             let mut frame = [0.; FRAME_LEN];

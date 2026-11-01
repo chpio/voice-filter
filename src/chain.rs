@@ -4,6 +4,7 @@ use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::anyhow::Result;
 
 use crate::FRAME_LEN;
+use crate::dsp::ramp;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
@@ -113,9 +114,8 @@ impl Slot {
             };
             self.resuming = self.resuming.saturating_sub(1);
             if target != 1. || self.mix != 1. {
-                let from = self.mix;
-                for (i, (wet, dry)) in frame.iter_mut().zip(&self.dry).enumerate() {
-                    let mix = from + (target - from) * (i + 1) as f32 / FRAME_LEN as f32;
+                let mixes = ramp(self.mix, target);
+                for ((wet, dry), mix) in frame.iter_mut().zip(&self.dry).zip(mixes) {
                     *wet = *wet * mix + dry * (1. - mix);
                 }
             }

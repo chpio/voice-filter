@@ -7,6 +7,7 @@ use ::sonora::config::{EchoCanceller, MaxProcessingRate, Pipeline};
 use ::sonora::{AudioProcessing, Config, StreamConfig};
 
 use crate::atomic::AtomicF32;
+use crate::level;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
@@ -189,8 +190,7 @@ impl Stage for Echo {
                 .process_render_f32(&[&self.render], &mut [&mut self.render_out])
                 .map_err(|err| anyhow!("{err}"))?;
             let status = &self.status;
-            let power = self.render.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
-            let level_db = 10. * (power + 1e-12).log10();
+            let level_db = level::frame_db(&self.render);
             let peak_db = (status.reference_db() - REFERENCE_DECAY_DB).max(level_db);
             status.reference_db.store(peak_db);
             status.reference_frames.fetch_add(1, Ordering::Relaxed);

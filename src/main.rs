@@ -13,6 +13,7 @@ use ::voice_filter::equalizer::Equalizer;
 use ::voice_filter::expander::Expander;
 use ::voice_filter::highpass::HighPass;
 use ::voice_filter::limiter::Limiter;
+use ::voice_filter::param::Param;
 use ::voice_filter::stage::Stage;
 use ::voice_filter::{FRAME_LEN, live, offline, settings};
 
@@ -86,9 +87,14 @@ fn device(
     })
 }
 
-/// Prints the devices, the saved one marked with `*`.
-fn list(devices: Vec<live::Device>, saved: Option<String>) {
-    for device in devices {
+/// Prints the microphones or output devices, the saved one marked with `*`.
+fn list(
+    direction: live::Direction,
+    settings_dir: Option<&Path>,
+    load: fn(&Path) -> Result<Option<String>>,
+) -> Result<()> {
+    let saved = settings_dir.map(load).transpose()?.flatten();
+    for device in live::devices(direction)? {
         let mark = if saved.as_deref() == Some(&device.name) {
             "*"
         } else {
@@ -99,6 +105,7 @@ fn list(devices: Vec<live::Device>, saved: Option<String>) {
             device.name, device.description, device.priority
         );
     }
+    Ok(())
 }
 
 fn main() -> Result<ExitCode> {
@@ -159,10 +166,7 @@ fn main() -> Result<ExitCode> {
                 }
                 // a limit given on the command line wins over the kept one, and is kept instead
                 if let Some(db) = args.atten_lim {
-                    let limit = params
-                        .iter()
-                        .find(|(stage, param)| *stage == "denoise" && param.name == "limit");
-                    if let Some((_, limit)) = limit {
+                    if let Some(limit) = Param::find(&params, "denoise", "limit") {
                         limit.set(db.clamp(0., denoise::UNLIMITED))?;
                     }
                     settings::save_chain(dir, &switches, &params)?;
@@ -174,20 +178,8 @@ fn main() -> Result<ExitCode> {
             };
             live::run(chain, reference, devices, settings_dir.map(Path::to_owned))?;
         }
-        Command::Inputs => {
-            let saved = settings_dir
-                .map(settings::load_input)
-                .transpose()?
-                .flatten();
-            list(live::devices(live::Direction::Input)?, saved);
-        }
-        Command::Outputs => {
-            let saved = settings_dir
-                .map(settings::load_output)
-                .transpose()?
-                .flatten();
-            list(live::devices(live::Direction::Output)?, saved);
-        }
+        Command::Inputs => list(live::Direction::Input, settings_dir, settings::load_input)?,
+        Command::Outputs => list(live::Direction::Output, settings_dir, settings::load_output)?,
         Command::Process {
             input,
             output,

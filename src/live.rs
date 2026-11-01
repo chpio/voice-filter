@@ -26,7 +26,7 @@ use crate::echo::Reference;
 use crate::param::Param;
 use crate::settings;
 use crate::volume::{self, Volume};
-use crate::{FRAME_LEN, SAMPLE_RATE};
+use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
 
 const NODE_NAME: &str = "voice-filter";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
@@ -116,64 +116,54 @@ pub fn run(
     let registry = core.get_registry_rc()?;
     let _inputs_listener = watch_devices(&registry, Direction::Input, inputs);
     let _outputs_listener = watch_devices(&registry, Direction::Output, outputs);
-    // the quantum the streams ask for, the graph may still run a smaller one
-    let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
 
     // The virtual microphone: `Audio/Source`, not `Audio/Source/Virtual`, WirePlumber doesn't set
     // a format for the latter, so it would get no ports.
-    let output = StreamRc::new(
-        core.clone(),
+    let output = stream(
+        &core,
         NODE_NAME,
-        properties! {
-            *pw::keys::MEDIA_TYPE => "Audio",
-            *pw::keys::MEDIA_CLASS => "Audio/Source",
-            *pw::keys::NODE_NAME => NODE_NAME,
-            *pw::keys::NODE_DESCRIPTION => "Voice Filter",
-            *pw::keys::NODE_LATENCY => latency.as_str(),
-            *pw::keys::NODE_GROUP => GROUP,
-            *pw::keys::NODE_LINK_GROUP => GROUP,
-            *pw::keys::AUDIO_CHANNELS => "1",
-        },
+        "Voice Filter",
+        None,
+        &[
+            (*pw::keys::MEDIA_CLASS, "Audio/Source"),
+            (*pw::keys::NODE_GROUP, GROUP),
+            (*pw::keys::NODE_LINK_GROUP, GROUP),
+        ],
     )?;
-    let mut capture_properties = properties! {
-        *pw::keys::MEDIA_TYPE => "Audio",
-        *pw::keys::MEDIA_CATEGORY => "Capture",
-        *pw::keys::MEDIA_ROLE => "Communication",
-        *pw::keys::NODE_NAME => CAPTURE_NODE_NAME,
-        *pw::keys::NODE_DESCRIPTION => "Voice Filter (microphone)",
-        *pw::keys::NODE_LATENCY => latency.as_str(),
-        *pw::keys::NODE_GROUP => GROUP,
-        *pw::keys::NODE_LINK_GROUP => GROUP,
-        *pw::keys::AUDIO_CHANNELS => "1",
-    };
     // Without a target, the session manager links the default input; if that's "Voice Filter"
     // itself, the link group rules it out and it falls back to the source with the highest
     // priority, whichever that is.
-    if let Some(input) = input {
-        capture_properties.insert(*pw::keys::TARGET_OBJECT, input);
-    }
-    let input = StreamRc::new(core.clone(), CAPTURE_NODE_NAME, capture_properties)?;
+    let input = stream(
+        &core,
+        CAPTURE_NODE_NAME,
+        "Voice Filter (microphone)",
+        input,
+        &[
+            (*pw::keys::MEDIA_CATEGORY, "Capture"),
+            (*pw::keys::MEDIA_ROLE, "Communication"),
+            (*pw::keys::NODE_GROUP, GROUP),
+            (*pw::keys::NODE_LINK_GROUP, GROUP),
+        ],
+    )?;
 
     // What an output device plays, from its monitor, for the echo canceller. Without a target the
     // session manager links the default output. In neither the group nor the link group of the
     // other streams, PipeWire puts the nodes of both on one driver: the output device would run
     // under the microphone's clock and at its quantum (256) while an app records, with xruns at
     // every join and leave and players that want a larger quantum (Firefox: 900–3600) falling
-    // behind. It follows the output device's clock instead and hands its samples over through the ring of the reference; with
-    // `stream.capture.sink` it only links to output devices, never to the filter's own output.
-    let mut reference_properties = properties! {
-        *pw::keys::MEDIA_TYPE => "Audio",
-        *pw::keys::MEDIA_CATEGORY => "Capture",
-        *pw::keys::NODE_NAME => REFERENCE_NODE_NAME,
-        *pw::keys::NODE_DESCRIPTION => "Voice Filter (speakers, for the echo cancellation)",
-        *pw::keys::NODE_LATENCY => latency.as_str(),
-        *pw::keys::AUDIO_CHANNELS => "1",
-        "stream.capture.sink" => "true",
-    };
-    if let Some(output_device) = output_device {
-        reference_properties.insert(*pw::keys::TARGET_OBJECT, output_device);
-    }
-    let reference_stream = StreamRc::new(core.clone(), REFERENCE_NODE_NAME, reference_properties)?;
+    // behind. It follows the output device's clock instead and hands its samples over through the
+    // ring of the reference; with `stream.capture.sink` it only links to output devices, never to
+    // the filter's own output.
+    let reference_stream = stream(
+        &core,
+        REFERENCE_NODE_NAME,
+        "Voice Filter (speakers, for the echo cancellation)",
+        output_device,
+        &[
+            (*pw::keys::MEDIA_CATEGORY, "Capture"),
+            ("stream.capture.sink", "true"),
+        ],
+    )?;
 
     let mut samples = Vec::with_capacity(MAX_QUANTUM);
     let capture_stats = stats.clone();
@@ -252,13 +242,7 @@ pub fn run(
         }
     });
 
-    let format = format_param();
-    output.connect(
-        spa::utils::Direction::Output,
-        None,
-        StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-        &mut [Pod::from_bytes(&format).unwrap()],
-    )?;
+    connect(&output, spa::utils::Direction::Output)?;
     // after "Voice Filter" exists, though Listen never falls back to another source anyway
     if listen_on {
         start_listening();
@@ -277,7 +261,7 @@ pub fn run(
 
     eprintln!(
         "\"Voice Filter\" is ready, the chain adds {:.1} ms",
-        chain_latency as f64 * 1e3 / SAMPLE_RATE as f64
+        samples_ms(chain_latency as f64)
     );
     report_periodically(stats, chain_latency);
     mainloop.run();
@@ -304,38 +288,31 @@ impl Listen {
     fn start(core: &pw::core::CoreRc, volume: Param) -> Result<Self> {
         let (mut capture, mut playback, _) =
             bridge(Chain::new(vec![Box::new(Volume::new(volume))]));
-        let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
-        let capture_stream = StreamRc::new(
-            core.clone(),
+        let description = "Voice Filter (listening)";
+        let capture_stream = stream(
+            core,
             LISTEN_NODE_NAME,
-            properties! {
-                *pw::keys::MEDIA_TYPE => "Audio",
-                *pw::keys::MEDIA_CATEGORY => "Capture",
-                *pw::keys::NODE_NAME => LISTEN_NODE_NAME,
-                *pw::keys::NODE_DESCRIPTION => "Voice Filter (listening)",
-                *pw::keys::TARGET_OBJECT => NODE_NAME,
+            description,
+            Some(NODE_NAME),
+            &[
+                (*pw::keys::MEDIA_CATEGORY, "Capture"),
                 // without "Voice Filter" WirePlumber would link the default source, i.e. play
                 // the unfiltered microphone
-                "node.dont-fallback" => "true",
-                *pw::keys::NODE_LATENCY => latency.as_str(),
-                *pw::keys::NODE_GROUP => LISTEN_GROUP,
-                *pw::keys::NODE_LINK_GROUP => LISTEN_GROUP,
-                *pw::keys::AUDIO_CHANNELS => "1",
-            },
+                ("node.dont-fallback", "true"),
+                (*pw::keys::NODE_GROUP, LISTEN_GROUP),
+                (*pw::keys::NODE_LINK_GROUP, LISTEN_GROUP),
+            ],
         )?;
-        let playback_stream = StreamRc::new(
-            core.clone(),
+        let playback_stream = stream(
+            core,
             LISTEN_NODE_NAME,
-            properties! {
-                *pw::keys::MEDIA_TYPE => "Audio",
-                *pw::keys::MEDIA_CATEGORY => "Playback",
-                *pw::keys::NODE_NAME => LISTEN_NODE_NAME,
-                *pw::keys::NODE_DESCRIPTION => "Voice Filter (listening)",
-                *pw::keys::NODE_LATENCY => latency.as_str(),
-                *pw::keys::NODE_GROUP => LISTEN_GROUP,
-                *pw::keys::NODE_LINK_GROUP => LISTEN_GROUP,
-                *pw::keys::AUDIO_CHANNELS => "1",
-            },
+            description,
+            None,
+            &[
+                (*pw::keys::MEDIA_CATEGORY, "Playback"),
+                (*pw::keys::NODE_GROUP, LISTEN_GROUP),
+                (*pw::keys::NODE_LINK_GROUP, LISTEN_GROUP),
+            ],
         )?;
         let mut samples = Vec::with_capacity(MAX_QUANTUM);
         let capture_listener = capture_stream
@@ -351,20 +328,8 @@ impl Listen {
                 write_from(stream, &mut playback, &mut pulled);
             })
             .register()?;
-        let flags = StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS;
-        let format = format_param();
-        capture_stream.connect(
-            spa::utils::Direction::Input,
-            None,
-            flags,
-            &mut [Pod::from_bytes(&format).unwrap()],
-        )?;
-        playback_stream.connect(
-            spa::utils::Direction::Output,
-            None,
-            flags,
-            &mut [Pod::from_bytes(&format).unwrap()],
-        )?;
+        connect(&capture_stream, spa::utils::Direction::Input)?;
+        connect(&playback_stream, spa::utils::Direction::Output)?;
         Ok(Self {
             _capture: capture_stream,
             _playback: playback_stream,
@@ -468,9 +433,41 @@ fn connect_capture(input: &StreamRc) -> Result<()> {
     if !matches!(input.state(), StreamState::Unconnected) {
         return Ok(());
     }
+    connect(input, spa::utils::Direction::Input)
+}
+
+/// A stream of mono audio named `name`, asking for a quantum of a frame, with `properties` on top.
+/// It links to the node `target`, without one to the default the session manager picks.
+fn stream(
+    core: &pw::core::CoreRc,
+    name: &str,
+    description: &str,
+    target: Option<&str>,
+    properties: &[(&str, &str)],
+) -> Result<StreamRc> {
+    // the graph may still run a smaller quantum
+    let latency = format!("{FRAME_LEN}/{SAMPLE_RATE}");
+    let mut all = properties! {
+        *pw::keys::MEDIA_TYPE => "Audio",
+        *pw::keys::NODE_NAME => name,
+        *pw::keys::NODE_DESCRIPTION => description,
+        *pw::keys::NODE_LATENCY => latency.as_str(),
+        *pw::keys::AUDIO_CHANNELS => "1",
+    };
+    for (key, value) in properties {
+        all.insert(*key, *value);
+    }
+    if let Some(target) = target {
+        all.insert(*pw::keys::TARGET_OBJECT, target);
+    }
+    Ok(StreamRc::new(core.clone(), name, all)?)
+}
+
+/// Connects a stream in [`format_param`].
+fn connect(stream: &StreamRc, direction: spa::utils::Direction) -> Result<()> {
     let format = format_param();
-    input.connect(
-        spa::utils::Direction::Input,
+    stream.connect(
+        direction,
         None,
         StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
         &mut [Pod::from_bytes(&format).unwrap()],
@@ -668,7 +665,6 @@ fn format_param() -> Vec<u8> {
 
 /// Prints the counters and the latency every 10 s while frames are processed.
 fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
-    let ms = |samples: i64| samples as f64 * 1e3 / SAMPLE_RATE as f64;
     ::std::thread::spawn(move || {
         let mut last = [0; 4];
         loop {
@@ -683,10 +679,11 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
             stats.last_max_frame_ns.store(max_ns, Ordering::Relaxed);
             let max_ms = max_ns as f64 / 1e6;
             if now[0] != last[0] {
-                let capture = stats.capture_delay.load(Ordering::Relaxed);
-                let bridge = stats.bridge_delay.load(Ordering::Relaxed);
-                let playback = stats.playback_delay.load(Ordering::Relaxed);
-                let total = capture + bridge + chain_latency as i64 + playback;
+                let parts = stats.latency(chain_latency);
+                let total: i64 = parts.iter().map(|(_, samples)| samples).sum();
+                let parts = parts
+                    .map(|(name, samples)| format!("{name} {:.1}", samples_ms(samples as f64)))
+                    .join(" + ");
                 eprintln!(
                     "{} frames, max {max_ms:.2} ms per frame, {} samples silence, {} dropped, \
                      {} errors",
@@ -696,13 +693,8 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize) {
                     now[3] - last[3],
                 );
                 eprintln!(
-                    "latency {:.1} ms: microphone {:.1} + bridge {:.1} + chain {:.1} + app {:.1}, \
-                     quantum {}",
-                    ms(total),
-                    ms(capture),
-                    ms(bridge),
-                    ms(chain_latency as i64),
-                    ms(playback),
+                    "latency {:.1} ms: {parts}, quantum {}",
+                    samples_ms(total as f64),
                     stats.quantum.load(Ordering::Relaxed),
                 );
             }

@@ -13,7 +13,7 @@ use ::hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use crate::chain::Chain;
 use crate::echo::Reference;
 use crate::stage::Frame;
-use crate::{FRAME_LEN, SAMPLE_RATE};
+use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
 
 /// Latency and processing time of one stage.
 pub struct StageReport {
@@ -50,7 +50,7 @@ impl Report {
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ms = |d: Duration| d.as_secs_f64() * 1e3;
-        let latency_ms = |samples: usize| samples as f64 * 1e3 / SAMPLE_RATE as f64;
+        let latency_ms = |samples: usize| samples_ms(samples as f64);
         writeln!(
             f,
             "{:.1} s, {} frames of {:.0} ms",
@@ -217,8 +217,8 @@ pub fn process(
     Ok((output, report))
 }
 
-/// [`process`] from one WAV file into another, see [`read_wav`] and [`write_wav`].
-/// [`process`] from a WAV file to one, with a reference from a WAV file too.
+/// [`process`] from one WAV file into another, see [`read_wav`] and [`write_wav`], with the
+/// reference from a WAV file too.
 pub fn process_file(
     chain: &mut Chain,
     input: &Path,

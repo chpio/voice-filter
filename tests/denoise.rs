@@ -1,24 +1,22 @@
 use ::voice_filter::FRAME_LEN;
 use ::voice_filter::denoise::Denoise;
-use ::voice_filter::stage::Stage;
+use ::voice_filter::stage::{Frame, Stage};
 
-#[test]
-fn reports_the_model_delay_and_suppresses_noise() {
-    let mut denoise = Denoise::new().unwrap();
-    assert_eq!(denoise.latency(), 1440);
+/// White noise at about −25 dBFS, from a fixed seed in `state` (xorshift).
+fn noise(state: &mut u32) -> Frame {
+    ::std::array::from_fn(|_| {
+        *state ^= *state << 13;
+        *state ^= *state >> 17;
+        *state ^= *state << 5;
+        (*state as f32 / u32::MAX as f32 * 2. - 1.) * 0.1
+    })
+}
 
-    // 1 s of white noise from a fixed seed, the last half is compared
-    let mut state = 0x2545_f491u32;
-    let mut energy_in = 0.;
-    let mut energy_out = 0.;
+/// How much `denoise` turns 1 s of the noise down, in dB, compared over the last half.
+fn ratio_db(denoise: &mut Denoise, state: &mut u32) -> f32 {
+    let (mut energy_in, mut energy_out) = (0., 0.);
     for i in 0..100 {
-        let mut frame = [0.; FRAME_LEN];
-        for sample in &mut frame {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            *sample = (state as f32 / u32::MAX as f32 * 2. - 1.) * 0.1;
-        }
+        let mut frame = noise(state);
         let input = frame;
         denoise.process(&mut frame).unwrap();
         if i >= 50 {
@@ -26,38 +24,27 @@ fn reports_the_model_delay_and_suppresses_noise() {
             energy_out += frame.iter().map(|x| x * x).sum::<f32>();
         }
     }
-    assert!(energy_out < energy_in / 100., "{energy_in} -> {energy_out}");
+    10. * (energy_out / energy_in).log10()
+}
+
+#[test]
+fn reports_the_model_delay_and_suppresses_noise() {
+    let mut denoise = Denoise::new().unwrap();
+    assert_eq!(denoise.latency(), 1440);
+    let ratio = ratio_db(&mut denoise, &mut 0x2545_f491);
+    assert!(ratio < -20., "{ratio} dB");
 }
 
 #[test]
 fn changes_the_attenuation_limit_at_runtime() {
-    // white noise, the output level follows the limit: about -6 dB, then fully suppressed
+    // the output level follows the limit: about -6 dB, then fully suppressed
     let mut denoise = Denoise::new().unwrap().with_atten_lim(6.);
     let atten_lim = denoise.atten_lim();
-    let mut state = 0x2545_f491u32;
-    let mut ratio_db = |denoise: &mut Denoise| {
-        let (mut energy_in, mut energy_out) = (0., 0.);
-        for i in 0..100 {
-            let mut frame = [0.; FRAME_LEN];
-            for sample in &mut frame {
-                state ^= state << 13;
-                state ^= state >> 17;
-                state ^= state << 5;
-                *sample = (state as f32 / u32::MAX as f32 * 2. - 1.) * 0.1;
-            }
-            let input = frame;
-            denoise.process(&mut frame).unwrap();
-            if i >= 50 {
-                energy_in += input.iter().map(|x| x * x).sum::<f32>();
-                energy_out += frame.iter().map(|x| x * x).sum::<f32>();
-            }
-        }
-        10. * (energy_out / energy_in).log10()
-    };
-    let limited = ratio_db(&mut denoise);
+    let mut state = 0x2545_f491;
+    let limited = ratio_db(&mut denoise, &mut state);
     assert!((-7. ..-5.).contains(&limited), "{limited} dB");
     atten_lim.set(::voice_filter::denoise::UNLIMITED).unwrap();
-    let unlimited = ratio_db(&mut denoise);
+    let unlimited = ratio_db(&mut denoise, &mut state);
     assert!(unlimited < -20., "{unlimited} dB");
 }
 
@@ -69,16 +56,9 @@ fn plays_nothing_from_before_a_pause() {
     // white noise it lets through, limited to 6 dB, then off and silence
     let mut chain = Chain::new(vec![Box::new(Denoise::new().unwrap().with_atten_lim(6.))]);
     let enabled = chain.switches()[0].1.clone();
-    let mut state = 0x2545_f491u32;
+    let mut state = 0x2545_f491;
     for _ in 0..100 {
-        let mut frame = [0.; FRAME_LEN];
-        for sample in &mut frame {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            *sample = (state as f32 / u32::MAX as f32 * 2. - 1.) * 0.1;
-        }
-        chain.process(&mut frame).unwrap();
+        chain.process(&mut noise(&mut state)).unwrap();
     }
     enabled.store(false, Ordering::Relaxed);
     for _ in 0..10 {

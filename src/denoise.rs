@@ -62,6 +62,31 @@ impl Default for Speech {
     }
 }
 
+/// Reads a [`Speech`] once per frame, for a stage after the noise suppression: its estimate while
+/// it runs, nothing while it's switched off.
+#[derive(Debug)]
+pub struct SpeechReader {
+    speech: Arc<Speech>,
+    /// The frames of `speech` at the last read.
+    frames: u64,
+}
+
+impl SpeechReader {
+    pub fn new(speech: Arc<Speech>) -> Self {
+        let frames = speech.frames();
+        Self { speech, frames }
+    }
+
+    /// The local SNR in dB of the frame the noise suppression processed since the last read,
+    /// `None` if it didn't process one.
+    pub fn read(&mut self) -> Option<f32> {
+        let frames = self.speech.frames();
+        let running = frames != self.frames;
+        self.frames = frames;
+        running.then(|| self.speech.snr_db())
+    }
+}
+
 /// The default of the model: no limit.
 pub const UNLIMITED: f32 = 100.;
 

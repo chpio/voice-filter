@@ -2,7 +2,7 @@ use ::std::f64::consts::PI;
 
 use ::anyhow::Result;
 
-use crate::agc::db_to_gain;
+use crate::dsp::{db_to_gain, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -62,11 +62,6 @@ const RELEASE_TAU: f32 = 0.05;
 pub fn reduction_db(share_db: f32, threshold_db: f32) -> f32 {
     let over = (share_db - threshold_db).max(0.);
     -(over * (1. - 1. / RATIO)).min(MAX_REDUCTION_DB)
-}
-
-/// The smoothing factor per sample of a time constant in seconds.
-fn coefficient(tau: f32) -> f32 {
-    1. - (-1. / (tau * SAMPLE_RATE as f32)).exp()
 }
 
 /// The windowed-sinc low-pass at `freq` (Hz, Blackman window), its gain at 0 Hz exactly 1.
@@ -139,9 +134,9 @@ impl Stage for DeEsser {
             self.applied_freq = freq;
         }
         let threshold = self.threshold.get();
-        let detector = coefficient(DETECTOR_TAU);
-        let attack = coefficient(ATTACK_TAU);
-        let release = coefficient(RELEASE_TAU);
+        let detector = smoothing(DETECTOR_TAU);
+        let attack = smoothing(ATTACK_TAU);
+        let release = smoothing(RELEASE_TAU);
 
         let mut work = [0.; TAPS - 1 + FRAME_LEN];
         work[..TAPS - 1].copy_from_slice(&self.history);

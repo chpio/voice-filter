@@ -2,7 +2,8 @@ use ::std::sync::Arc;
 
 use ::anyhow::{Result, ensure};
 
-use crate::denoise::Speech;
+use crate::denoise::{Speech, SpeechReader};
+use crate::dsp::{db_to_gain, ramp};
 use crate::level::{self, NoiseFloor};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
@@ -30,9 +31,7 @@ pub struct Agc {
     /// The frames in a row that were speech (loud enough and, if it listens, heard as speech), up
     /// to [`MIN_SPEECH_FRAMES`].
     loud_frames: usize,
-    speech: Arc<Speech>,
-    /// The frames of `speech` at the last frame, to see whether it still runs.
-    speech_frames: u64,
+    speech: SpeechReader,
     /// The estimates of `speech` of the last frames (`None` while it didn't run), the next one
     /// goes to `estimate`: the noise suppression estimates the newest frame, the AGC gets it
     /// `ahead` frames later.
@@ -84,18 +83,11 @@ impl Agc {
             gain_db: 0.,
             floor: NoiseFloor::new(),
             loud_frames: 0,
-            speech: Arc::new(Speech::new()),
-            speech_frames: 0,
+            speech: SpeechReader::new(Arc::new(Speech::new())),
             estimates: [None; MAX_AHEAD + 1],
             estimate: 0,
             ahead: 0,
-            target: Param::new(
-                "target",
-                "Target Level",
-                "dBFS",
-                (-30., -12., 0.5),
-                TARGET_DB,
-            ),
+            target: target_param(),
             max_gain: Param::new("max-gain", "Maximum Gain", "dB", (0., 40., 1.), MAX_GAIN_DB),
             threshold: Param::new(
                 "threshold",
@@ -117,7 +109,7 @@ impl Agc {
             "the estimate comes {ahead} frames ahead, at most {MAX_AHEAD} are supported"
         );
         Ok(Self {
-            speech,
+            speech: SpeechReader::new(speech),
             ahead,
             ..self
         })
@@ -125,10 +117,7 @@ impl Agc {
 
     /// Whether the noise suppression hears speech in the frame, `None` while it doesn't run.
     fn hears_speech(&mut self) -> Option<bool> {
-        let frames = self.speech.frames();
-        let running = frames != self.speech_frames;
-        self.speech_frames = frames;
-        self.estimates[self.estimate] = running.then(|| self.speech.snr_db());
+        self.estimates[self.estimate] = self.speech.read();
         let len = self.estimates.len();
         let belonging = self.estimates[(self.estimate + len - self.ahead) % len];
         self.estimate = (self.estimate + 1) % len;
@@ -194,16 +183,21 @@ impl Stage for Agc {
         };
 
         // a ramp from the previous to the new gain over the frame, no steps
-        let from = db_to_gain(previous);
-        let to = db_to_gain(self.gain_db);
-        for (i, sample) in frame.iter_mut().enumerate() {
-            let t = (i + 1) as f32 / FRAME_LEN as f32;
-            *sample *= from + (to - from) * t;
+        let gains = ramp(db_to_gain(previous), db_to_gain(self.gain_db));
+        for (sample, gain) in frame.iter_mut().zip(gains) {
+            *sample *= gain;
         }
         Ok(())
     }
 }
 
-pub fn db_to_gain(db: f32) -> f32 {
-    10f32.powf(db / 20.)
+/// The level the AGC brings the speech to, as a parameter: [`Agc::target`] shares it.
+pub fn target_param() -> Param {
+    Param::new(
+        "target",
+        "Target Level",
+        "dBFS",
+        (-30., -12., 0.5),
+        TARGET_DB,
+    )
 }
