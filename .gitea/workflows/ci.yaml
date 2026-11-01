@@ -41,6 +41,12 @@ jobs:
     # value would override it. The image is meant to float: it's rebuilt with the current toolchain
     # and tools every week.
     container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust-pw:latest # zizmor: ignore[unpinned-images]
+    env:
+      # target/ lives in the runner's RAM, in a volume of 8 Gi. With the full debug info of tract,
+      # GTK and the other dependencies, linking the tests alone took 11 GB and the job ran out of
+      # space; without it the whole job takes about 5.1 GiB. The coverage doesn't need it, a
+      # failing assert still names its file and line, only backtraces lose their line numbers.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +60,14 @@ jobs:
       # the msrv toolchain comes with the image, the version is read from [workspace.package] in
       # Cargo.toml. Only the libraries and binary, the dev-dependencies may need a newer rust.
       - run: cargo "+$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" check --workspace --locked
-      - run: cargo test --workspace --locked
+      # The tests, measuring their coverage, which fails the job below the minimum (lines). Left out
+      # is what can't run here: the PipeWire streams (live.rs) and the GTK parts of the app.
+      - run: >-
+          cargo llvm-cov --workspace --locked
+          --ignore-filename-regex 'src/(live|gui/(window|help|proxy|mod))\.rs$'
+          --fail-under-lines 75
+      # cargo llvm-cov runs no doctests without nightly
+      - run: cargo test --workspace --doc --locked
       - run: sccache --show-stats
         if: always()
 
