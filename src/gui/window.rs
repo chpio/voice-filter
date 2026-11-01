@@ -266,11 +266,12 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
 
 /// A row with a meter of a level, and an info button.
 fn meter_row(title: &str, help: &str) -> (adw::ActionRow, gtk::LevelBar) {
+    // a fixed width, not expanding: the row shares its width between the title and the bar by
+    // their natural widths, so the microphone's long subtitle made its meter the shorter one
     let bar = gtk::LevelBar::builder()
         .min_value(0.)
         .max_value(1.)
         .width_request(220)
-        .hexpand(true)
         .valign(gtk::Align::Center)
         .build();
     // one color: the default offsets color the low end like a warning
