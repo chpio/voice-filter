@@ -1,6 +1,6 @@
 [package]
 name = "deep-filter-rt"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 description = "Real-time noise suppression with DeepFilterNet3: the inference part of DeepFilterNet's deep_filter, maintained and with the model embedded"
