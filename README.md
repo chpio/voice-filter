@@ -100,6 +100,14 @@ source with the highest priority.
 Only one `voice-filter run` can be active at a time. A second one stops with "Voice Filter is
 already running".
 
+Voice Filter stays after `voice-filter run` stopped, until PipeWire restarts (e.g. at the next
+login): apps that record from it stay with it and get silence until `voice-filter run` is back,
+rather than switching to the unfiltered microphone. To remove it, stop `voice-filter run`, look up
+the ID of Voice Filter under _Sources_ in `wpctl status` and run `pw-cli destroy <id>` (not
+`pw-cli destroy voice-filter`: that name also matches the client of `voice-filter run`).
+`voice-filter run` exits with an error when it loses its connection to PipeWire, so a service
+manager can start it again.
+
 ### Tips
 
 - Leave the volume of **Voice Filter** in the system's sound settings at **100 %**: the chain

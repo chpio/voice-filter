@@ -1,9 +1,10 @@
-//! The live filter: a capture stream from the default microphone and the virtual microphone
-//! "Voice Filter", with the chain between them (see [`crate::bridge`]), and a capture stream
-//! from the monitor of an output device as the reference of the echo canceller.
+//! The live filter: a capture stream from the default microphone and a playback stream into the
+//! virtual microphone "Voice Filter", with the chain between them (see [`crate::bridge`]), and a
+//! capture stream from the monitor of an output device as the reference of the echo canceller.
+//! "Voice Filter" is a node of PipeWire's own that outlives the process (see `Graph`).
 
-use ::std::cell::RefCell;
-use ::std::collections::HashSet;
+use ::std::cell::{Cell, RefCell};
+use ::std::collections::HashMap;
 use ::std::path::PathBuf;
 use ::std::rc::Rc;
 use ::std::sync::atomic::Ordering;
@@ -28,13 +29,16 @@ use crate::settings;
 use crate::volume::{self, Volume};
 use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
 
+/// The virtual microphone apps record from.
 const NODE_NAME: &str = "voice-filter";
+/// The stream that plays the filtered microphone into it.
+const OUTPUT_NODE_NAME: &str = "voice-filter-output";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
 const REFERENCE_NODE_NAME: &str = "voice-filter-reference";
-/// The capture stream and the virtual microphone are in this group, so they run in the same cycle
-/// of the microphone's driver (a virtual source has no clock of its own), and in this link group,
-/// so the session manager never links the capture stream to the filter's own output. (PipeWire
-/// schedules both, group and link group, on one driver.)
+/// The capture stream, the output stream and the virtual microphone are in this group, so they
+/// run in the same cycle of the microphone's driver (rather than the virtual microphone's timer),
+/// and in this link group, so the session manager never links the capture stream to the virtual
+/// microphone. (PipeWire schedules both, group and link group, on one driver.)
 const GROUP: &str = "voice-filter";
 /// The largest quantum the callbacks are prepared for without allocating.
 const MAX_QUANTUM: usize = 8192;
@@ -117,17 +121,20 @@ pub fn run(
     let _inputs_listener = watch_devices(&registry, Direction::Input, inputs);
     let _outputs_listener = watch_devices(&registry, Direction::Output, outputs);
 
-    // The virtual microphone: `Audio/Source`, not `Audio/Source/Virtual`, WirePlumber doesn't set
-    // a format for the latter, so it would get no ports.
+    // What the chain outputs, into the virtual microphone. The session manager links playback
+    // streams only to sinks, so `Graph` links it. Passive, so its link doesn't keep "Voice Filter"
+    // running while nothing records from it (`link.passive` on the link has no effect).
     let output = stream(
         &core,
-        NODE_NAME,
-        "Voice Filter",
+        OUTPUT_NODE_NAME,
+        "Voice Filter (output)",
         None,
         &[
-            (*pw::keys::MEDIA_CLASS, "Audio/Source"),
+            (*pw::keys::MEDIA_CATEGORY, "Playback"),
             (*pw::keys::NODE_GROUP, GROUP),
             (*pw::keys::NODE_LINK_GROUP, GROUP),
+            (*pw::keys::NODE_AUTOCONNECT, "false"),
+            (*pw::keys::NODE_PASSIVE, "true"),
         ],
     )?;
     // Without a target, the session manager links the default input; if that's "Voice Filter"
@@ -202,11 +209,7 @@ pub fn run(
             }
         })
         .register()?;
-    let _recorders_listener = capture_while_recorded(
-        &registry,
-        &output,
-        [input.clone(), reference_stream.clone()],
-    );
+    let _graph = Graph::watch(&core, &registry, [input.clone(), reference_stream.clone()])?;
 
     let listening = Rc::new(RefCell::new(None));
     let start_listening = {
@@ -242,8 +245,15 @@ pub fn run(
         }
     });
 
-    connect(&output, spa::utils::Direction::Output)?;
-    // after "Voice Filter" exists, though Listen never falls back to another source anyway
+    // not `connect`, the session manager mustn't link it
+    let format = format_param();
+    output.connect(
+        spa::utils::Direction::Output,
+        None,
+        StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
+        &mut [Pod::from_bytes(&format).unwrap()],
+    )?;
+    // "Voice Filter" may not exist yet, Listen waits for it (it never falls back to another source)
     if listen_on {
         start_listening();
     }
@@ -258,6 +268,24 @@ pub fn run(
     let _sigterm = mainloop
         .loop_()
         .add_signal_local(Signal::TERM, quit(&mainloop));
+    // Without the connection (PipeWire restarted, or the client was destroyed) the streams are
+    // gone for good, and the apps would record the silence of "Voice Filter" while this keeps
+    // running. Failing lets a service manager start it again.
+    let disconnected = Rc::new(Cell::new(false));
+    let _core_listener = core
+        .add_listener_local()
+        .error({
+            let disconnected = disconnected.clone();
+            let quit = quit(&mainloop);
+            move |id, _, res, message| {
+                eprintln!("PipeWire error (object {id}, {res}): {message}");
+                if id == pw::core::PW_ID_CORE && res == -EPIPE {
+                    disconnected.set(true);
+                    quit();
+                }
+            }
+        })
+        .register();
 
     eprintln!(
         "\"Voice Filter\" is ready, the chain adds {:.1} ms",
@@ -265,8 +293,14 @@ pub fn run(
     );
     report_periodically(stats, chain_latency);
     mainloop.run();
+    if disconnected.get() {
+        bail!("Lost the connection to PipeWire");
+    }
     Ok(())
 }
+
+/// The error PipeWire reports on the core when the connection is gone.
+const EPIPE: i32 = 32;
 
 const LISTEN_NODE_NAME: &str = "voice-filter-listen";
 /// Its own group, so its streams run in one cycle, and its own link group, so the session manager
@@ -475,59 +509,222 @@ fn connect(stream: &StreamRc, direction: spa::utils::Direction) -> Result<()> {
     Ok(())
 }
 
-/// Connects the capture streams while something records from "Voice Filter" and disconnects them
-/// when the last one is gone, as long as the returned listener lives. Just inactive, the
-/// microphone's would still count as recording, and GNOME would show it as in use.
+/// The virtual microphone, the output stream's link into it and the capture streams, kept up to
+/// date from the registry.
 ///
-/// Something records while a link from the filter's node exists. Not the state of its stream: in
-/// a group with the capture stream, which the microphone drives, the node keeps running after the
-/// last app is gone, so the stream never pauses again.
-fn capture_while_recorded(
-    registry: &pw::registry::RegistryRc,
-    output: &StreamRc,
+/// "Voice Filter" is a node of PipeWire's own (a null sink in an adapter, `object.linger`), not a
+/// stream of this process: it outlives a restart or crash of the filter, so the apps recording
+/// from it stay linked (and record silence meanwhile). It's created once the registry shows it
+/// doesn't exist, and again if it's destroyed while the filter runs. The output stream's link
+/// into it is the filter's own and goes with the process.
+///
+/// The capture streams are connected while something records from "Voice Filter", i.e. a link
+/// from it exists, and disconnected when the last one is gone: just inactive, the microphone's
+/// would still count as recording, and GNOME would show it as in use.
+struct Graph {
+    core: pw::core::CoreRc,
     captures: [StreamRc; 2],
-) -> pw::registry::Listener {
-    let links = Rc::new(RefCell::new(HashSet::new()));
-    let switch = Rc::new(move |on: bool| {
-        for capture in &captures {
-            let result = if on {
-                connect_capture(capture)
-            } else {
-                capture.disconnect().map_err(Into::into)
-            };
-            if let Err(err) = result {
-                eprintln!("Could not switch the capture streams: {err}");
+    /// The proxy of "Voice Filter" while it's being created.
+    creating: Option<pw::node::Node>,
+    /// The id of "Voice Filter".
+    source: Option<u32>,
+    /// The id of the output stream's node.
+    output: Option<u32>,
+    /// The node of every port and whether it's an input.
+    ports: HashMap<u32, (u32, bool)>,
+    /// The output and input node of every link.
+    links: HashMap<u32, (u32, u32)>,
+    /// The output stream's link into "Voice Filter".
+    /// The output stream's link into "Voice Filter", with the two nodes.
+    link: Option<(pw::link::Link, (u32, u32))>,
+    recording: bool,
+}
+
+/// The listeners that keep a [`Graph`] up to date while they live.
+struct GraphListeners {
+    _registry: pw::registry::Listener,
+    _core: pw::core::Listener,
+}
+
+impl Graph {
+    fn watch(
+        core: &pw::core::CoreRc,
+        registry: &pw::registry::RegistryRc,
+        captures: [StreamRc; 2],
+    ) -> Result<GraphListeners> {
+        let graph = Rc::new(RefCell::new(Self {
+            core: core.clone(),
+            captures,
+            creating: None,
+            source: None,
+            output: None,
+            ports: HashMap::new(),
+            links: HashMap::new(),
+            link: None,
+            recording: false,
+        }));
+        let registry_listener = registry
+            .add_listener_local()
+            .global({
+                let graph = graph.clone();
+                move |global| {
+                    let Some(props) = global.props else { return };
+                    let id = |key| props.get(key).and_then(|id| id.parse::<u32>().ok());
+                    let mut graph = graph.borrow_mut();
+                    match global.type_ {
+                        ObjectType::Node => match props.get(*pw::keys::NODE_NAME) {
+                            Some(NODE_NAME) => {
+                                graph.source = Some(global.id);
+                                graph.creating = None;
+                            }
+                            Some(OUTPUT_NODE_NAME) => graph.output = Some(global.id),
+                            _ => return,
+                        },
+                        ObjectType::Port => {
+                            let Some(node) = id(*pw::keys::NODE_ID) else {
+                                return;
+                            };
+                            let input = props.get(*pw::keys::PORT_DIRECTION) == Some("in");
+                            graph.ports.insert(global.id, (node, input));
+                        }
+                        ObjectType::Link => {
+                            let (Some(from), Some(to)) = (
+                                id(*pw::keys::LINK_OUTPUT_NODE),
+                                id(*pw::keys::LINK_INPUT_NODE),
+                            ) else {
+                                return;
+                            };
+                            graph.links.insert(global.id, (from, to));
+                        }
+                        _ => return,
+                    }
+                    graph.update();
+                }
+            })
+            .global_remove({
+                let graph = graph.clone();
+                move |id| graph.borrow_mut().remove(id)
+            })
+            .register();
+        // all globals are announced once the server answers the sync
+        let pending = core.sync(0)?;
+        let core_listener = core
+            .add_listener_local()
+            .done(move |id, seq| {
+                if id == pw::core::PW_ID_CORE && seq == pending {
+                    graph.borrow_mut().create_source();
+                }
+            })
+            .register();
+        Ok(GraphListeners {
+            _registry: registry_listener,
+            _core: core_listener,
+        })
+    }
+
+    fn remove(&mut self, id: u32) {
+        self.ports.remove(&id);
+        // The proxy goes only with the link, after the server is done with it (dropping it while
+        // the server removes it is an error). A node's global goes before its links.
+        if let Some(nodes) = self.links.remove(&id)
+            && self
+                .link
+                .as_ref()
+                .is_some_and(|&(_, linked)| linked == nodes)
+        {
+            self.link = None;
+        }
+        if Some(id) == self.output {
+            self.output = None;
+        }
+        if Some(id) == self.source {
+            self.source = None;
+            self.create_source();
+        }
+        self.update();
+    }
+
+    /// Creates "Voice Filter" unless it exists or is being created.
+    fn create_source(&mut self) {
+        if self.source.is_some() || self.creating.is_some() {
+            return;
+        }
+        let rate = SAMPLE_RATE.to_string();
+        let created = self.core.create_object::<pw::node::Node>(
+            "adapter",
+            &properties! {
+                *pw::keys::FACTORY_NAME => "support.null-audio-sink",
+                *pw::keys::NODE_NAME => NODE_NAME,
+                *pw::keys::NODE_DESCRIPTION => "Voice Filter",
+                // the session manager gives a virtual source ports for both directions, an
+                // `Audio/Source` none
+                *pw::keys::MEDIA_CLASS => "Audio/Source/Virtual",
+                *pw::keys::AUDIO_RATE => rate.as_str(),
+                "audio.position" => "[ MONO ]",
+                *pw::keys::NODE_GROUP => GROUP,
+                *pw::keys::NODE_LINK_GROUP => GROUP,
+                *pw::keys::OBJECT_LINGER => "true",
+            },
+        );
+        match created {
+            Ok(node) => self.creating = Some(node),
+            Err(err) => eprintln!("Could not create \"Voice Filter\": {err}"),
+        }
+    }
+
+    /// Links the output stream into "Voice Filter" once both have their ports, and switches the
+    /// capture streams when the recording starts or stops.
+    fn update(&mut self) {
+        let recording = self
+            .source
+            .is_some_and(|source| self.links.values().any(|&(from, _)| from == source));
+        if recording != self.recording {
+            self.recording = recording;
+            for capture in &self.captures {
+                let result = if recording {
+                    connect_capture(capture)
+                } else {
+                    capture.disconnect().map_err(Into::into)
+                };
+                if let Err(err) = result {
+                    eprintln!("Could not switch the capture streams: {err}");
+                }
             }
         }
-    });
-    registry
-        .add_listener_local()
-        .global({
-            let links = links.clone();
-            let output = output.clone();
-            let switch = switch.clone();
-            move |global| {
-                let Some(props) = global.props else { return };
-                let from_output = props
-                    .get(*pw::keys::LINK_OUTPUT_NODE)
-                    .and_then(|node| node.parse::<u32>().ok())
-                    == Some(output.node_id());
-                if global.type_ != ObjectType::Link || !from_output {
-                    return;
-                }
-                let mut links = links.borrow_mut();
-                if links.insert(global.id) && links.len() == 1 {
-                    switch(true);
-                }
-            }
-        })
-        .global_remove(move |id| {
-            let mut links = links.borrow_mut();
-            if links.remove(&id) && links.is_empty() {
-                switch(false);
-            }
-        })
-        .register()
+        let (Some(output), Some(source)) = (self.output, self.source) else {
+            return;
+        };
+        if self
+            .link
+            .as_ref()
+            .is_some_and(|&(_, nodes)| nodes == (output, source))
+        {
+            return;
+        }
+        let port = |node, input| {
+            self.ports
+                .iter()
+                .find(|&(_, &port)| port == (node, input))
+                .map(|(&id, _)| id.to_string())
+        };
+        let (Some(from), Some(to)) = (port(output, false), port(source, true)) else {
+            return;
+        };
+        let link = self.core.create_object::<pw::link::Link>(
+            "link-factory",
+            &properties! {
+                *pw::keys::LINK_OUTPUT_NODE => output.to_string().as_str(),
+                *pw::keys::LINK_OUTPUT_PORT => from.as_str(),
+                *pw::keys::LINK_INPUT_NODE => source.to_string().as_str(),
+                *pw::keys::LINK_INPUT_PORT => to.as_str(),
+            },
+        );
+        match link {
+            // replaces one to a node that's gone
+            Ok(link) => self.link = Some((link, (output, source))),
+            Err(err) => eprintln!("Could not link the filter to \"Voice Filter\": {err}"),
+        }
+    }
 }
 
 /// An audio device: a source the filter can read from, or an output device whose monitor is the
