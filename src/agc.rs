@@ -5,7 +5,8 @@ use ::anyhow::{Result, ensure};
 use crate::FRAME_S;
 use crate::denoise::{Speech, SpeechReader};
 use crate::dsp::{db_to_gain, ramp};
-use crate::level::{self, NoiseFloor};
+use crate::level::{self, SpeechLevel};
+pub use crate::level::{MIN_SPEECH_FRAMES, SPEECH_ABOVE_FLOOR_DB};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
@@ -24,13 +25,10 @@ use crate::stage::{Frame, Stage};
 /// recording, some at −13 dBFS), which lowered the gain by 1 dB on average and up to 9 dB, while
 /// it took only 17 frames in 89 s that weren't next to speech. [`SNR_OFF_DB`] turns it off.
 pub struct Agc {
-    /// The smoothed level of the speech, in dBFS (RMS).
-    level_db: f32,
+    /// The level of the speech, from the frames that are loud enough and, if it listens, heard as
+    /// speech.
+    level: SpeechLevel,
     gain_db: f32,
-    floor: NoiseFloor,
-    /// The frames in a row that were speech (loud enough and, if it listens, heard as speech), up
-    /// to [`MIN_SPEECH_FRAMES`].
-    loud_frames: usize,
     speech: SpeechReader,
     /// The estimates of `speech` of the last frames (`None` while it didn't run), the next one
     /// goes to `estimate`: the noise suppression estimates the newest frame, the AGC gets it
@@ -51,13 +49,6 @@ pub const GATE_DB: f32 = -55.;
 /// The most it raises by default.
 pub const MAX_GAIN_DB: f32 = 30.;
 pub const MIN_GAIN_DB: f32 = -12.;
-/// A frame this far above the noise floor is speech, in dB. Steady noise varies by a few dB from
-/// frame to frame, speech is 20 dB and more above the floor.
-pub const SPEECH_ABOVE_FLOOR_DB: f32 = 10.;
-/// The frames in a row (80 ms) that have to be loud enough before they count as speech: a syllable
-/// lasts 100 ms and more, a keystroke 10 to 50 ms. Without it, the residue of typing raised the
-/// gain to its maximum within 20 s, and with it the hum the noise suppression left.
-pub const MIN_SPEECH_FRAMES: usize = 8;
 /// The local SNR (DeepFilterNet3's estimate, dB) above which a frame is speech by default, as the
 /// expander's default.
 pub const SPEECH_SNR_DB: f32 = 0.;
@@ -66,8 +57,6 @@ pub const SPEECH_SNR_DB: f32 = 0.;
 pub const SNR_OFF_DB: f32 = -20.;
 /// The most frames the estimate of the noise suppression may come ahead of the audio.
 pub const MAX_AHEAD: usize = 8;
-/// The time constant of the measured level, in seconds.
-const LEVEL_TAU: f32 = 0.3;
 /// How fast the gain may rise and fall, in dB per second: slow up, so it doesn't pump, faster
 /// down, so loud speech isn't too loud for long.
 const RISE_DB_PER_S: f32 = 6.;
@@ -77,10 +66,8 @@ impl Agc {
     pub fn new() -> Self {
         // starts as if the speech were at the target, i.e. at 0 dB gain
         Self {
-            level_db: TARGET_DB,
+            level: SpeechLevel::new(GATE_DB, TARGET_DB),
             gain_db: 0.,
-            floor: NoiseFloor::new(),
-            loud_frames: 0,
             speech: SpeechReader::new(Arc::new(Speech::new())),
             estimates: [None; MAX_AHEAD + 1],
             estimate: 0,
@@ -162,21 +149,10 @@ impl Stage for Agc {
 
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let frame_db = level::frame_db(frame);
-        let floor_db = self.floor.push(frame_db);
-        let loud = frame_db > GATE_DB && frame_db > floor_db + SPEECH_ABOVE_FLOOR_DB;
         // every frame, so its estimates keep in step
         let heard = self.hears_speech().unwrap_or(true);
-        let speech = loud && heard;
-        self.loud_frames = if speech {
-            (self.loud_frames + 1).min(MIN_SPEECH_FRAMES)
-        } else {
-            0
-        };
-        if self.loud_frames == MIN_SPEECH_FRAMES {
-            let alpha = 1. - (-FRAME_S / LEVEL_TAU).exp();
-            self.level_db += (frame_db - self.level_db) * alpha;
-        }
-        let wanted = (self.target.get() - self.level_db).clamp(MIN_GAIN_DB, self.max_gain.get());
+        let level_db = self.level.push(frame_db, heard);
+        let wanted = (self.target.get() - level_db).clamp(MIN_GAIN_DB, self.max_gain.get());
         let previous = self.gain_db;
         self.gain_db = if wanted > previous {
             wanted.min(previous + RISE_DB_PER_S * FRAME_S)

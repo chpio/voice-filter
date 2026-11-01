@@ -56,6 +56,59 @@ impl Default for NoiseFloor {
     }
 }
 
+/// A frame this far above the noise floor is speech, in dB. Steady noise varies by a few dB from
+/// frame to frame, speech is 20 dB and more above the floor.
+pub const SPEECH_ABOVE_FLOOR_DB: f32 = 10.;
+/// The frames in a row (80 ms) that have to be loud enough before they count as speech: a syllable
+/// lasts 100 ms and more, a keystroke 10 to 50 ms. Without it, the residue of typing raised the
+/// AGC's gain to its maximum within 20 s, and with it the hum the noise suppression left.
+pub const MIN_SPEECH_FRAMES: usize = 8;
+/// The time constant of the measured level, in seconds.
+const LEVEL_TAU: f32 = 0.3;
+
+/// The level of the speech in a signal (RMS, dBFS), measured on the frames that are speech by their
+/// level: above a gate and [`SPEECH_ABOVE_FLOOR_DB`] above the [`NoiseFloor`], for at least
+/// [`MIN_SPEECH_FRAMES`] in a row, smoothed over 0.3 s. Pauses, steady noise such as mains hum (it
+/// sits at the floor) and keystrokes (shorter than a syllable) leave it as it is.
+pub struct SpeechLevel {
+    gate_db: f32,
+    level_db: f32,
+    floor: NoiseFloor,
+    /// The frames in a row that were speech, up to [`MIN_SPEECH_FRAMES`].
+    loud_frames: usize,
+}
+
+impl SpeechLevel {
+    /// Frames below `gate_db` (dBFS) are never speech; the level is `initial_db` until speech
+    /// comes.
+    pub fn new(gate_db: f32, initial_db: f32) -> Self {
+        Self {
+            gate_db,
+            level_db: initial_db,
+            floor: NoiseFloor::new(),
+            loud_frames: 0,
+        }
+    }
+
+    /// Adds the level of a frame (RMS, dBFS) and returns the level of the speech. With `heard`
+    /// false the frame isn't speech whatever its level, e.g. where the noise suppression doesn't
+    /// hear any.
+    pub fn push(&mut self, frame_db: f32, heard: bool) -> f32 {
+        let floor_db = self.floor.push(frame_db);
+        let loud = frame_db > self.gate_db && frame_db > floor_db + SPEECH_ABOVE_FLOOR_DB;
+        self.loud_frames = if loud && heard {
+            (self.loud_frames + 1).min(MIN_SPEECH_FRAMES)
+        } else {
+            0
+        };
+        if self.loud_frames == MIN_SPEECH_FRAMES {
+            let alpha = 1. - (-FRAME_S / LEVEL_TAU).exp();
+            self.level_db += (frame_db - self.level_db) * alpha;
+        }
+        self.level_db
+    }
+}
+
 /// A level meter as the app shows it: follows a louder frame at once and falls by
 /// [`METER_FALL_DB_PER_S`] after, so short peaks stay visible between two reads.
 pub struct Meter {
