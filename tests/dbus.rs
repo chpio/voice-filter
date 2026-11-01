@@ -336,3 +336,72 @@ fn reports_the_counters_quantum_and_frame_time() {
     assert_eq!(service.quantum(), 1024);
     assert_eq!(service.max_frame_time(), 1.25);
 }
+
+/// The app reads the status with a single `GetAll`, by the names and types of the properties on
+/// the bus: over a real connection (peer to peer, without a bus), so they must match the
+/// interface.
+#[cfg(feature = "gui")]
+#[test]
+fn the_app_reads_the_status_over_d_bus() {
+    use ::std::os::unix::net::UnixStream;
+    use ::voice_filter::gui::proxy::VoiceFilterProxy;
+    use ::zbus::connection::Builder;
+    use ::zbus::proxy::CacheProperties;
+
+    let service = service();
+    let stats = service.stats.clone();
+    stats.frames.store(1000, Ordering::Relaxed);
+    stats.quantum.store(1024, Ordering::Relaxed);
+    stats.input_db.store(-30.);
+    let (server_end, client_end) = UnixStream::pair().unwrap();
+    // the handshake needs both ends at once
+    let server = ::std::thread::spawn(move || {
+        ::zbus::block_on(
+            Builder::unix_stream(server_end)
+                .server(::zbus::Guid::generate())
+                .p2p()
+                .serve_at("/net/b128/VoiceFilter", service)
+                .build(),
+        )
+    });
+    let status = ::zbus::block_on(async {
+        let client = Builder::unix_stream(client_end)
+            .p2p()
+            .build()
+            .await
+            .unwrap();
+        let _server = server.join().unwrap().unwrap();
+        let proxy = VoiceFilterProxy::builder(&client)
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
+            .unwrap();
+        proxy.status().await.unwrap()
+    });
+
+    assert!(!status.listen);
+    assert!(!status.keep_listen);
+    assert_eq!(status.listen_volume, 0.);
+    assert_eq!(
+        status.stages,
+        [("denoise".to_owned(), true), ("agc".to_owned(), true)]
+    );
+    assert_eq!(status.parameters.len(), 2);
+    assert_eq!(
+        (
+            status.parameters[1].stage.as_str(),
+            status.parameters[1].name.as_str()
+        ),
+        ("agc", "target")
+    );
+    assert_eq!(status.parameters[1].value, -18.);
+    assert_eq!(status.input, "");
+    assert_eq!(status.inputs[0].0, "usb-mic");
+    assert_eq!(status.outputs[1].0, "hdmi");
+    assert_eq!(status.latency["chain"], 31.);
+    assert!(status.echo.is_empty());
+    assert_eq!(status.quantum, 1024);
+    assert_eq!(status.max_frame_time, 0.);
+    assert_eq!(status.counters["frames"], 1000);
+    assert_eq!(status.levels["input"], -30.);
+}

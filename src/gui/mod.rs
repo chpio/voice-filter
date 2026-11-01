@@ -4,7 +4,7 @@
 
 pub mod desktop;
 mod help;
-mod proxy;
+pub mod proxy;
 mod window;
 
 use ::adw::prelude::*;

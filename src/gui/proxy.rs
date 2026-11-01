@@ -3,7 +3,7 @@
 
 use ::std::collections::HashMap;
 
-use ::zbus::proxy;
+use ::zbus::{DeserializeDict, Type, proxy};
 
 #[proxy(
     interface = "net.b128.VoiceFilter1",
@@ -117,29 +117,62 @@ pub struct Status {
     pub levels: HashMap<String, f64>,
 }
 
+/// All properties of the interface as `GetAll` returns them, by their names on the bus.
+#[derive(DeserializeDict, Type)]
+#[zbus(signature = "a{sv}", rename_all = "PascalCase")]
+struct Properties {
+    listen: bool,
+    keep_listen: bool,
+    listen_volume: f64,
+    stages: Vec<(String, bool)>,
+    parameters: Vec<ParameterTuple>,
+    input: String,
+    inputs: Vec<(String, String, i32)>,
+    output: String,
+    outputs: Vec<(String, String, i32)>,
+    latency: HashMap<String, f64>,
+    echo: HashMap<String, f64>,
+    quantum: u64,
+    max_frame_time: f64,
+    counters: HashMap<String, u64>,
+    levels: HashMap<String, f64>,
+}
+
 impl VoiceFilterProxy<'_> {
+    /// All of it in one call (`GetAll`), not one per property: the app polls it every second.
     pub async fn status(&self) -> ::zbus::Result<Status> {
+        let proxy = self.inner();
+        let reply = proxy
+            .connection()
+            .call_method(
+                Some(proxy.destination()),
+                proxy.path(),
+                Some("org.freedesktop.DBus.Properties"),
+                "GetAll",
+                &(proxy.interface(),),
+            )
+            .await?;
+        let properties: Properties = reply.body().deserialize()?;
         Ok(Status {
-            listen: self.listen().await?,
-            keep_listen: self.keep_listen().await?,
-            listen_volume: self.listen_volume().await?,
-            stages: self.stages().await?,
-            parameters: self
-                .parameters()
-                .await?
+            listen: properties.listen,
+            keep_listen: properties.keep_listen,
+            listen_volume: properties.listen_volume,
+            stages: properties.stages,
+            parameters: properties
+                .parameters
                 .into_iter()
                 .map(Parameter::from)
                 .collect(),
-            input: self.input().await?,
-            inputs: self.inputs().await?,
-            output: self.output().await?,
-            outputs: self.outputs().await?,
-            latency: self.latency().await?,
-            echo: self.echo().await?,
-            quantum: self.quantum().await?,
-            max_frame_time: self.max_frame_time().await?,
-            counters: self.counters().await?,
-            levels: self.levels().await?,
+            input: properties.input,
+            inputs: properties.inputs,
+            output: properties.output,
+            outputs: properties.outputs,
+            latency: properties.latency,
+            echo: properties.echo,
+            quantum: properties.quantum,
+            max_frame_time: properties.max_frame_time,
+            counters: properties.counters,
+            levels: properties.levels,
         })
     }
 }
