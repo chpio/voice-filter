@@ -335,7 +335,7 @@ impl Echo {
             frames: AtomicU64::new(0),
             raw: ::std::array::from_fn(|_| AtomicF32::new(0.)),
             status: status.clone(),
-            protect: Param::new("protect", "Voice Protection", "%", (0., 100., 5.), 75.),
+            protect: Param::new("protect", "Voice Protection", "%", (0., 100., 5.), 25.),
         });
         let echo = Self {
             apm,

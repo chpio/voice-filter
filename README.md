@@ -143,7 +143,7 @@ manager can start it again.
 - With **headphones** there's no echo, switch the echo cancellation off. Over speakers it removes
   the echo; what's left of it it turns down band by band, and the voice with it while you talk
   into the playback. With music it leaves most of that to the noise suppression, which keeps the
-  voice (**Voice Protection**, 75 %; 10 s after the music starts, at first it takes it for a
+  voice (**Voice Protection**, 25 %; 10 s after the music starts, at first it takes it for a
   call); with speech from the speakers only while you talk. Its status in the app shows which it
   hears. If the other side of a call hears itself, lower **Speech Threshold**.
 

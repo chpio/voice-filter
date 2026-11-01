@@ -122,7 +122,18 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 - It analyzes the reference with DeepFilterNet3's encoder in runs of 25 of 100 frames, only while it isn't silent: 0.08 ms per frame on average in the echo stage on the Bluetooth recording (0.06 before), at most 0.84 ms.
 - Speech in it: the adaptive sidechain, the echo cancellation keeps removing it. Music: the sidechain all the time. Silent: as before, with the deep filter.
 - Asymmetric: speech when the playback starts (it may be a call) and as soon as a single run's mean estimate is above the threshold (the 3 s mean of the measurement above missed short passages of the video's speech: music for 28 of its 84 s), music only after 10 s without (with 5 s still 15 s of the video). With that the video was music for 2 of 84 s (in a stretch of about 12 s without speech), the music speech for 10 s from its start, and once more for 10 s within the 45 s of the song with vocals. A wrong music mode lets the other side hear itself, a wrong speech mode only costs the voice a little while you talk.
-- Parameters of the echo stage: `protect` (Voice Protection, the share of the raw microphone, 75 %; 0 % is the chain as before) and `speech` (the threshold of the runs, 5 dB). The threshold of your voice in speech mode stays at 10 dB.
+- Parameters of the echo stage: `protect` (Voice Protection, the share of the raw microphone, 25 %; 0 % is the chain as before) and `speech` (the threshold of the runs, 5 dB). The threshold of your voice in speech mode stays at 10 dB.
+- **Heard live:** in music mode more of the music came through than with the echo cancellation alone. Not where the music plays alone (−120 dBFS in every variant), but while you talk: the noise suppression is open then, and between syllables and in bands without the voice the music of the raw microphone passes. The loss above only counted the cells with the voice; the level of the cells without it, against the voice's (*gaps*), on the Bluetooth recording with the music 10 dB louder (instrumental) and the song with vocals at its louder take:
+
+  | Voice Protection          | Instrumental: loss, gaps | With vocals: loss, gaps |
+  | ------------------------- | ------------------------ | ----------------------- |
+  | 0 % (as before)           | 22.1 dB, −34.1 dB        | 23.1 dB, −41.9 dB       |
+  | 0 %, without deep filter  | 14.6 dB, −32.5 dB        | 18.5 dB, −38.3 dB       |
+  | 25 %                      | 13.1 dB, −31.2 dB        | 16.0 dB, −33.8 dB       |
+  | 50 %                      | 11.8 dB, −28.2 dB        | 14.7 dB, −28.9 dB       |
+  | 75 % (the first default)  | 11.7 dB, −26.6 dB        | 14.4 dB, −27.2 dB       |
+
+  Most of the voice it keeps comes from leaving the deep filter out; above 25 % it hardly keeps more of it, while the music in the gaps rises by 5–7 dB. Hence 25 %. Better than the raw microphone would be AEC3's linear output: the echo subtracted, the voice untouched (next step: a patch of sonora that hands it out, first to measure how much of the music it removes).
 
 Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers), listening live (the switching, the noise without the deep filter), and how much of a call's first words gets through after music (10 s after the music started it's music mode, the first run with speech switches back within up to 1 s).
 
