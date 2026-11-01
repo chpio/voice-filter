@@ -1,3 +1,5 @@
+<img src="data/net.b128.VoiceFilter.svg" alt="" width="96" align="right">
+
 # Voice Filter
 
 **A live voice filter for Linux.** Voice Filter shows up in PipeWire as a virtual microphone named
