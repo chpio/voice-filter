@@ -39,6 +39,10 @@ struct Args {
     /// The seconds per row; 0.01 gives a row per frame.
     #[arg(long, default_value_t = 1.)]
     interval: f32,
+    /// Also writes what comes out of the chain to this WAV file (shifted by the latency, so it
+    /// lines up with the input), to listen to.
+    #[arg(long)]
+    wav: Option<PathBuf>,
 }
 
 fn setting(arg: &str) -> Result<(String, String, f32), String> {
@@ -96,6 +100,7 @@ fn main() -> Result<()> {
     let mut powers = vec![0f64; names.len() + 1];
     let mut sums = vec![0f64; names.len()];
     let mut frames = 0;
+    let mut output = Vec::new();
     let chunks = input.as_chunks::<FRAME_LEN>().0;
     for (i, samples) in chunks.iter().enumerate() {
         if let Some(played) = &played {
@@ -115,6 +120,9 @@ fn main() -> Result<()> {
                 }
             }
             powers[j + 1] += power(&frame);
+        }
+        if args.wav.is_some() {
+            output.extend_from_slice(&frame);
         }
         frames += 1;
         if frames == frames_per_row || i + 1 == chunks.len() {
@@ -137,6 +145,16 @@ fn main() -> Result<()> {
         }
     }
     out.flush()?;
+    if let Some(path) = &args.wav {
+        // shifted by the latency of the stages that ran, so it lines up with the input
+        let latency: usize = chain
+            .stages()
+            .zip(&on)
+            .filter(|(_, on)| **on)
+            .map(|(stage, _)| stage.latency())
+            .sum();
+        offline::write_wav(path, &output[latency.min(output.len())..])?;
+    }
     Ok(())
 }
 
