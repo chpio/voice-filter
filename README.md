@@ -167,8 +167,8 @@ In the app you can:
 - watch the **levels** of the microphone and of Voice Filter, and the background noise of the
   microphone: above −45 dBFS the app points out that it's too noisy
 - watch the **latency**, the processing time per frame (mean, ~95 %, ~99 % and the longest, of
-  all stages, the high-pass filter, the echo cancellation and the noise suppression on their own
-  and the stages after them together) and dropouts
+  all stages, the echo cancellation and the noise suppression on their own and the other stages
+  together) and dropouts
 
 The info button on a row explains what the stage, the setting or the status value means. The
 status values (latency, processing time, dropouts, the echo cancellation's status and the

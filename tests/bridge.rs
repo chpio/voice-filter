@@ -148,12 +148,11 @@ fn times_the_frames_in_their_parts() {
             .position(|part| *part == name)
             .unwrap()]
     };
-    assert!(part("highpass").max_ns > 0);
-    // the chain has neither
+    // the chain has neither, its high-pass is part of the rest of each frame
     assert_eq!(part("echo").max_ns, 0);
     assert_eq!(part("denoise").max_ns, 0);
-    // "other" is the rest of each frame, the means differ only by rounding
-    assert!(part("total").mean_ns + 1 >= part("highpass").mean_ns + part("other").mean_ns);
+    assert!(part("total").max_ns > 0);
+    assert_eq!(part("other"), part("total"));
     // the reader sees what was pushed
     let last: Vec<_> = stats.frame_times().collect();
     assert_eq!(last[0], ("total", times[0]));

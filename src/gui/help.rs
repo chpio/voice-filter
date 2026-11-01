@@ -219,8 +219,8 @@ pub const LATENCY: &str = "How long the voice takes from the microphone to the a
 
 pub const PROCESSING: &str = "How long 10 ms of audio took through the stages in the last 10 \
     seconds: the mean, the time 95 % and 99 % of it stayed within (rounded up by at most 2 %) and \
-    the longest. All of it, the high-pass filter, the echo cancellation and the noise suppression \
-    on their own (the noise suppression takes the most), and the stages after them together. \
+    the longest. All of it, the echo cancellation and the noise suppression on their own (they take \
+    the most), and the other stages together. \
     The longest time has to stay well below 10 ms, otherwise there are dropouts; a stage \
     switched off takes almost none.\n\nPipeWire \
     hands the audio over in cycles, the samples per cycle are their size (48 samples are 1 ms). \

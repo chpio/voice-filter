@@ -330,7 +330,7 @@ fn reports_the_counters_quantum_and_frame_time() {
     for (time, ns) in stats
         .frame_times
         .iter()
-        .zip([1_000_000, 100, 200, 600_000, 399_700])
+        .zip([1_000_000, 300, 600_000, 399_700])
     {
         time.record(ns);
     }
@@ -349,12 +349,12 @@ fn reports_the_counters_quantum_and_frame_time() {
     assert_eq!(service.max_frame_time(), 1.25);
     let times = service.frame_times();
     let parts: Vec<_> = times.iter().map(|(part, ..)| part.as_str()).collect();
-    assert_eq!(parts, ["total", "highpass", "echo", "denoise", "other"]);
+    assert_eq!(parts, ["total", "echo", "denoise", "other"]);
     // mean, 95 %, 99 % (the slower frame, rounded up), longest
     let (_, mean, p95, p99, max) = times[0];
     assert_eq!((mean, max), (1.125, 1.25));
     assert_eq!((p95, p99), (1.25, 1.25));
-    assert_eq!(times[3].4, 0.6);
+    assert_eq!(times[2].4, 0.6);
 }
 
 /// The app reads the status with a single `GetAll`, by the names and types of the properties on
@@ -422,8 +422,8 @@ fn the_app_reads_the_status_over_d_bus() {
     assert!(status.echo.is_empty());
     assert_eq!(status.quantum, 1024);
     assert_eq!(status.max_frame_time, 0.);
-    assert_eq!(status.frame_times.len(), 5);
-    assert_eq!(status.frame_times[2], ("echo".to_owned(), 0., 0., 0., 0.));
+    assert_eq!(status.frame_times.len(), 4);
+    assert_eq!(status.frame_times[1], ("echo".to_owned(), 0., 0., 0., 0.));
     assert_eq!(status.counters["frames"], 1000);
     assert_eq!(status.levels["input"], -30.);
 }

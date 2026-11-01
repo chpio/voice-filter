@@ -55,13 +55,14 @@ pub struct Stats {
 }
 
 /// The parts of the processing time of a frame in [`Stats::frame_times`]: `total`, the stages
-/// timed on their own (the first ones of the chain, the expensive ones among them; 0 if the chain
-/// doesn't have them) and `other`, the rest: the stages after them and the levels measured
-/// around the chain.
-pub const FRAME_TIME_PARTS: [&str; 5] = ["total", "highpass", "echo", "denoise", "other"];
+/// timed on their own (the expensive ones, neighbors in the chain, so they share a clock reading;
+/// 0 if the chain doesn't have them) and `other`, the rest: the other stages (the high-pass
+/// before them takes under 1 % of the time, `cargo bench --bench stages`) and the levels
+/// measured around the chain.
+pub const FRAME_TIME_PARTS: [&str; 4] = ["total", "echo", "denoise", "other"];
 
 /// The stages timed on their own, the parts of [`FRAME_TIME_PARTS`] between `total` and `other`.
-const TIMED: [&str; 3] = ["highpass", "echo", "denoise"];
+const TIMED: [&str; 2] = ["echo", "denoise"];
 
 impl Stats {
     /// The processing time of a frame in its parts ([`FRAME_TIME_PARTS`]), over the window of
