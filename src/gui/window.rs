@@ -113,7 +113,9 @@ struct Widgets {
     /// Polls in a row with the noise floor above [`NOISY_DB`].
     noisy_polls: Cell<u32>,
     latency: adw::ActionRow,
-    processing: adw::ActionRow,
+    /// The processing time: a summary in the subtitle, expanding to a table of its parts.
+    processing: adw::ExpanderRow,
+    processing_table: ProcessingTable,
     dropouts: adw::ActionRow,
     /// Set while the window shows values it read, so the handlers don't send them back.
     updating: Cell<bool>,
@@ -125,13 +127,14 @@ struct Widgets {
 pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     // says when a value was copied
     let toasts = adw::ToastOverlay::new();
+    let (processing, processing_table) = processing_row(&toasts);
     // a row whose subtitle shows a value, selectable and with a button that copies it
     let row = |title: &str| {
         let row = adw::ActionRow::builder()
             .title(title)
             .subtitle_selectable(true)
             .build();
-        row.add_suffix(&copy_button(&row, &toasts));
+        row.add_suffix(&copy_button(&toasts, subtitle_of(&row)));
         row
     };
     // a status row with an info button
@@ -193,7 +196,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         frames: Cell::new(0),
         noisy_polls: Cell::new(0),
         latency: status_row("Latency", help::LATENCY),
-        processing: status_row("Processing Time", help::PROCESSING),
+        processing,
+        processing_table,
         dropouts: status_row("Dropouts Since the Start", help::DROPOUTS),
         updating: Cell::new(false),
         proxy: RefCell::new(None),
@@ -290,30 +294,40 @@ fn meter_row(
     // copies it; the button before the bar, so the bars of both rows line up
     if let Some(toasts) = toasts {
         row.set_subtitle_selectable(true);
-        row.add_suffix(&copy_button(&row, toasts));
+        row.add_suffix(&copy_button(toasts, subtitle_of(&row)));
     }
     row.add_suffix(&bar);
     row.add_suffix(&help::button(help));
     (row, bar)
 }
 
-/// A button that copies the value in the subtitle of a row, and says so in a toast.
-fn copy_button(row: &adw::ActionRow, toasts: &adw::ToastOverlay) -> gtk::Button {
+/// What [`copy_button`] copies from a row: its subtitle. Weak, the button is in the row, it would
+/// keep it alive.
+fn subtitle_of(row: &adw::ActionRow) -> impl Fn() -> Option<String> + 'static {
+    let row = row.downgrade();
+    move || {
+        row.upgrade()
+            .map(|row| row.subtitle().unwrap_or_default().into())
+    }
+}
+
+/// A button that copies what `text` gives, and says so in a toast.
+fn copy_button(
+    toasts: &adw::ToastOverlay,
+    text: impl Fn() -> Option<String> + 'static,
+) -> gtk::Button {
     let button = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
         .tooltip_text("Copy")
         .valign(gtk::Align::Center)
         .build();
     button.add_css_class("flat");
-    // weak: the button is in the row, it would keep it alive
-    let (row, toasts) = (row.downgrade(), toasts.downgrade());
+    let toasts = toasts.downgrade();
     button.connect_clicked(move |button| {
-        let Some(row) = row.upgrade() else {
+        let Some(text) = text() else {
             return;
         };
-        button
-            .clipboard()
-            .set_text(&row.subtitle().unwrap_or_default());
+        button.clipboard().set_text(&text);
         if let Some(toasts) = toasts.upgrade() {
             toasts.add_toast(adw::Toast::builder().title("Copied").timeout(2).build());
         }
@@ -900,10 +914,7 @@ fn show(widgets: &Widgets, status: &Status) {
             ms("chain"),
         ),
     );
-    show_value(
-        &widgets.processing,
-        &processing_text(&status.frame_times, status.quantum),
-    );
+    show_processing(widgets, status);
     let count = |name: &str| status.counters.get(name).copied().unwrap_or_default();
     // the counters are in samples, which say little to the user
     let count_ms = |name: &str| samples_ms(count(name) as f64);
@@ -918,22 +929,139 @@ fn show(widgets: &Widgets, status: &Status) {
     );
 }
 
-/// The processing time of a frame in its parts, a line each: mean, 95 % and 99 % percentile and
-/// the longest, in ms.
-fn processing_text(times: &[(String, f64, f64, f64, f64)], quantum: u64) -> String {
-    let mut text = String::from("Per 10 ms frame in ms: mean, 95 %, 99 %, longest");
-    for (part, mean, p95, p99, max) in times {
-        let title = match part.as_str() {
-            "total" => "All stages",
-            "other" => "The other stages",
-            part => STAGES
-                .iter()
-                .find(|(stage, _)| *stage == part)
-                .map_or(part, |(_, title)| title),
-        };
-        text += &format!("\n{title}: {mean:.2}, {p95:.2}, {p99:.2}, {max:.2}");
+/// The columns of the table of the processing time, after the part.
+const PROCESSING_COLUMNS: [&str; 4] = ["Mean", "95 %", "99 %", "Longest"];
+
+/// The table the row of the processing time expands to, a row per part.
+struct ProcessingTable {
+    grid: gtk::Grid,
+    /// Part, its title and its values, in the order of the grid.
+    rows: RefCell<Vec<(String, gtk::Label, [gtk::Label; PROCESSING_COLUMNS.len()])>>,
+    /// The samples per cycle, below the table.
+    cycle: gtk::Label,
+    /// The table as text, for the copy button.
+    text: Rc<RefCell<String>>,
+}
+
+/// The row of the processing time: a summary, expanding to a table of the parts with a column
+/// each for mean, percentiles and the longest; the copy button copies the table as text.
+fn processing_row(toasts: &adw::ToastOverlay) -> (adw::ExpanderRow, ProcessingTable) {
+    let row = adw::ExpanderRow::builder().title("Processing Time").build();
+    let grid = gtk::Grid::builder()
+        .column_spacing(18)
+        .row_spacing(6)
+        .build();
+    for (column, title) in PROCESSING_COLUMNS.into_iter().enumerate() {
+        let label = gtk::Label::builder()
+            .label(title)
+            .xalign(1.)
+            .css_classes(["caption-heading", "dim-label"])
+            .build();
+        grid.attach(&label, column as i32 + 1, 0, 1, 1);
     }
-    text + &format!("\n{quantum} samples per cycle")
+    let cycle = gtk::Label::builder()
+        .xalign(0.)
+        .wrap(true)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    content.append(&grid);
+    content.append(&cycle);
+    row.add_row(
+        &gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&content)
+            .build(),
+    );
+    let text = Rc::new(RefCell::new(String::new()));
+    let copied = text.clone();
+    row.add_suffix(&copy_button(toasts, move || Some(copied.borrow().clone())));
+    row.add_suffix(&help::button(help::PROCESSING));
+    let table = ProcessingTable {
+        grid,
+        rows: RefCell::new(Vec::new()),
+        cycle,
+        text,
+    };
+    (row, table)
+}
+
+/// The title of a part of the processing time.
+fn part_title(part: &str) -> &str {
+    match part {
+        "total" => "All stages",
+        "other" => "Other stages",
+        part => STAGES
+            .iter()
+            .find(|(stage, _)| *stage == part)
+            .map_or(part, |(_, title)| title),
+    }
+}
+
+/// Shows the processing time: the summary of all stages in the subtitle, the parts in the table,
+/// whose rows are rebuilt only when the parts change.
+fn show_processing(widgets: &Widgets, status: &Status) {
+    let table = &widgets.processing_table;
+    let mut rows = table.rows.borrow_mut();
+    let parts = status.frame_times.iter().map(|(part, ..)| part.as_str());
+    if !rows.iter().map(|(part, ..)| part.as_str()).eq(parts) {
+        for (_, title, values) in rows.drain(..) {
+            table.grid.remove(&title);
+            for value in values {
+                table.grid.remove(&value);
+            }
+        }
+        for (index, (part, ..)) in status.frame_times.iter().enumerate() {
+            let line = index as i32 + 1;
+            let title = gtk::Label::builder()
+                .label(part_title(part))
+                .xalign(0.)
+                .hexpand(true)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build();
+            table.grid.attach(&title, 0, line, 1, 1);
+            // digits of the same width, so the columns line up and don't jump
+            let values = ::std::array::from_fn(|column| {
+                let value = gtk::Label::builder()
+                    .xalign(1.)
+                    .css_classes(["numeric"])
+                    .build();
+                table.grid.attach(&value, column as i32 + 1, line, 1, 1);
+                value
+            });
+            rows.push((part.clone(), title, values));
+        }
+    }
+    let mut text = format!("Per 10 ms frame in ms: {}", PROCESSING_COLUMNS.join(", "));
+    for ((_, _, labels), (part, mean, p95, p99, max)) in rows.iter().zip(&status.frame_times) {
+        let values = [mean, p95, p99, max].map(|ms| format!("{ms:.2}"));
+        for (label, value) in labels.iter().zip(&values) {
+            label.set_label(value);
+        }
+        text += &format!("\n{}: {}", part_title(part), values.join(", "));
+    }
+    let cycle = format!("{} samples per cycle", status.quantum);
+    table.cycle.set_label(&cycle);
+    *table.text.borrow_mut() = format!("{text}\n{cycle}");
+    let total = status
+        .frame_times
+        .iter()
+        .find(|(part, ..)| part == "total")
+        .filter(|(.., max)| *max > 0.);
+    widgets.processing.set_subtitle(&match total {
+        Some((_, mean, .., max)) => {
+            format!("{mean:.2} ms per 10 ms frame, longest {max:.2} ms")
+        }
+        None => "Nothing processed in the last 10 seconds".to_owned(),
+    });
 }
 
 /// Shows a value in the subtitle of a row, which the user can select and copy: not while they
