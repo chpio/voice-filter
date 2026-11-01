@@ -11,10 +11,10 @@ fn summarizes_an_interval_and_starts_the_next() {
     assert_eq!(summary.frames, 1000);
     assert_eq!(summary.mean_ns, 500_500);
     assert_eq!(summary.max_ns, 1_000_000);
-    // rounded up by at most 6.25 %
+    // rounded up by at most 1/64
     for (percentile, exact) in [(summary.p95_ns, 950_000), (summary.p99_ns, 990_000)] {
         assert!(
-            (exact..=exact + exact / 16).contains(&percentile),
+            (exact..=exact + exact / 64).contains(&percentile),
             "{percentile} for {exact}"
         );
     }
@@ -39,11 +39,11 @@ fn summarizes_an_interval_and_starts_the_next() {
 #[test]
 fn the_percentiles_never_exceed_the_longest() {
     let time = FrameTime::default();
-    for ns in [0, 7, 31, 32, 1000, 1_000_001, 10_000_000_000] {
+    for ns in [0, 7, 127, 128, 129, 1000, 1_000_001, 2_000_000_000, 10_000_000_000] {
         time.record(ns);
         let summary = time.publish();
         assert!(summary.p99_ns <= summary.max_ns, "{summary:?}");
-        assert!(summary.p99_ns >= ns - ns / 16, "{summary:?}");
+        assert!(summary.p99_ns >= ns - ns / 64, "{summary:?}");
     }
 }
 
@@ -55,9 +55,9 @@ fn the_rare_slow_frames_show_in_the_99th_percentile_only() {
         time.record(if frame % 50 == 0 { 2_000_000 } else { 200_000 });
     }
     let summary = time.publish();
-    assert!((200_000..=212_500).contains(&summary.p95_ns), "{summary:?}");
+    assert!((200_000..=203_125).contains(&summary.p95_ns), "{summary:?}");
     assert!(
-        (2_000_000..=2_125_000).contains(&summary.p99_ns),
+        (2_000_000..=2_031_250).contains(&summary.p99_ns),
         "{summary:?}"
     );
 }

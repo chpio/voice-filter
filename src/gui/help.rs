@@ -218,7 +218,7 @@ pub const LATENCY: &str = "How long the voice takes from the microphone to the a
     noise suppression 30 ms) and the buffer of the app.";
 
 pub const PROCESSING: &str = "How long 10 ms of audio took through the stages in the last 10 \
-    seconds: the mean, the time 95 % and 99 % of it stayed within (rounded up by at most 6 %) and \
+    seconds: the mean, the time 95 % and 99 % of it stayed within (rounded up by at most 2 %) and \
     the longest. All of it, the high-pass filter, the echo cancellation and the noise suppression \
     on their own (the noise suppression takes the most), and the stages after them together. \
     The longest time has to stay well below 10 ms, otherwise there are dropouts; a stage \

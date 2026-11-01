@@ -4,10 +4,10 @@
 
 use ::std::sync::atomic::{AtomicU64, Ordering};
 
-/// Buckets per doubling of the time: a bucket spans at most 1/16 of its values, so a percentile
-/// is rounded up by at most 6.25 %.
-const SUB_BITS: u32 = 4;
-/// Exact up to 32 ns, then 16 per doubling, up to about 1 s (2^30 ns); longer times land in the
+/// Buckets per doubling of the time: a bucket spans at most 1/64 of its values, so a percentile
+/// is rounded up by at most 1.6 %.
+const SUB_BITS: u32 = 6;
+/// Exact up to 128 ns, then 64 per doubling, up to about 2 s (2^31 ns); longer times land in the
 /// last one.
 const BUCKETS: usize = ((30 - SUB_BITS as usize) << SUB_BITS) + (2 << SUB_BITS);
 
@@ -21,7 +21,7 @@ pub struct FrameTime {
 }
 
 /// The processing times of the frames of an interval, in nanoseconds; the percentiles rounded up
-/// by at most 6.25 %, never above `max_ns`.
+/// by at most 1.6 %, never above `max_ns`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Summary {
     pub frames: u64,
@@ -111,7 +111,7 @@ impl FrameTime {
     }
 }
 
-/// The bucket of a time: below 32 ns one per nanosecond, then by the highest bit and the
+/// The bucket of a time: below 128 ns one per nanosecond, then by the highest bit and the
 /// `SUB_BITS` after it.
 fn bucket(ns: u64) -> usize {
     if ns < 2 << SUB_BITS {

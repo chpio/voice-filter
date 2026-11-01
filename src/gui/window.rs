@@ -918,8 +918,6 @@ fn show(widgets: &Widgets, status: &Status) {
     );
 }
 
-/// Shows a value in the subtitle of a row, which the user can select and copy: not while they
-/// select in it, the new text would drop the selection.
 /// The processing time of a frame in its parts, a line each: mean, 95 % and 99 % percentile and
 /// the longest, in ms.
 fn processing_text(times: &[(String, f64, f64, f64, f64)], quantum: u64) -> String {
@@ -938,6 +936,8 @@ fn processing_text(times: &[(String, f64, f64, f64, f64)], quantum: u64) -> Stri
     text + &format!("\n{quantum} samples per cycle")
 }
 
+/// Shows a value in the subtitle of a row, which the user can select and copy: not while they
+/// select in it, the new text would drop the selection.
 fn show_value(row: &adw::ActionRow, text: &str) {
     let selecting = subtitle_label(row.upcast_ref())
         .is_some_and(|label| label.has_focus() && label.selection_bounds().is_some());

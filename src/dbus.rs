@@ -322,7 +322,7 @@ impl Service {
     }
 
     /// The processing time of a frame over the last 10 s, in ms: part, mean, 95th and 99th
-    /// percentile (rounded up by at most 6.25 %) and the longest. The parts are `total`,
+    /// percentile (rounded up by at most 1.6 %) and the longest. The parts are `total`,
     /// `highpass`, `echo`, `denoise` (0 when the chain doesn't have them) and `other`, the stages
     /// after them and what's measured around the chain.
     #[zbus(property(emits_changed_signal = "false"))]
