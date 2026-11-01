@@ -68,33 +68,15 @@ const VALUE_CHARS: i32 = 10;
 const NOISY_DB: f64 = -45.;
 const NOISY_POLLS: u32 = 5;
 
-/// The row of a stage: a switch, or with parameters a row that expands to them, its switch turns
-/// the stage on and off.
-enum StageRow {
-    Switch(adw::SwitchRow),
-    Expander {
-        row: adw::ExpanderRow,
-        /// Parameter name and its scale.
-        scales: Vec<(String, gtk::Scale)>,
-        /// Sets the parameters to their defaults, if it has any.
-        reset: Option<gtk::Button>,
-    },
-}
-
-impl StageRow {
-    fn widget(&self) -> &gtk::Widget {
-        match self {
-            Self::Switch(row) => row.upcast_ref(),
-            Self::Expander { row, .. } => row.upcast_ref(),
-        }
-    }
-
-    fn set_on(&self, on: bool) {
-        match self {
-            Self::Switch(row) => row.set_active(on),
-            Self::Expander { row, .. } => row.set_enable_expansion(on),
-        }
-    }
+/// The row of a stage: it expands to the sliders of its parameters and a row that resets them, its
+/// switch turns the stage on and off. Every stage has parameters, so every row expands the same
+/// way (a `SwitchRow` among them would have its switch elsewhere).
+struct StageRow {
+    row: adw::ExpanderRow,
+    /// Parameter name and its scale.
+    scales: Vec<(String, gtk::Scale)>,
+    /// Sets the parameters to their defaults.
+    reset: gtk::Button,
 }
 
 struct Widgets {
@@ -666,20 +648,18 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
         return;
     }
     let weak = Rc::downgrade(widgets);
-    for (_, row, group) in widgets.stages.take() {
+    for (_, StageRow { row, .. }, group) in widgets.stages.take() {
         // the rows of the output device and the status move to the new row of the echo
         // cancellation
-        if let StageRow::Expander { row, .. } = &row {
-            for moving in [
-                widgets.output.upcast_ref::<gtk::Widget>(),
-                widgets.echo_status.upcast_ref(),
-            ] {
-                if moving.parent().is_some() && moving.is_ancestor(row) {
-                    row.remove(moving);
-                }
+        for moving in [
+            widgets.output.upcast_ref::<gtk::Widget>(),
+            widgets.echo_status.upcast_ref(),
+        ] {
+            if moving.parent().is_some() && moving.is_ancestor(&row) {
+                row.remove(moving);
             }
         }
-        group.remove(row.widget());
+        group.remove(&row);
     }
     let mut stages = Vec::new();
     for ((_, _, names), group) in GROUPS.iter().zip(&widgets.groups) {
@@ -696,69 +676,60 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                 .iter()
                 .filter(|param| param.stage == *name)
                 .collect();
-            // the echo cancellation expands to its output device, even without parameters
-            let row = if params.is_empty() && *name != "echo" {
-                let row = adw::SwitchRow::builder().title(title).build();
-                if let Some(text) = help::stage(name) {
-                    row.add_suffix(&help::button(text));
-                }
-                let (weak, name) = (weak.clone(), *name);
-                row.connect_active_notify(move |row| send_enabled(&weak, name, row.is_active()));
-                StageRow::Switch(row)
-            } else {
-                let row = adw::ExpanderRow::builder()
-                    .title(title)
-                    .show_enable_switch(true)
-                    .build();
-                if let Some(text) = help::stage(name) {
-                    row.add_suffix(&help::button(text));
-                }
-                let scales = params
-                    .iter()
-                    .map(|param| {
-                        let (slider, scale) = scale(&weak, param);
-                        let param_row = adw::ActionRow::builder().title(&param.title).build();
-                        param_row.add_suffix(&slider);
-                        if let Some(text) = help::param(name, &param.name) {
-                            param_row.add_suffix(&help::button(text));
-                        }
-                        row.add_row(&param_row);
-                        (param.name.clone(), scale)
-                    })
-                    .collect();
-                if *name == "echo" {
-                    row.add_row(&widgets.output);
-                    row.add_row(&widgets.echo_status);
-                }
-                let reset = (!params.is_empty()).then(|| {
-                    let defaults = params
-                        .iter()
-                        .map(|param| (name.to_string(), param.name.clone(), param.default))
-                        .collect::<Vec<_>>();
-                    let button = gtk::Button::builder()
-                        .label("Reset")
-                        .valign(gtk::Align::Center)
-                        .build();
-                    let weak = weak.clone();
-                    button.connect_clicked(move |_| reset(&weak, Vec::new(), defaults.clone()));
-                    let reset_row = adw::ActionRow::builder().title("Default Settings").build();
-                    reset_row.add_suffix(&button);
-                    row.add_row(&reset_row);
-                    button
-                });
-                let (weak, name) = (weak.clone(), *name);
-                row.connect_enable_expansion_notify(move |row| {
-                    let on = row.enables_expansion();
-                    // libadwaita expands the row when its switch turns on; switching a stage
-                    // shouldn't open its parameters (switched off, it was collapsed).
-                    if on {
-                        row.set_expanded(false);
+            let row = adw::ExpanderRow::builder()
+                .title(title)
+                .show_enable_switch(true)
+                .build();
+            if let Some(text) = help::stage(name) {
+                row.add_suffix(&help::button(text));
+            }
+            let scales = params
+                .iter()
+                .map(|param| {
+                    let (slider, scale) = scale(&weak, param);
+                    let param_row = adw::ActionRow::builder().title(&param.title).build();
+                    param_row.add_suffix(&slider);
+                    if let Some(text) = help::param(name, &param.name) {
+                        param_row.add_suffix(&help::button(text));
                     }
-                    send_enabled(&weak, name, on);
-                });
-                StageRow::Expander { row, scales, reset }
+                    row.add_row(&param_row);
+                    (param.name.clone(), scale)
+                })
+                .collect();
+            // the echo cancellation also holds its output device and how it does
+            if *name == "echo" {
+                row.add_row(&widgets.output);
+                row.add_row(&widgets.echo_status);
+            }
+            let defaults = params
+                .iter()
+                .map(|param| (name.to_string(), param.name.clone(), param.default))
+                .collect::<Vec<_>>();
+            let reset_button = gtk::Button::builder()
+                .label("Reset")
+                .valign(gtk::Align::Center)
+                .build();
+            let weak_reset = weak.clone();
+            reset_button.connect_clicked(move |_| reset(&weak_reset, Vec::new(), defaults.clone()));
+            let reset_row = adw::ActionRow::builder().title("Default Settings").build();
+            reset_row.add_suffix(&reset_button);
+            row.add_row(&reset_row);
+            let (weak, name) = (weak.clone(), *name);
+            row.connect_enable_expansion_notify(move |row| {
+                let on = row.enables_expansion();
+                // libadwaita expands the row when its switch turns on; switching a stage
+                // shouldn't open its parameters (switched off, it was collapsed).
+                if on {
+                    row.set_expanded(false);
+                }
+                send_enabled(&weak, name, on);
+            });
+            group.add(&row);
+            let row = StageRow {
+                row,
+                scales,
+                reset: reset_button,
             };
-            group.add(row.widget());
             stages.push((name.to_string(), row, group.clone()));
         }
     }
@@ -884,19 +855,14 @@ fn show_echo(widgets: &Widgets, status: &Status) {
 
 fn show(widgets: &Widgets, status: &Status) {
     widgets.updating.set(true);
-    for (name, row, _) in widgets.stages.borrow().iter() {
+    for (name, StageRow { row, scales, reset }, _) in widgets.stages.borrow().iter() {
         if let Some((_, enabled)) = status.stages.iter().find(|(stage, _)| stage == name) {
-            row.set_on(*enabled);
+            row.set_enable_expansion(*enabled);
         }
-        let StageRow::Expander { scales, reset, .. } = row else {
-            continue;
-        };
-        if let Some(reset) = reset {
-            let changed = status.parameters.iter().any(|param| {
-                param.stage == *name && (param.value - param.default).abs() >= param.step / 2.
-            });
-            reset.set_sensitive(changed);
-        }
+        let changed = status.parameters.iter().any(|param| {
+            param.stage == *name && (param.value - param.default).abs() >= param.step / 2.
+        });
+        reset.set_sensitive(changed);
         for (param_name, scale) in scales {
             let Some(param) = status
                 .parameters
