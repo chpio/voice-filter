@@ -166,7 +166,9 @@ In the app you can:
   **Reset** button, everything with **Reset the Filter…** in the main menu
 - watch the **levels** of the microphone and of Voice Filter, and the background noise of the
   microphone: above −45 dBFS the app points out that it's too noisy
-- watch the **latency**, the processing time per frame and dropouts
+- watch the **latency**, the processing time per frame (mean, ~95 %, ~99 % and the longest, of
+  all stages, the high-pass filter, the echo cancellation and the noise suppression on their own
+  and the stages after them together) and dropouts
 
 The info button on a row explains what the stage, the setting or the status value means. The
 status values (latency, processing time, dropouts, the echo cancellation's status and the
@@ -214,6 +216,7 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                                                           |
 | `Quantum`         | `t`, read            | samples per PipeWire cycle                                                                                          |
 | `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms                                                        |
+| `FrameTimes`      | `a(sdddd)`, read     | processing time per frame over the last 10 s in ms: part, mean, 95 % and 99 % percentile, longest                   |
 | `Levels`          | `a{sd}`, read        | `input` and `output` (dBFS, falling 20 dB/s) and `input-floor`, the noise floor of the microphone                   |
 | `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start                                                         |
 

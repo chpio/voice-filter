@@ -902,10 +902,7 @@ fn show(widgets: &Widgets, status: &Status) {
     );
     show_value(
         &widgets.processing,
-        &format!(
-            "Up to {:.1} ms per 10 ms frame, {} samples per cycle",
-            status.max_frame_time, status.quantum
-        ),
+        &processing_text(&status.frame_times, status.quantum),
     );
     let count = |name: &str| status.counters.get(name).copied().unwrap_or_default();
     // the counters are in samples, which say little to the user
@@ -923,6 +920,24 @@ fn show(widgets: &Widgets, status: &Status) {
 
 /// Shows a value in the subtitle of a row, which the user can select and copy: not while they
 /// select in it, the new text would drop the selection.
+/// The processing time of a frame in its parts, a line each: mean, 95 % and 99 % percentile and
+/// the longest, in ms.
+fn processing_text(times: &[(String, f64, f64, f64, f64)], quantum: u64) -> String {
+    let mut text = String::from("Per 10 ms frame in ms: mean, 95 %, 99 %, longest");
+    for (part, mean, p95, p99, max) in times {
+        let title = match part.as_str() {
+            "total" => "All stages",
+            "other" => "The other stages",
+            part => STAGES
+                .iter()
+                .find(|(stage, _)| *stage == part)
+                .map_or(part, |(_, title)| title),
+        };
+        text += &format!("\n{title}: {mean:.2}, {p95:.2}, {p99:.2}, {max:.2}");
+    }
+    text + &format!("\n{quantum} samples per cycle")
+}
+
 fn show_value(row: &adw::ActionRow, text: &str) {
     let selecting = subtitle_label(row.upcast_ref())
         .is_some_and(|label| label.has_focus() && label.selection_bounds().is_some());

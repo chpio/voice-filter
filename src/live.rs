@@ -20,10 +20,11 @@ use ::pipewire::spa::pod::Pod;
 use ::pipewire::stream::{StreamFlags, StreamRc, StreamState};
 use ::pipewire::types::ObjectType;
 
-use crate::bridge::{Capture, Playback, Stats, bridge};
+use crate::bridge::{Capture, FRAME_TIME_PARTS, Playback, Stats, bridge};
 use crate::chain::Chain;
 use crate::dbus::{self, Control, Service};
 use crate::echo::Reference;
+use crate::frame_time::FrameTime;
 use crate::param::Param;
 use crate::settings;
 use crate::volume::{self, Volume};
@@ -866,8 +867,8 @@ fn format_param() -> Vec<u8> {
 /// How often [`report_periodically`] looks at the counters.
 const REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
-/// Hands the longest processing time of a frame to the control interface every
-/// [`REPORT_INTERVAL`] and prints the counters and the latency while frames are processed:
+/// Hands the processing time of the frames to the control interface every [`REPORT_INTERVAL`]
+/// ([`FrameTime::publish`]) and prints the counters and the latency while frames are processed:
 /// `verbose` every time, otherwise only when the chain failed on frames, or when the playback side
 /// filled in silence or dropped samples in the middle of a recording. At its start and end that's
 /// how the bridge settles, so an interval counts only if frames ran through all of it and the one
@@ -886,9 +887,8 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
                 stats.dropped.load(Ordering::Relaxed),
                 stats.errors.load(Ordering::Relaxed),
             ];
-            let max_ns = stats.max_frame_ns.swap(0, Ordering::Relaxed);
-            stats.last_max_frame_ns.store(max_ns, Ordering::Relaxed);
-            let max_ms = max_ns as f64 / 1e6;
+            let times = stats.frame_times.each_ref().map(FrameTime::publish);
+            let max_ms = times[0].max_ns as f64 / 1e6;
             let frames = now[0] - last[0];
             let steady = was_running && frames >= whole;
             let failed = now[3] != last[3];
@@ -911,6 +911,22 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
                     samples_ms(total as f64),
                     stats.quantum.load(Ordering::Relaxed),
                 );
+                let times = FRAME_TIME_PARTS
+                    .iter()
+                    .zip(&times)
+                    .map(|(part, time)| {
+                        let ms = |ns: u64| ns as f64 / 1e6;
+                        format!(
+                            "{part} {:.2}/{:.2}/{:.2}/{:.2}",
+                            ms(time.mean_ns),
+                            ms(time.p95_ns),
+                            ms(time.p99_ns),
+                            ms(time.max_ns),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!("time per frame in ms, mean/95 %/99 %/max: {times}");
             }
             was_running = frames > 0;
             last = now;

@@ -314,10 +314,32 @@ impl Service {
         self.stats.quantum.load(Ordering::Relaxed)
     }
 
-    /// The longest processing time of a frame in ms, over the last 10 s.
+    /// The longest processing time of a frame in ms, over the last 10 s; the `max` of `total` in
+    /// [`Self::frame_times`].
     #[zbus(property(emits_changed_signal = "false"))]
     pub fn max_frame_time(&self) -> f64 {
-        self.stats.last_max_frame_ns.load(Ordering::Relaxed) as f64 / 1e6
+        self.stats.frame_times[0].last().max_ns as f64 / 1e6
+    }
+
+    /// The processing time of a frame over the last 10 s, in ms: part, mean, 95th and 99th
+    /// percentile (rounded up by at most 6.25 %) and the longest. The parts are `total`,
+    /// `highpass`, `echo`, `denoise` (0 when the chain doesn't have them) and `other`, the stages
+    /// after them and what's measured around the chain.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn frame_times(&self) -> Vec<(String, f64, f64, f64, f64)> {
+        let ms = |ns: u64| ns as f64 / 1e6;
+        self.stats
+            .frame_times()
+            .map(|(part, time)| {
+                (
+                    part.to_owned(),
+                    ms(time.mean_ns),
+                    ms(time.p95_ns),
+                    ms(time.p99_ns),
+                    ms(time.max_ns),
+                )
+            })
+            .collect()
     }
 
     /// The levels in dBFS: `input` and `output`, of the microphone and of what the filter outputs

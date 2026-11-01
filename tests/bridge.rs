@@ -1,7 +1,9 @@
 use ::std::sync::atomic::Ordering;
 
-use ::voice_filter::bridge::bridge;
+use ::voice_filter::bridge::{FRAME_TIME_PARTS, bridge};
 use ::voice_filter::chain::Chain;
+use ::voice_filter::frame_time::FrameTime;
+use ::voice_filter::highpass::HighPass;
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
 
 /// The time of a graph cycle in nanoseconds.
@@ -123,4 +125,32 @@ fn reports_the_latency_in_its_parts() {
             ("app", 256)
         ]
     );
+}
+
+#[test]
+fn times_the_frames_in_their_parts() {
+    let (mut capture, _playback, stats) = bridge(Chain::new(vec![Box::new(HighPass::new())]));
+    for cycle in 0..10 {
+        capture.push(&[0.1; FRAME_LEN], cycle_ns(cycle, FRAME_LEN));
+    }
+    let times: Vec<_> = stats.frame_times.iter().map(FrameTime::publish).collect();
+    assert_eq!(FRAME_TIME_PARTS.len(), times.len());
+    for time in &times {
+        assert_eq!(time.frames, 10);
+    }
+    let part = |name| {
+        times[FRAME_TIME_PARTS
+            .iter()
+            .position(|part| *part == name)
+            .unwrap()]
+    };
+    assert!(part("highpass").max_ns > 0);
+    // the chain has neither
+    assert_eq!(part("echo").max_ns, 0);
+    assert_eq!(part("denoise").max_ns, 0);
+    // "other" is the rest of each frame, the means differ only by rounding
+    assert!(part("total").mean_ns + 1 >= part("highpass").mean_ns + part("other").mean_ns);
+    // the reader sees what was published
+    let last: Vec<_> = stats.frame_times().collect();
+    assert_eq!(last[0], ("total", times[0]));
 }

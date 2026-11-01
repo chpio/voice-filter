@@ -16,6 +16,7 @@ pub mod dsp;
 pub mod echo;
 pub mod equalizer;
 pub mod expander;
+pub mod frame_time;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod highpass;

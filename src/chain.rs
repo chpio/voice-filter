@@ -1,5 +1,6 @@
 use ::std::sync::Arc;
 use ::std::sync::atomic::{AtomicBool, Ordering};
+use ::std::time::Instant;
 
 use ::anyhow::Result;
 
@@ -62,6 +63,8 @@ pub fn build_with(denoise: Denoise) -> Result<(Chain, Reference)> {
 /// [`Stage::resume_frames`] without being played, so nothing from before the pause is heard.
 pub struct Chain {
     slots: Vec<Slot>,
+    /// The processing time of the last frame of each stage given to [`Chain::time`], in ns.
+    times: Vec<u64>,
 }
 
 struct Slot {
@@ -75,6 +78,8 @@ struct Slot {
     paused: bool,
     /// The frames the stage still runs without being played, after a pause.
     resuming: usize,
+    /// Where its processing time goes in `Chain::times`, if it's timed.
+    timer: Option<usize>,
 }
 
 impl Chain {
@@ -88,9 +93,29 @@ impl Chain {
                 mix: 1.,
                 paused: false,
                 resuming: 0,
+                timer: None,
             })
             .collect();
-        Self { slots }
+        Self {
+            slots,
+            times: Vec::new(),
+        }
+    }
+
+    /// Measures the processing time of the stages named `names` on every frame (only of these:
+    /// reading the clock costs about 20 ns), see [`Self::times`]. Neighbors share the time
+    /// between them, so timing the first stages takes one reading per stage and one more.
+    pub fn time(&mut self, names: &[&str]) {
+        self.times = vec![0; names.len()];
+        for slot in &mut self.slots {
+            slot.timer = names.iter().position(|name| *name == slot.stage.name());
+        }
+    }
+
+    /// The processing time of the last frame in ns of each stage given to [`Self::time`], in that
+    /// order, with the switching and crossfading around it; 0 for a name the chain doesn't have.
+    pub fn times(&self) -> &[u64] {
+        &self.times
     }
 
     pub fn stages(&self) -> impl Iterator<Item = &dyn Stage> {
@@ -133,8 +158,23 @@ impl Chain {
     }
 
     pub fn process(&mut self, frame: &mut Frame) -> Result<()> {
+        // the end of the timed stage before, the start of this one
+        let mut clock = None;
         for slot in &mut self.slots {
-            slot.process(frame)?;
+            match slot.timer {
+                Some(timer) => {
+                    // Instant::now goes through the vDSO, no syscall
+                    let started = clock.unwrap_or_else(Instant::now);
+                    slot.process(frame)?;
+                    let now = Instant::now();
+                    self.times[timer] = (now - started).as_nanos() as u64;
+                    clock = Some(now);
+                }
+                None => {
+                    clock = None;
+                    slot.process(frame)?;
+                }
+            }
         }
         Ok(())
     }

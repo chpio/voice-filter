@@ -15,6 +15,7 @@ use ::rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::atomic::AtomicF32;
 use crate::chain::Chain;
+use crate::frame_time::{FrameTime, Summary};
 use crate::level::{self, Meter, NoiseFloor};
 use crate::stage::Frame;
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -30,10 +31,8 @@ pub struct Stats {
     pub underruns: AtomicU64,
     /// Samples dropped to bring the latency back down, e.g. after the playback side paused.
     pub dropped: AtomicU64,
-    /// The longest processing time of a frame in nanoseconds, reset by the reader.
-    pub max_frame_ns: AtomicU64,
-    /// `max_frame_ns` as the reader saw it before resetting it, for other readers.
-    pub last_max_frame_ns: AtomicU64,
+    /// The processing time of a frame, in the parts of [`FRAME_TIME_PARTS`].
+    pub frame_times: [FrameTime; FRAME_TIME_PARTS.len()],
     /// The delay through the bridge at the last pull, in samples: from the capture of a sample to
     /// its playback, without the latency of the chain.
     pub bridge_delay: AtomicI64,
@@ -55,7 +54,25 @@ pub struct Stats {
     pending: AtomicU64,
 }
 
+/// The parts of the processing time of a frame in [`Stats::frame_times`]: `total`, the stages
+/// timed on their own (the first ones of the chain, the expensive ones among them; 0 if the chain
+/// doesn't have them) and `other`, the rest: the stages after them and the levels measured
+/// around the chain.
+pub const FRAME_TIME_PARTS: [&str; 5] = ["total", "highpass", "echo", "denoise", "other"];
+
+/// The stages timed on their own, the parts of [`FRAME_TIME_PARTS`] between `total` and `other`.
+const TIMED: [&str; 3] = ["highpass", "echo", "denoise"];
+
 impl Stats {
+    /// The processing time of a frame in its parts ([`FRAME_TIME_PARTS`]), over the interval
+    /// before the last [`FrameTime::publish`].
+    pub fn frame_times(&self) -> impl Iterator<Item = (&'static str, Summary)> {
+        FRAME_TIME_PARTS
+            .into_iter()
+            .zip(&self.frame_times)
+            .map(|(part, time)| (part, time.last()))
+    }
+
     /// The latency from the microphone to the app in samples, in its parts: `microphone` (from the
     /// device to the capture stream), `bridge`, `chain` (`chain_latency`) and `app` (from the
     /// output stream to the app).
@@ -90,7 +107,8 @@ pub struct Playback {
 /// Room for a large quantum plus a few frames; the playback side keeps the level far below.
 const CAPACITY: usize = 16 * FRAME_LEN;
 
-pub fn bridge(chain: Chain) -> (Capture, Playback, Arc<Stats>) {
+pub fn bridge(mut chain: Chain) -> (Capture, Playback, Arc<Stats>) {
+    chain.time(&TIMED);
     let (output, input) = RingBuffer::new(CAPACITY);
     let stats = Arc::new(Stats::default());
     for level in [&stats.input_db, &stats.output_db, &stats.input_floor_db] {
@@ -150,13 +168,18 @@ impl Capture {
         }
         let elapsed = started.elapsed().as_nanos() as u64;
         let stats = &self.stats;
+        let [total, timed @ .., other] = &stats.frame_times;
+        total.record(elapsed);
+        let mut timed_ns = 0;
+        for (time, &ns) in timed.iter().zip(self.chain.times()) {
+            time.record(ns);
+            timed_ns += ns;
+        }
+        other.record(elapsed.saturating_sub(timed_ns));
         stats.input_db.store(self.input_meter.push(input_db));
         stats.input_floor_db.store(self.input_floor.push(input_db));
         let output_db = level::frame_db(&self.frame);
         stats.output_db.store(self.output_meter.push(output_db));
-        self.stats
-            .max_frame_ns
-            .fetch_max(elapsed, Ordering::Relaxed);
         self.stats.frames.fetch_add(1, Ordering::Relaxed);
         match self.output.write_chunk_uninit(FRAME_LEN) {
             Ok(chunk) => {

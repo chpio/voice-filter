@@ -53,6 +53,8 @@ pub trait VoiceFilter {
     #[zbus(property)]
     fn max_frame_time(&self) -> ::zbus::Result<f64>;
     #[zbus(property)]
+    fn frame_times(&self) -> ::zbus::Result<Vec<(String, f64, f64, f64, f64)>>;
+    #[zbus(property)]
     fn counters(&self) -> ::zbus::Result<HashMap<String, u64>>;
     #[zbus(property)]
     fn levels(&self) -> ::zbus::Result<HashMap<String, f64>>;
@@ -112,6 +114,8 @@ pub struct Status {
     pub echo: HashMap<String, f64>,
     pub quantum: u64,
     pub max_frame_time: f64,
+    /// Part, mean, 95 % and 99 % percentile and longest, in ms, see `src/dbus.rs`.
+    pub frame_times: Vec<(String, f64, f64, f64, f64)>,
     pub counters: HashMap<String, u64>,
     /// `input`, `output` and `input-floor` in dBFS, see `src/dbus.rs`.
     pub levels: HashMap<String, f64>,
@@ -134,6 +138,7 @@ struct Properties {
     echo: HashMap<String, f64>,
     quantum: u64,
     max_frame_time: f64,
+    frame_times: Vec<(String, f64, f64, f64, f64)>,
     counters: HashMap<String, u64>,
     levels: HashMap<String, f64>,
 }
@@ -171,6 +176,7 @@ impl VoiceFilterProxy<'_> {
             echo: properties.echo,
             quantum: properties.quantum,
             max_frame_time: properties.max_frame_time,
+            frame_times: properties.frame_times,
             counters: properties.counters,
             levels: properties.levels,
         })

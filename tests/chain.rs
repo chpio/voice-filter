@@ -210,3 +210,54 @@ fn the_stages_trace_what_they_applied() -> Result<()> {
     }
     Ok(())
 }
+
+/// Takes `ms` per frame.
+struct Slow {
+    name: &'static str,
+    ms: u64,
+}
+
+impl Stage for Slow {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn latency(&self) -> usize {
+        0
+    }
+
+    fn process(&mut self, _: &mut Frame) -> Result<()> {
+        ::std::thread::sleep(::std::time::Duration::from_millis(self.ms));
+        Ok(())
+    }
+}
+
+#[test]
+fn times_the_stages_asked_for() {
+    let mut chain = Chain::new(vec![
+        Box::new(Slow {
+            name: "first",
+            ms: 2,
+        }),
+        Box::new(Slow {
+            name: "second",
+            ms: 4,
+        }),
+        Box::new(Slow {
+            name: "third",
+            ms: 1,
+        }),
+    ]);
+    assert!(chain.times().is_empty());
+    chain.time(&["second", "first", "missing"]);
+    assert_eq!(chain.times(), [0, 0, 0]);
+    chain.process(&mut [0.; FRAME_LEN]).unwrap();
+    let ms = |ns: u64| ns as f64 / 1e6;
+    let [second, first, missing] = chain.times() else {
+        panic!("{:?}", chain.times());
+    };
+    // sleeping takes at least as long, a busy machine may add to it
+    assert!((2. ..20.).contains(&ms(*first)), "{first}");
+    assert!((4. ..20.).contains(&ms(*second)), "{second}");
+    assert_eq!(*missing, 0);
+}

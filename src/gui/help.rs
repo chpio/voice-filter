@@ -217,8 +217,12 @@ pub const LATENCY: &str = "How long the voice takes from the microphone to the a
     microphone's buffer, the buffer before the virtual microphone, what the stages need (the \
     noise suppression 30 ms) and the buffer of the app.";
 
-pub const PROCESSING: &str = "The longest time 10 ms of audio took through all stages in the \
-    last 10 seconds. It has to stay well below 10 ms, otherwise there are dropouts.\n\nPipeWire \
+pub const PROCESSING: &str = "How long 10 ms of audio took through the stages in the last 10 \
+    seconds: the mean, the time 95 % and 99 % of it stayed within (rounded up by at most 6 %) and \
+    the longest. All of it, the high-pass filter, the echo cancellation and the noise suppression \
+    on their own (the noise suppression takes the most), and the stages after them together. \
+    The longest time has to stay well below 10 ms, otherwise there are dropouts; a stage \
+    switched off takes almost none.\n\nPipeWire \
     hands the audio over in cycles, the samples per cycle are their size (48 samples are 1 ms). \
     The filter asks for 480, apps that need a lower latency can make it smaller.";
 
