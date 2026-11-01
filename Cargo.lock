@@ -2313,9 +2313,12 @@ dependencies = [
  "libadwaita",
  "ndarray",
  "pipewire",
+ "realfft",
  "rtrb",
  "serde",
  "sonora",
+ "sonora-agc2",
+ "sonora-simd",
  "tempfile",
  "zbus",
 ]

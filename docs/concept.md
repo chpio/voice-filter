@@ -2,7 +2,7 @@
 
 Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore. How to use it is in the [README](../README.md).
 
-**Status** (2026-11-01): phases 1 and 2 are done, most of phase 3. The live filter runs as the virtual microphone "Voice Filter" with echo cancellation, DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus. Missing from phase 3: less loss of the voice while talking into the playback (designed in [Double talk](#double-talk-the-echo-cancellation-only-decides), measured offline) and more tests. See the [roadmap](#roadmap).
+**Status** (2026-11-01): phases 1 and 2 are done, most of phase 3. The live filter runs as the virtual microphone "Voice Filter" with echo cancellation, DeepFilterNet3, high-pass, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus. Missing from phase 3: listening tests of the voice protection while talking into the playback (see [Double talk](#double-talk-the-echo-cancellation-only-decides), in the chain, measured offline) and more tests. See the [roadmap](#roadmap).
 
 **Contents:** [Goal and requirements](#goal-and-requirements) · [Signal chain](#signal-chain) · [Model choice](#model-choice) · [Echo cancellation](#echo-cancellation) · [Suppressing other voices](#suppressing-other-voices) · [Voice enhancement](#voice-enhancement) · [GPU strategy](#gpu-strategy) · [Architecture](#architecture) · [Risks and open questions](#risks-and-open-questions) · [Roadmap](#roadmap)
 
@@ -116,15 +116,15 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 - Every second or fourth frame instead doesn't work: the model sees the signal two or four times as fast, and at four times it hardly recognizes speech anymore (6 instead of 42 seconds above 0 dB).
 - WebRTC's RNN VAD (in sonora's AGC2, 23 µs per frame) is no alternative: it takes music for speech (88 % of the frames of the music without vocals).
 
-**The design:**
+**In the chain** (2026-11-01):
 
-- The echo cancellation runs as now and also analyzes the reference with DeepFilterNet3's encoder, in runs of 25 of 100 frames, only while it isn't silent.
-- Speech in the reference (the 3 s mean above about 5 dB): the adaptive sidechain, the echo cancellation keeps removing it.
-- No speech in it (music, nothing): the sidechain with a low mix all the time, DeepFilterNet3 removes the music.
-- Asymmetric: speech mode as soon as a window has speech, and when the reference starts; music mode only after several seconds without speech. A wrong music mode lets the other side hear itself, a wrong speech mode only costs the voice a little.
-- The chain changes: DeepFilterNet3 needs the raw microphone (delayed by the echo cancellation's latency) besides the echo cancellation's output, which the `Stage` trait doesn't pass on; and the speech mode of the reference has to reach it. Mix and threshold become parameters.
+- The echo stage hands the noise suppression the raw microphone, delayed by its latency, and what the speakers play: silent (below −70 dBFS for 1 s, or no reference for 1 s), speech or music (`echo::Sidechain`, `Playback`). The app's status row of the echo cancellation says which.
+- It analyzes the reference with DeepFilterNet3's encoder in runs of 25 of 100 frames, only while it isn't silent: 0.08 ms per frame on average in the echo stage on the Bluetooth recording (0.06 before), at most 0.84 ms.
+- Speech in it: the adaptive sidechain, the echo cancellation keeps removing it. Music: the sidechain all the time. Silent: as before, with the deep filter.
+- Asymmetric: speech when the playback starts (it may be a call) and as soon as a single run's mean estimate is above the threshold (the 3 s mean of the measurement above missed short passages of the video's speech: music for 28 of its 84 s), music only after 10 s without (with 5 s still 15 s of the video). With that the video was music for 2 of 84 s (in a stretch of about 12 s without speech), the music speech for 10 s from its start, and once more for 10 s within the 45 s of the song with vocals. A wrong music mode lets the other side hear itself, a wrong speech mode only costs the voice a little while you talk.
+- Parameters of the echo stage: `protect` (Voice Protection, the share of the raw microphone, 75 %; 0 % is the chain as before) and `speech` (the threshold of the runs, 5 dB). The threshold of your voice in speech mode stays at 10 dB.
 
-Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers), listening (the switching, the noise without the deep filter), and the delay of 3 s until music mode is left: to be measured how much of a call's first words gets through.
+Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers), listening live (the switching, the noise without the deep filter), and how much of a call's first words gets through after music (10 s after the music started it's music mode, the first run with speech switches back within up to 1 s).
 
 - AGC2 against our AGC, compressor and limiter, on another recording: 6 dB quieter with its defaults, the same spread between quiet and loud speech, pauses 5 dB further below the speech, peaks up to 0 dBFS. Not better enough to give up our adjustable chain; the expander would bring the quieter pauses.
 
@@ -262,7 +262,7 @@ Three phases, each usable on its own. Each phase ends with a latency and listeni
    - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; sonora patched to its allocation-free PR until a release)
    - [x] live test: about 30 dB of the echo removed, the reference stream on the speakers' clock
    - [x] offline: what the echo cancellation costs the voice in double talk, the sidechain against it, and DeepFilterNet3's encoder telling speech in the reference from music (see [Double talk](#double-talk-the-echo-cancellation-only-decides))
-   - [ ] less choppy speech when talking into the playback: the sidechain in the chain, switched by speech in the reference
+   - [x] less choppy speech when talking into the playback: the sidechain in the chain, switched by speech in the reference (offline; live still to listen to)
    - [ ] more recordings for it (rap, a podcast with music, a real call), listening tests
    - [ ] a test with only speech from the speakers, and over a longer call
    - other voices (Hush with Full and Gate modes, or a personalized model) are postponed

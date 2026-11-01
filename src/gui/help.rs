@@ -60,7 +60,24 @@ const STAGES: [(&str, &str); 9] = [
 ];
 
 /// What each parameter changes, by stage and parameter name.
-const PARAMS: [(&str, &str, &str); 18] = [
+const PARAMS: [(&str, &str, &str); 20] = [
+    (
+        "echo",
+        "protect",
+        "While you talk into what the speakers play, the echo cancellation turns your voice \
+         down with the echo. Music the noise suppression removes by itself, so then it decides \
+         from the echo cancellation but keeps this much of your voice as it was; with speech \
+         from the speakers (a call, a video) only while you talk. 0 % leaves it to the echo \
+         cancellation alone.",
+    ),
+    (
+        "echo",
+        "speech",
+        "Above this the echo cancellation takes what the speakers play for speech, which the \
+         noise suppression can't tell from your voice, and removes it fully; below, for music. \
+         Lower if the other side of a call hears itself when you speak, higher if music still \
+         makes your voice choppy.",
+    ),
     (
         "denoise",
         "limit",

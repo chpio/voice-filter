@@ -188,7 +188,7 @@ fn the_stages_trace_what_they_applied() -> Result<()> {
     assert_eq!(
         traces,
         [
-            ("echo", None),
+            ("echo", Some("playback")),
             ("denoise", Some("snr")),
             ("highpass", None),
             ("eq", None),

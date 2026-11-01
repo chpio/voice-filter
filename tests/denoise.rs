@@ -1,5 +1,6 @@
 use ::voice_filter::FRAME_LEN;
 use ::voice_filter::denoise::Denoise;
+use ::voice_filter::echo::{Echo, Reference, SPEECH_HOLD_FRAMES};
 use ::voice_filter::stage::{Frame, Stage};
 
 /// White noise at about −25 dBFS, from a fixed seed in `state` (xorshift).
@@ -86,4 +87,68 @@ fn plays_nothing_from_before_a_pause() {
         let peak = frame.iter().fold(0f32, |peak, x| peak.max(x.abs()));
         assert!(peak < 1e-4, "frame {i}: peak {peak}");
     }
+}
+
+/// What `denoise` makes of `frames` frames of a microphone picking up noise of its own and, with
+/// `played`, noise the speakers play, after `echo` (whose sidechain `denoise` may take).
+fn after_echo(
+    echo: &mut Echo,
+    reference: &mut Reference,
+    denoise: &mut Denoise,
+    frames: usize,
+    played: bool,
+) -> Vec<f32> {
+    let (mut own, mut speakers) = (0x2545_f491, 0x1234_5678);
+    let mut out = Vec::new();
+    for _ in 0..frames {
+        let mut frame = noise(&mut own);
+        if played {
+            let playing = noise(&mut speakers);
+            reference.push(&playing);
+            for (x, p) in frame.iter_mut().zip(&playing) {
+                *x += 0.3 * p;
+            }
+        }
+        echo.process(&mut frame).unwrap();
+        denoise.process(&mut frame).unwrap();
+        out.extend_from_slice(&frame);
+    }
+    out
+}
+
+#[test]
+fn takes_the_sidechain_only_while_the_speakers_play() {
+    // silent speakers: exactly as without the sidechain
+    let (mut echo, mut reference) = Echo::new();
+    let mut with = Denoise::new().unwrap().with_sidechain(echo.sidechain());
+    let silent = after_echo(&mut echo, &mut reference, &mut with, 200, false);
+    let (mut echo, mut reference) = Echo::new();
+    let mut without = Denoise::new().unwrap();
+    assert_eq!(
+        silent,
+        after_echo(&mut echo, &mut reference, &mut without, 200, false)
+    );
+}
+
+#[test]
+fn protects_nothing_at_0_percent() {
+    let run = |protect: Option<f32>| {
+        let (echo, mut reference) = Echo::new();
+        let mut echo = echo.detecting().unwrap();
+        // the noise it mutes completely, whatever the gains go to; limited it lets part of it
+        // through, of what the gains go to
+        let mut denoise = Denoise::new().unwrap().with_atten_lim(6.);
+        if let Some(protect) = protect {
+            let params = echo.params();
+            let param = params.iter().find(|p| p.name == "protect").unwrap();
+            param.set(protect).unwrap();
+            denoise = denoise.with_sidechain(echo.sidechain());
+        }
+        // long enough for the noise from the speakers to count as music
+        let frames = SPEECH_HOLD_FRAMES + 200;
+        after_echo(&mut echo, &mut reference, &mut denoise, frames, true)
+    };
+    let plain = run(None);
+    assert_eq!(run(Some(0.)), plain);
+    assert_ne!(run(Some(100.)), plain);
 }

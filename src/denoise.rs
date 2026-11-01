@@ -6,6 +6,8 @@ use ::deep_filter_rt::tract::DfTract;
 use ::ndarray::Array2;
 
 use crate::atomic::AtomicF32;
+use crate::dsp::ramp;
+use crate::echo::{Playback, Sidechain};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -16,10 +18,19 @@ pub struct Denoise {
     // [channels, samples] as DfTract wants them, allocated once
     noisy: Array2<f32>,
     enhanced: Array2<f32>,
+    // the signal the gains go to in `process_with`
+    apply: Array2<f32>,
     atten_lim: Param,
     /// The attenuation limit `df` has, to see changes of `atten_lim`.
     applied_atten_lim: f32,
     speech: Arc<Speech>,
+    sidechain: Option<Arc<Sidechain>>,
+    /// The frames of `sidechain` at the last frame, to see whether it has this one.
+    sidechain_frames: u64,
+    /// The share of the echo cancellation's output in what the gains went to in the last frame.
+    mix_before: f32,
+    /// Frames left to stay with your voice.
+    voice_hold: usize,
 }
 
 /// How much speech the model hears, for the stages after it (AGC and expander): its estimate of
@@ -105,9 +116,14 @@ impl Denoise {
             df,
             noisy: Array2::zeros((1, FRAME_LEN)),
             enhanced: Array2::zeros((1, FRAME_LEN)),
+            apply: Array2::zeros((1, FRAME_LEN)),
             atten_lim: Param::new("limit", "Limit", "dB", (0., UNLIMITED, 1.), UNLIMITED),
             applied_atten_lim: UNLIMITED,
             speech: Arc::new(Speech::new()),
+            sidechain: None,
+            sidechain_frames: 0,
+            mix_before: 1.,
+            voice_hold: 0,
         })
     }
 
@@ -118,6 +134,14 @@ impl Denoise {
         self.atten_lim
             .set(db.clamp(0., UNLIMITED))
             .expect("clamped to the range");
+        self
+    }
+
+    /// Takes the microphone before the echo cancellation and what the speakers play from it, so
+    /// the echo cancellation doesn't turn down the voice where the model tells it from the echo by
+    /// itself (see [`Stage::process`]).
+    pub fn with_sidechain(mut self, sidechain: Arc<Sidechain>) -> Self {
+        self.sidechain = Some(sidechain);
         self
     }
 
@@ -159,7 +183,75 @@ impl Stage for Denoise {
         Some(("snr", self.speech.snr_db()))
     }
 
+    /// With a [`Sidechain`] (see [`Denoise::with_sidechain`]) the model analyzes the echo
+    /// cancellation's output as always, but where the echo cancellation's suppressor would take
+    /// the voice with the echo, its gains go to a mix with the raw microphone instead: all the
+    /// time while the speakers play something without speech (music, which the model removes by
+    /// itself), while they play speech only while you talk (above [`VOICE_DB`], held for
+    /// [`VOICE_HOLD_FRAMES`]). Without the deep filter then: its coefficients are a filter for the
+    /// analyzed spectrum. Switching crossfades the mix over a frame.
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
+        let Some(sidechain) = self.sidechain.clone() else {
+            return self.process_with(frame, None, true);
+        };
+        // not this frame's while the echo cancellation is switched off
+        let frames = sidechain.frames();
+        let fresh = frames != self.sidechain_frames;
+        self.sidechain_frames = frames;
+        let protect = sidechain.protect();
+        let active = fresh
+            && protect > 0.
+            && match sidechain.playback() {
+                Playback::Silent => false,
+                Playback::Music => true,
+                Playback::Speech => self.voice_hold > 0,
+            };
+        let mix = if active { 1. - protect } else { 1. };
+        if mix >= 1. && self.mix_before >= 1. {
+            self.process_with(frame, None, true)?;
+        } else {
+            let mut raw = *frame;
+            if fresh {
+                sidechain.raw(&mut raw);
+            }
+            let mut apply = [0.; FRAME_LEN];
+            for (((a, e), r), m) in apply
+                .iter_mut()
+                .zip(frame.iter())
+                .zip(&raw)
+                .zip(ramp(self.mix_before, mix))
+            {
+                *a = m * e + (1. - m) * r;
+            }
+            self.process_with(frame, Some(&apply), !active)?;
+        }
+        self.mix_before = mix;
+        self.voice_hold = if self.speech.snr_db() > VOICE_DB {
+            VOICE_HOLD_FRAMES
+        } else {
+            self.voice_hold.saturating_sub(1)
+        };
+        Ok(())
+    }
+}
+
+/// The estimate above which the sidechain takes it for your voice while the speakers play speech,
+/// in dB: at 5 dB remains of the speech after the echo cancellation opened it too, and left more of
+/// a quiet echo (−83 instead of −89 dBFS).
+pub const VOICE_DB: f32 = 10.;
+/// How long it stays with the voice after it, in frames (200 ms).
+pub const VOICE_HOLD_FRAMES: usize = 20;
+
+impl Denoise {
+    /// [`Stage::process`], but with `apply` the model analyzes `frame` and its gains go to
+    /// `apply` (see [`DfTract::process_with`]), the result in `frame`; `df` applies the deep
+    /// filter too.
+    pub fn process_with(
+        &mut self,
+        frame: &mut Frame,
+        apply: Option<&Frame>,
+        df: bool,
+    ) -> Result<()> {
         let atten_lim = self.atten_lim.get();
         if atten_lim != self.applied_atten_lim {
             self.df.set_atten_lim(atten_lim);
@@ -170,9 +262,19 @@ impl Stage for Denoise {
             .as_slice_mut()
             .unwrap()
             .copy_from_slice(frame);
-        let snr_db = self
-            .df
-            .process(self.noisy.view(), self.enhanced.view_mut())?;
+        if let Some(apply) = apply {
+            self.apply
+                .row_mut(0)
+                .as_slice_mut()
+                .unwrap()
+                .copy_from_slice(apply);
+        }
+        let snr_db = self.df.process_with(
+            self.noisy.view(),
+            apply.map(|_| self.apply.view()),
+            df,
+            self.enhanced.view_mut(),
+        )?;
         // at a limit of 0 dB the model doesn't run and has no estimate, the stages after it go by
         // the level as if it were switched off
         if self.df.attenuates() {

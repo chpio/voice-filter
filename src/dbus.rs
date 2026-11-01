@@ -288,8 +288,10 @@ impl Service {
     /// first stops while it's off or no app records, the second while the speakers are idle),
     /// `reference` (the peak level of what the speakers play in dBFS, falling by 60 dB/s), `erle`
     /// and `erl` (as AEC3 reports them, of its linear filter only: they say little about how much
-    /// echo it removes in all, see [`EchoStatus::erle_db`]) and `delay` (from the speakers to the
-    /// microphone, in ms, in steps of 4 ms). Empty without echo cancellation.
+    /// echo it removes in all, see [`EchoStatus::erle_db`]), `delay` (from the speakers to the
+    /// microphone, in ms, in steps of 4 ms) and `playback` (what the speakers play, as
+    /// [`crate::echo::Playback`]: 0 silent, 1 speech, 2 music or anything else without speech).
+    /// Empty without echo cancellation.
     #[zbus(property(emits_changed_signal = "false"))]
     pub fn echo(&self) -> HashMap<String, f64> {
         let Some(echo) = &self.echo else {
@@ -302,6 +304,7 @@ impl Service {
             ("erle", echo.erle_db() as f64),
             ("erl", echo.erl_db() as f64),
             ("delay", echo.delay_ms() as f64),
+            ("playback", echo.playback() as u32 as f64),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))

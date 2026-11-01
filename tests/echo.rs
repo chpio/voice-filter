@@ -2,7 +2,9 @@ use ::std::alloc::{GlobalAlloc, Layout, System};
 use ::std::cell::Cell;
 
 use ::voice_filter::FRAME_LEN;
-use ::voice_filter::echo::{Echo, LATENCY};
+use ::voice_filter::echo::{
+    Echo, LATENCY, Playback, Reference, SILENCE_FRAMES, SPEECH_HOLD_FRAMES,
+};
 use ::voice_filter::stage::{Frame, Stage};
 
 /// Counts the allocations of the current thread, so the test harness's other threads don't
@@ -153,6 +155,64 @@ fn allocates_nothing_per_frame() {
     }
     let allocations = ALLOCATIONS.with(Cell::get) - before;
     assert_eq!(allocations, 0, "allocations in 500 frames");
+}
+
+#[test]
+fn hands_on_the_microphone_delayed_by_its_latency() {
+    let (mut echo, _reference) = Echo::new();
+    let sidechain = echo.sidechain();
+    let mut noise = Noise(0x2545_f491);
+    let mut input = Vec::new();
+    let mut raw = Vec::new();
+    for frames in 1..=10 {
+        let mut frame = noise.frame();
+        input.extend_from_slice(&frame);
+        echo.process(&mut frame).unwrap();
+        assert_eq!(sidechain.frames(), frames);
+        let mut out = [0.; FRAME_LEN];
+        sidechain.raw(&mut out);
+        raw.extend_from_slice(&out);
+    }
+    assert!(raw[..LATENCY].iter().all(|x| *x == 0.));
+    assert_eq!(raw[LATENCY..], input[..input.len() - LATENCY]);
+}
+
+/// Runs `frames` frames of noise through `echo`, played and picked up in a room, and returns what
+/// it took the speakers to play after the last.
+fn play_noise(echo: &mut Echo, reference: &mut Reference, frames: usize) -> Playback {
+    let (mut noise, mut room) = (Noise(0x2545_f491), Room { played: Vec::new() });
+    for _ in 0..frames {
+        let played = noise.frame();
+        let mut frame = room.echo(&played);
+        reference.push(&played);
+        echo.process(&mut frame).unwrap();
+    }
+    echo.status().playback()
+}
+
+#[test]
+fn takes_all_the_speakers_play_for_speech_without_the_detector() {
+    let (mut echo, mut reference) = Echo::new();
+    assert_eq!(echo.status().playback(), Playback::Silent);
+    let playback = play_noise(&mut echo, &mut reference, SPEECH_HOLD_FRAMES + 100);
+    assert_eq!(playback, Playback::Speech);
+    // the speakers' stream stops
+    let mut frame = [0.; FRAME_LEN];
+    for _ in 0..SILENCE_FRAMES {
+        echo.process(&mut frame).unwrap();
+    }
+    assert_eq!(echo.status().playback(), Playback::Silent);
+}
+
+#[test]
+fn takes_noise_from_the_speakers_for_music_with_the_detector() {
+    let (echo, mut reference) = Echo::new();
+    let mut echo = echo.detecting().unwrap();
+    let sidechain = echo.sidechain();
+    let playback = play_noise(&mut echo, &mut reference, SPEECH_HOLD_FRAMES + 100);
+    assert_eq!(playback, Playback::Music);
+    assert_eq!(sidechain.playback(), Playback::Music);
+    assert_eq!(echo.trace(), Some(("playback", 2.)));
 }
 
 #[test]

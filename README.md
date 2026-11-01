@@ -7,7 +7,9 @@ _Voice Filter_. Any app (Discord, the browser, OBS) can use it like a regular mi
 your voice without the echo of your speakers and the background noise, with a clearer, even tone.
 
 - **Removes the echo of your speakers** with WebRTC's echo canceller (AEC3), so calls work
-  without headphones; it takes what the speakers play as a reference
+  without headphones; it takes what the speakers play as a reference. While you talk into music
+  it keeps your voice, as the noise suppression removes music by itself; only speech from the
+  speakers (a call, a video) it removes fully
 - **Removes background noise** with [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet), a
   neural network that keeps the full 48 kHz range
 - **Enhances the voice** with classic DSP: high-pass, EQ, de-esser, automatic gain control,
@@ -38,7 +40,7 @@ plays the result into the virtual microphone:
 
 | Stage        | What it does                                                                      | Settings                               | Latency |
 | ------------ | --------------------------------------------------------------------------------- | -------------------------------------- | ------: |
-| `echo`       | Removes the echo of the speakers (AEC3, from what they play)                      | the speakers                           |    5 ms |
+| `echo`       | Removes the echo of the speakers (AEC3, from what they play), keeps the voice     | the speakers, `protect`, `speech`      |    5 ms |
 | `denoise`    | Removes background noise (DeepFilterNet3)                                         | `limit`                                |   30 ms |
 | `highpass`   | Removes rumble, footfall noise and plosives below 80 Hz                           | `freq`                                 |       – |
 | `eq`         | Less muddiness (−3 dB at 250 Hz), more presence (+3 dB at 3.5 kHz)                | `low-mid`, `presence`, `presence-freq` |       – |
@@ -81,7 +83,8 @@ cargo install --locked voice-filter --no-default-features
 cargo install --locked --path .
 ```
 
-Built from the repository, the echo cancellation doesn't allocate memory while it runs. The
+Built from the repository, AEC3 doesn't allocate memory while it runs (what tells speech from
+music in what the speakers play does, like the noise suppression, as both run DeepFilterNet3). The
 version on crates.io still uses the last release of sonora (the Rust port of AEC3), which
 allocates in every 10 ms frame. It sounds the same, but on a busy system it makes dropouts more
 likely. That goes away with sonora's next release.
@@ -138,8 +141,11 @@ manager can start it again.
   the room, the speakers and the noise, the better every stage works; raising the microphone's
   volume above 100 % in software doesn't help, the automatic gain control does that anyway.
 - With **headphones** there's no echo, switch the echo cancellation off. Over speakers it removes
-  the echo, but talking into loud playback can make the voice choppy now and then: it turns down
-  what's left of the echo, and the voice with it.
+  the echo; what's left of it it turns down band by band, and the voice with it while you talk
+  into the playback. With music it leaves most of that to the noise suppression, which keeps the
+  voice (**Voice Protection**, 75 %; 10 s after the music starts, at first it takes it for a
+  call); with speech from the speakers only while you talk. Its status in the app shows which it
+  hears. If the other side of a call hears itself, lower **Speech Threshold**.
 
 ### The GNOME app
 
@@ -151,8 +157,8 @@ In the app you can:
 
 - choose the **microphone**, switched while the filter keeps running
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
-  there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the
-  delay of their echo
+  there's no echo, it can be off. Its status shows whether it hears the speakers, speech or music,
+  how loud, and the delay of their echo
 - turn on **Listen** to hear yourself through the filter on the default output (use headphones),
   at a volume of its own; **Keep Listening** turns it on again after a restart, e.g. to keep
   listening quietly (the microphone stays in use then)
@@ -206,7 +212,7 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                                                                          |
 | `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                                                                        |
 | `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                                                                    |
-| `Echo`            | `a{sd}`, read        | the echo cancellation: frame counters, level of the speakers, AEC3's ERLE/ERL (of its linear filter only) and delay |
+| `Echo`            | `a{sd}`, read        | echo cancellation: frame counters, speaker level, AEC3's ERLE/ERL, delay, `playback` (0 silent, 1 speech, 2 music)  |
 | `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                                                           |
 | `Quantum`         | `t`, read            | samples per PipeWire cycle                                                                                          |
 | `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms                                                        |
