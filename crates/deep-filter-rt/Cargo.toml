@@ -20,6 +20,10 @@ include = [
     "/LICENSE-MIT",
 ]
 
+# rust-ini's library is named `ini`, cargo-machete takes it for unused
+[package.metadata.cargo-machete]
+ignored = ["rust-ini"]
+
 [features]
 # logs the processing time per frame
 timings = []
