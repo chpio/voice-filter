@@ -191,7 +191,7 @@ fn main() -> Result<()> {
         level_db(&echo_played[..len]),
         level_db(&voice_only[lead..]),
     );
-    println!("variant\techo dBFS\tvoice dB\tloss dB\tleak dB\tlost %");
+    println!("variant\techo dBFS\tvoice dB\tloss dB\tleak dB\tlost %\tgaps dB");
     {
         let talk_range = (lead + SAMPLE_RATE as usize).min(len)..len;
         println!(
@@ -315,6 +315,9 @@ struct Deviation {
     leak: f64,
     /// The share more than 6 dB quieter.
     lost: f64,
+    /// The mean power where the target has nothing (between syllables, in bands without the
+    /// voice) against its mean power where it has, in dB: what comes through besides the voice.
+    gaps: f64,
 }
 
 /// The STFT of [`Deviation`]: 20 ms frames, 10 ms apart.
@@ -328,10 +331,14 @@ impl Deviation {
         let loudest = target.iter().flatten().copied().fold(0f64, f64::max);
         let floor = (loudest * 1e-4).max(1e-12);
         let (mut loss, mut leak, mut lost, mut cells) = (0., 0., 0, 0);
+        let (mut gap_power, mut gap_cells, mut voice_power) = (0., 0, 0.);
         for (s, t) in signal.iter().flatten().zip(target.iter().flatten()) {
             if *t < floor {
+                gap_power += s;
+                gap_cells += 1;
                 continue;
             }
+            voice_power += t;
             let dev = (10. * (s.max(1e-20) / t).log10()).clamp(-30., 30.);
             loss += (-dev).max(0.);
             leak += dev.max(0.);
@@ -339,10 +346,13 @@ impl Deviation {
             cells += 1;
         }
         let cells = cells.max(1) as f64;
+        let gap_mean = gap_power / gap_cells.max(1) as f64;
+        let voice_mean = voice_power / cells;
         Self {
             loss: loss / cells,
             leak: leak / cells,
             lost: lost as f64 / cells,
+            gaps: 10. * (gap_mean.max(1e-30) / voice_mean.max(1e-30)).log10(),
         }
     }
 }
@@ -351,10 +361,11 @@ impl ::std::fmt::Display for Deviation {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         write!(
             f,
-            "{:.1}\t{:.1}\t{:.0}",
+            "{:.1}\t{:.1}\t{:.0}\t{:.1}",
             self.loss,
             self.leak,
-            self.lost * 100.
+            self.lost * 100.,
+            self.gaps
         )
     }
 }
