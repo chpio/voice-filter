@@ -34,12 +34,13 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    # built in the git/images repo
+    # built in the git/images repo: ci-rust plus the dev files of PipeWire, GTK 4 and libadwaita
+    # and libclang for bindgen, which the build needs
     # The image runs rustc through sccache. Its storage (SCCACHE_REDIS_ENDPOINT and
     # SCCACHE_REDIS_PASSWORD) comes from the runner for every job; don't set it here, an empty
     # value would override it. The image is meant to float: it's rebuilt with the current toolchain
     # and tools every week.
-    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust-pw:latest # zizmor: ignore[unpinned-images]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,8 +66,9 @@ jobs:
     needs: [check, test]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # built in the git/images repo, meant to float like in the test job
-    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    # built in the git/images repo, meant to float like in the test job; publishing builds the
+    # crates, so the image of the test job
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust-pw:latest # zizmor: ignore[unpinned-images]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,8 +88,9 @@ jobs:
   release-pr:
     needs: [release]
     runs-on: ubuntu-latest
-    # built in the git/images repo, meant to float like in the test job
-    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust:latest # zizmor: ignore[unpinned-images]
+    # built in the git/images repo, meant to float like in the test job; the semver check builds
+    # the crates, so the image of the test job
+    container: ${{ vars.DOCKER_REGISTRY }}/git/ci-rust-pw:latest # zizmor: ignore[unpinned-images]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
