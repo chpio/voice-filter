@@ -2,7 +2,7 @@ use ::std::sync::Arc;
 use ::std::sync::atomic::{AtomicU64, Ordering};
 
 use ::anyhow::{Result, ensure};
-use ::deep_filter_rt::tract::DfTract;
+use ::deep_filter_rt::tract::{DfParams, DfTract, RuntimeParams};
 use ::ndarray::Array2;
 
 use crate::atomic::AtomicF32;
@@ -104,7 +104,15 @@ pub const UNLIMITED: f32 = 100.;
 
 impl Denoise {
     pub fn new() -> Result<Self> {
-        let df = DfTract::default();
+        // Upstream's real-time defaults skip the decoders where the model estimates a high local
+        // SNR, to save CPU: no gains above 30 dB, no deep filter above 20 dB. That cost most of
+        // its quality: on the VoiceBank-DEMAND test set PESQ 2.07 instead of 2.70, STOI 0.861
+        // (below the noisy input's 0.921) instead of 0.925, for 0.05 ms less per frame. The zeros
+        // below −10 dB stay, upstream's default.
+        let params = RuntimeParams::default();
+        let zeros_below_db = params.min_db_thresh;
+        let params = params.with_thresholds(zeros_below_db, f32::INFINITY, f32::INFINITY);
+        let df = DfTract::new(DfParams::default(), &params)?;
         ensure!(
             df.sr == SAMPLE_RATE as usize && df.hop_size == FRAME_LEN && df.ch == 1,
             "the model expects {} Hz, {} samples per frame and {} channels",
