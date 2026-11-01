@@ -315,3 +315,24 @@ fn sets_and_keeps_the_volume_of_listen() {
         Some(-20.)
     );
 }
+
+#[test]
+fn reports_the_counters_quantum_and_frame_time() {
+    let service = service();
+    let stats = &service.stats;
+    stats.frames.store(1000, Ordering::Relaxed);
+    stats.underruns.store(480, Ordering::Relaxed);
+    stats.dropped.store(256, Ordering::Relaxed);
+    stats.errors.store(2, Ordering::Relaxed);
+    stats.quantum.store(1024, Ordering::Relaxed);
+    stats.last_max_frame_ns.store(1_250_000, Ordering::Relaxed);
+    // the names the app reads
+    let counters = service.counters();
+    assert_eq!(counters.len(), 4);
+    assert_eq!(counters["frames"], 1000);
+    assert_eq!(counters["silence"], 480);
+    assert_eq!(counters["dropped"], 256);
+    assert_eq!(counters["errors"], 2);
+    assert_eq!(service.quantum(), 1024);
+    assert_eq!(service.max_frame_time(), 1.25);
+}

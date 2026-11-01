@@ -1,6 +1,7 @@
 use ::anyhow::Result;
 use ::hound::{SampleFormat, WavSpec, WavWriter};
 use ::voice_filter::chain::Chain;
+use ::voice_filter::echo::Echo;
 use ::voice_filter::offline;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
@@ -94,4 +95,78 @@ fn rejects_other_sample_rates() {
     WavWriter::create(&path, spec).unwrap().finalize().unwrap();
     let err = offline::read_wav(&path).unwrap_err().to_string();
     assert!(err.contains("44100 Hz"), "{err}");
+}
+
+/// White noise at about -25 dBFS RMS, the same for every seed.
+fn noise(len: usize, mut seed: u32) -> Vec<f32> {
+    (0..len)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32 * 2. - 1.) * 0.1
+        })
+        .collect()
+}
+
+fn energy(samples: &[f32]) -> f64 {
+    samples.iter().map(|&x| (x as f64).powi(2)).sum()
+}
+
+#[test]
+fn removes_the_echo_of_the_reference_file() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let (input, played, output) = (
+        dir.path().join("in.wav"),
+        dir.path().join("played.wav"),
+        dir.path().join("out.wav"),
+    );
+    // 5 s of what the speakers played, the microphone picks it up 4 ms later at a third
+    let len = 5 * SAMPLE_RATE as usize;
+    let reference = noise(len, 0x2545_f491);
+    let echo: Vec<f32> = (0..len)
+        .map(|i| i.checked_sub(192).map_or(0., |n| 0.3 * reference[n]))
+        .collect();
+    offline::write_wav(&played, &reference).unwrap();
+    offline::write_wav(&input, &echo).unwrap();
+
+    let (stage, mut feed) = Echo::new();
+    let mut chain = Chain::new(vec![Box::new(stage)]);
+    let report =
+        offline::process_file(&mut chain, &input, &output, Some((&mut feed, &played))).unwrap();
+    let processed = offline::read_wav(&output).unwrap();
+    assert_eq!(processed.len(), len);
+    // the last second, after AEC3 converged
+    let last = len - SAMPLE_RATE as usize..;
+    let removed_db = 10. * (energy(&echo[last.clone()]) / energy(&processed[last])).log10();
+    assert!(removed_db > 25., "{removed_db:.1} dB removed");
+
+    // the report has a row per stage and the total; one frame more for the latency of the echo
+    // canceller, padded with silence
+    let printed = report.to_string();
+    assert!(
+        printed.starts_with("5.0 s, 501 frames of 10 ms\n"),
+        "{printed}"
+    );
+    for row in ["echo ", "total "] {
+        assert!(
+            printed.lines().any(|line| line.starts_with(row)),
+            "{row:?} in {printed}"
+        );
+    }
+    assert!(
+        printed.ends_with("of the 10 ms a frame may take live"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn leaves_the_input_alone_without_a_reference() {
+    let input = noise(50 * FRAME_LEN, 7);
+    let (stage, _feed) = Echo::new();
+    let mut chain = Chain::new(vec![Box::new(stage)]);
+    let (output, _) = offline::process(&mut chain, &input, None).unwrap();
+    // AEC3 without a reference keeps the signal, up to rounding
+    let changed_db = 10. * (energy(&output) / energy(&input)).log10();
+    assert!(changed_db.abs() < 0.5, "{changed_db:.2} dB");
 }

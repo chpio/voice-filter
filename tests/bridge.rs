@@ -107,3 +107,20 @@ fn measures_the_levels_before_and_after_the_chain() {
         assert!((level.load() - -20.).abs() < 0.01, "{}", level.load());
     }
 }
+
+#[test]
+fn reports_the_latency_in_its_parts() {
+    let (_, _, stats) = bridge(Chain::new(Vec::new()));
+    stats.capture_delay.store(384, Ordering::Relaxed);
+    stats.bridge_delay.store(448, Ordering::Relaxed);
+    stats.playback_delay.store(256, Ordering::Relaxed);
+    assert_eq!(
+        stats.latency(1488),
+        [
+            ("microphone", 384),
+            ("bridge", 448),
+            ("chain", 1488),
+            ("app", 256)
+        ]
+    );
+}
