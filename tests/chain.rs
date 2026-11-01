@@ -167,3 +167,46 @@ fn switching_on_during_the_resume_frames_starts_them_again() {
     run(&mut chain);
     assert!(run(&mut chain).iter().all(|&sample| sample == 2.));
 }
+
+#[test]
+fn the_stages_trace_what_they_applied() -> Result<()> {
+    let (mut chain, _reference) = ::voice_filter::chain::build(None)?;
+    // a loud tone, so the limiter acts
+    for i in 0..20 {
+        let mut frame: Frame = ::std::array::from_fn(|n| {
+            let t = (i * FRAME_LEN + n) as f32 / ::voice_filter::SAMPLE_RATE as f32;
+            0.9 * (::std::f32::consts::TAU * 1000. * t).sin()
+        });
+        for stage in chain.stages_mut() {
+            stage.process(&mut frame)?;
+        }
+    }
+    let traces: Vec<_> = chain
+        .stages()
+        .map(|stage| (stage.name(), stage.trace().map(|(name, _)| name)))
+        .collect();
+    assert_eq!(
+        traces,
+        [
+            ("echo", None),
+            ("denoise", Some("snr")),
+            ("highpass", None),
+            ("eq", None),
+            ("deesser", Some("reduction")),
+            ("agc", Some("gain")),
+            ("compressor", Some("reduction")),
+            ("expander", Some("gain")),
+            ("limiter", Some("gain")),
+        ]
+    );
+    for stage in chain.stages() {
+        if let Some((name, value)) = stage.trace() {
+            assert!(value.is_finite(), "{}.{name} is {value}", stage.name());
+            if name != "snr" && stage.name() != "agc" {
+                // the reductions and gains that only turn down
+                assert!(value <= 0., "{}.{name} is {value}", stage.name());
+            }
+        }
+    }
+    Ok(())
+}

@@ -26,4 +26,10 @@ pub trait Stage: Send {
     fn params(&self) -> Vec<Param> {
         Vec::new()
     }
+    /// What the stage applied or measured in its last frame, as a name and a value (the gain of
+    /// the AGC, the estimate of the noise suppression), for traces of a recording
+    /// (`examples/trace.rs`); `None` if there's nothing to it beyond its output.
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        None
+    }
 }

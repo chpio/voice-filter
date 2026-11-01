@@ -115,6 +115,10 @@ impl Stage for Compressor {
         vec![self.threshold.clone(), self.ratio.clone()]
     }
 
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        Some(("reduction", self.reduction_db))
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let detector = smoothing(DETECTOR_TAU);
         let attack = smoothing(ATTACK_TAU);

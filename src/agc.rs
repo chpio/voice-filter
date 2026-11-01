@@ -158,6 +158,10 @@ impl Stage for Agc {
         ]
     }
 
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        Some(("gain", self.gain_db))
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let frame_db = level::frame_db(frame);
         let floor_db = self.floor.push(frame_db);

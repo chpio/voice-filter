@@ -153,6 +153,12 @@ impl Stage for Denoise {
         vec![self.atten_lim.clone()]
     }
 
+    /// The local SNR the model estimated for the newest frame it analyzed, whose output comes
+    /// its latency later; it stays as it was while the model doesn't run (at a limit of 0 dB).
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        Some(("snr", self.speech.snr_db()))
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let atten_lim = self.atten_lim.get();
         if atten_lim != self.applied_atten_lim {

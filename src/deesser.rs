@@ -126,6 +126,10 @@ impl Stage for DeEsser {
         vec![self.threshold.clone(), self.freq.clone()]
     }
 
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        Some(("reduction", self.reduction_db))
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let freq = self.freq.get();
         if freq != self.applied_freq {

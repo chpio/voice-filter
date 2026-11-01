@@ -114,6 +114,10 @@ impl Stage for Expander {
         ]
     }
 
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        Some(("gain", self.gain_db))
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let range = self.range.get();
         if self.speaks(frame) {

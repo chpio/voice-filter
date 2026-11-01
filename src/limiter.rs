@@ -58,6 +58,11 @@ impl Stage for Limiter {
         vec![self.ceiling.clone(), self.release.clone()]
     }
 
+    /// Its gain at the end of the frame, in dB.
+    fn trace(&self) -> Option<(&'static str, f32)> {
+        Some(("gain", 20. * self.gain.log10()))
+    }
+
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
         let ceiling = db_to_gain(self.ceiling.get());
         let attack = smoothing(ATTACK_TAU);

@@ -232,6 +232,9 @@ cargo test --release -p deep-filter-rt
 cargo clippy --workspace --all-targets
 # processing time and allocations of every stage per frame
 cargo bench --bench stages [-- in.wav]
+# level after every stage and the gains over time, as TSV, e.g. to try settings
+cargo run --release --example trace -- in.wav \
+  [--set expander.threshold=6] [--off echo] > trace.tsv
 ```
 
 The design, the choice of models, the latency measurements and the roadmap are in
