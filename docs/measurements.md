@@ -160,10 +160,20 @@ recording (61,248 frames, an AMD Ryzen 7 8840U), mean per frame, two runs each:
 | compressor |    4.78, 4.78 µs |     3.15, 3.18 µs |
 | total      |  202.7, 199.2 µs |   192.8, 195.1 µs |
 
-The other stages and the maxima per frame (1.2–1.9 ms, from `denoise`) stayed the same; fat LTO
-with one codegen unit changed nothing beyond the noise either (202 and 196 µs). Intel CPUs take
-longer over a denormal than this Zen 4, so it may save more there. Hence `dsp::without_denormals`
-(flush to zero and denormals are zero, the `no_denormals` crate) around every frame of the chain.
+The other stages and the maxima per frame (1.2–1.9 ms, from `denoise`) stayed the same. Intel
+CPUs take longer over a denormal than this Zen 4, so it may save more there. Hence
+`dsp::without_denormals` (flush to zero and denormals are zero, the `no_denormals` crate) around
+every frame of the chain.
+
+## Release profile
+
+On the same recording and machine. Fat LTO with one codegen unit: `cargo bench --bench stages`
+202 and 196 µs per frame (without: 203 and 199 µs), the binary 39 instead of 52 MB, but 7 minutes
+for a build from scratch and a full relink after every change, so it's not used. `panic = "abort"`
+(benches ignore it, hence the CPU time of `voice-filter process` over the whole recording, five
+runs each, alternating): 12.37 s against 12.40 s with unwinding, the output bit for bit the same,
+the binary 46.6 instead of 52.2 MB; it's in the profile for how a panic ends the daemon, not for
+speed.
 
 ## Open
 

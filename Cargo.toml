@@ -72,6 +72,11 @@ zbus = { version = "6", default-features = false, features = ["p2p"] }
 name = "stages"
 harness = false
 
+# a panic in any thread stops the whole process: a daemon without its D-Bus thread would go on
+# filtering with no way to control it (tests and benches ignore this and unwind)
+[profile.release]
+panic = "abort"
+
 # sonora 0.2.0 allocates about 40 times per 10 ms frame in the echo canceller; PR #40
 # (https://github.com/dignifiedquire/sonora/pull/40) makes it allocation-free with byte-identical
 # output. Until a release has it, this workspace builds sonora from that commit; a published
