@@ -33,6 +33,16 @@ Work items that don't change the design; the open design questions and TODOs are
   buffers and rolling spectra (none at a limit of 0 dB, where the model doesn't run). Against the
   rule of no allocations in the audio path; it needs a way to run tract's model on preallocated
   tensors (it already runs on states kept between frames, `TypedSimpleState`).
+- [ ] Report to tract: its depthwise convolution (`tract-linalg` 0.23.9, `x86_64/depthwise.rs`)
+  has an AVX kernel only for contiguous input (`in_stride == 1`), everything else runs a scalar
+  loop compiled for the baseline, and DeepFilterNet3's convolutions mostly take that one. Built
+  with `-C target-feature=+avx2,+fma`, `denoise` took about 15 µs less per frame (147–150 instead
+  of 159–167 µs, `cargo bench --bench stages` on a call recording); `perf` put the difference in
+  `depthwise_w_f32` (4285 + 382 samples for its AVX part, 2379) and `DepthwiseDeconv::eval_t_2d`
+  (545, 195). Still one float per instruction in both builds, the sum over the taps can't be
+  vectorized as written. The fix belongs in tract (the strided case vectorized, or compiled with
+  `#[target_feature]` like the contiguous one): `multiversion` on our functions doesn't reach it,
+  and a `target-cpu` doesn't apply to `cargo install`.
 
 ## Releases
 
