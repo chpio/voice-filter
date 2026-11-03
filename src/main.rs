@@ -5,7 +5,13 @@ use ::anyhow::Result;
 use ::clap::{Parser, Subcommand};
 use ::voice_filter::denoise;
 use ::voice_filter::param::Param;
+use ::voice_filter::rt_alloc::RtAlloc;
 use ::voice_filter::{chain, live, offline, settings};
+
+/// What the chain allocates in the live mode comes from a pool reserved up front, see
+/// [`voice_filter::rt_alloc`].
+#[global_allocator]
+static ALLOCATOR: RtAlloc = RtAlloc::new();
 
 /// Live voice filter for PipeWire.
 #[derive(Parser)]
@@ -154,6 +160,8 @@ fn main() -> Result<ExitCode> {
                     settings::save_chain(dir, &switches, &params)?;
                 }
             }
+            // maps the pool before the first frame
+            ALLOCATOR.init();
             let devices = live::Devices {
                 input: input.as_deref(),
                 output: output.as_deref(),

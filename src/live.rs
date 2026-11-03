@@ -26,6 +26,7 @@ use crate::dbus::{self, Control, Service};
 use crate::echo::Reference;
 use crate::frame_time::{WINDOW_SECONDS, Window};
 use crate::param::Param;
+use crate::rt_alloc;
 use crate::settings;
 use crate::volume::{self, Volume};
 use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
@@ -871,15 +872,16 @@ const REPORT_INTERVAL: Duration = Duration::from_secs(WINDOW_SECONDS as u64);
 /// Hands the processing time of the frames over the last [`REPORT_INTERVAL`] to the control
 /// interface every second ([`Window::push`]) and, every [`REPORT_INTERVAL`], prints the counters,
 /// the latency and the processing time while frames are processed:
-/// `verbose` every time, otherwise only when the chain failed on frames, or when the playback side
-/// filled in silence or dropped samples in the middle of a recording. At its start and end that's
+/// `verbose` every time, otherwise only when the chain failed on frames or allocated outside the
+/// pool of [`rt_alloc`], or when the playback side filled in silence or dropped samples in the
+/// middle of a recording. At its start and end that's
 /// how the bridge settles, so an interval counts only if frames ran through all of it and the one
 /// before.
 fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
     // a few frames less than the interval holds, the cycles don't line up with it exactly
     let whole = REPORT_INTERVAL.as_secs() * (SAMPLE_RATE as u64 / FRAME_LEN as u64) * 99 / 100;
     ::std::thread::spawn(move || {
-        let mut last = [0; 4];
+        let mut last = [0; 5];
         let mut was_running = false;
         let mut windows: [Window; FRAME_TIME_PARTS.len()] = Default::default();
         for second in (1..=WINDOW_SECONDS).cycle() {
@@ -894,11 +896,12 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
                 stats.underruns.load(Ordering::Relaxed),
                 stats.dropped.load(Ordering::Relaxed),
                 stats.errors.load(Ordering::Relaxed),
+                rt_alloc::stats().map_or(0, |pool| pool.outside),
             ];
             let max_ms = times[0].max_ns as f64 / 1e6;
             let frames = now[0] - last[0];
             let steady = was_running && frames >= whole;
-            let failed = now[3] != last[3];
+            let failed = now[3] != last[3] || now[4] != last[4];
             let glitched = now[1] != last[1] || now[2] != last[2];
             if frames > 0 && (verbose || failed || steady && glitched) {
                 let parts = stats.latency(chain_latency);
@@ -934,6 +937,15 @@ fn report_periodically(stats: Arc<Stats>, chain_latency: usize, verbose: bool) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 eprintln!("time per frame in ms, mean/95 %/99 %/max: {times}");
+                if let Some(pool) = rt_alloc::stats() {
+                    eprintln!(
+                        "pool: {} of {} KiB used, at most {}, {} allocations outside it",
+                        pool.used / 1024,
+                        pool.size / 1024,
+                        pool.peak / 1024,
+                        now[4] - last[4],
+                    );
+                }
             }
             was_running = frames > 0;
             last = now;

@@ -2,9 +2,10 @@
 //! (48 kHz) or else on a speech-like signal: `cargo bench --bench stages [-- in.wav]`. Finer than
 //! `voice-filter process`, which rounds to 10 µs; the mean is the best of a few runs, the maximum
 //! only means something on an idle machine. Without a reference, so the echo canceller has no
-//! echo to remove.
+//! echo to remove. The stages run in the audio path of the allocator of the binary, as live (what
+//! they allocate comes from its pool, see `voice_filter::rt_alloc`).
 
-use ::std::alloc::{GlobalAlloc, Layout, System};
+use ::std::alloc::{GlobalAlloc, Layout};
 use ::std::cell::Cell;
 use ::std::f32::consts::{PI, TAU};
 use ::std::path::Path;
@@ -12,27 +13,30 @@ use ::std::time::{Duration, Instant};
 
 use ::anyhow::Result;
 use ::voice_filter::dsp::without_denormals;
+use ::voice_filter::rt_alloc::{RtAlloc, audio_path};
 use ::voice_filter::stage::Frame;
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE, chain, offline, samples_ms};
 
-/// Counts the allocations of the current thread.
+/// Counts the allocations of the current thread, made by the allocator of the binary.
 struct Counting;
+
+static POOL: RtAlloc = RtAlloc::new();
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
-// SAFETY: forwards to the system allocator, only counting
+// SAFETY: forwards to the allocator of the binary, only counting
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        // SAFETY: the caller's guarantees hold for the system allocator too
-        unsafe { System.alloc(layout) }
+        // SAFETY: the caller's guarantees hold for it too
+        unsafe { POOL.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: as above
-        unsafe { System.dealloc(ptr, layout) }
+        unsafe { POOL.dealloc(ptr, layout) }
     }
 }
 
@@ -44,6 +48,7 @@ const RUNS: usize = 5;
 const SECONDS: usize = 20;
 
 fn main() -> Result<()> {
+    POOL.init();
     // cargo passes `--bench`
     let path = ::std::env::args().skip(1).find(|arg| arg != "--bench");
     let input = match &path {
@@ -67,19 +72,21 @@ fn main() -> Result<()> {
         for samples in input.as_chunks::<FRAME_LEN>().0 {
             let mut frame: Frame = *samples;
             let mut total = Duration::ZERO;
-            // with denormals flushed, as in the chain
-            without_denormals(|| {
-                for (i, stage) in chain.stages_mut().enumerate() {
-                    let before = ALLOCATIONS.get();
-                    let started = Instant::now();
-                    stage.process(&mut frame)?;
-                    let elapsed = started.elapsed();
-                    allocations[i] += ALLOCATIONS.get() - before;
-                    sums[i] += elapsed;
-                    maxima[i] = maxima[i].max(elapsed);
-                    total += elapsed;
-                }
-                Ok::<_, ::anyhow::Error>(())
+            // with denormals flushed and from the pool, as in the chain
+            audio_path(|| {
+                without_denormals(|| {
+                    for (i, stage) in chain.stages_mut().enumerate() {
+                        let before = ALLOCATIONS.get();
+                        let started = Instant::now();
+                        stage.process(&mut frame)?;
+                        let elapsed = started.elapsed();
+                        allocations[i] += ALLOCATIONS.get() - before;
+                        sums[i] += elapsed;
+                        maxima[i] = maxima[i].max(elapsed);
+                        total += elapsed;
+                    }
+                    Ok::<_, ::anyhow::Error>(())
+                })
             })?;
             max = max.max(total);
         }
@@ -108,6 +115,13 @@ fn main() -> Result<()> {
     }
     let total = means.iter().sum::<Duration>();
     row("total", total, max, allocations.iter().sum());
+    let pool = POOL.stats();
+    println!(
+        "pool: at most {} of {} KiB, {} allocations outside it",
+        pool.peak / 1024,
+        pool.size / 1024,
+        pool.outside
+    );
     println!(
         "{:.1} % of the {:.0} ms a frame may take live",
         us(total) / 1e3 / samples_ms(FRAME_LEN as f64) * 100.,

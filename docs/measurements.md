@@ -175,6 +175,35 @@ runs each, alternating): 12.37 s against 12.40 s with unwinding, the output bit 
 the binary 46.6 instead of 52.2 MB; it's in the profile for how a panic ends the daemon, not for
 speed.
 
+## Allocations of the noise suppression
+
+`cargo bench --bench stages` counted about 820 allocations per frame in `denoise`, all in tract
+running the model (`DfTract`'s own code keeps its buffers). Counted per node with a hook in
+tract's `run_plan_with_eval` (the three parts on every frame, random inputs, so 1,290 per frame;
+in the chain the decoders are skipped on some frames):
+
+| Where                                          | per frame |
+| ---------------------------------------------- | --------: |
+| `OptMatMulPack`, packing the matrix operands   |       658 |
+| `SimpleState::run` itself (symbols, values)    |       265 |
+| `OptMatMul`, its outputs                       |       134 |
+| `Scan` (the GRUs)                              |        95 |
+| `DepthWiseConv`                                |        43 |
+| the rest (reshapes, pads, delays, activations) |        95 |
+
+tract 0.23.9 has no arena, pool or outputs written in place, so it can't run on preallocated
+tensors. With glibc the allocations didn't fault in new pages (7,616 page faults over 200 frames,
+7,175 over 5,200: it reuses what was freed, no `mmap`/`brk` per frame); `malloc` and `free`
+took 1.5 % of the samples of `perf`, with glibc's internals up to about 4 %. What's against them
+in the audio path is glibc's locks and the unbounded time, not the CPU.
+
+Since then the audio path allocates from the pool of `rt_alloc` (TLSF): the whole chain takes at
+most 289–297 KB of it, 147 KB of it for good (tract's scratch space and the states of its ops),
+and none of it goes to the system allocator (`tests/rt_alloc.rs`). `cargo bench --bench stages`
+on the speech-like signal, three runs each, alternating (the `x86-64-v4` build, on a busy
+machine, so only the comparison counts): `denoise` 221, 229 and 225 µs per frame from the pool,
+227, 222 and 229 µs from glibc.
+
 ## Open
 
 - The zero mask: measure again with the high-pass first and the input gain, and listen.

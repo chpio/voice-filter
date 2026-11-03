@@ -1,7 +1,8 @@
 //! Between the two PipeWire streams of the live filter. The capture callback gets as many samples
 //! as the quantum of the graph, the chain needs frames of [`FRAME_LEN`], and the playback callback
 //! wants its own number of samples. Lock-free and without allocations after [`bridge`], both
-//! sides run in the audio path.
+//! sides run in the audio path; the chain runs in [`rt_alloc::audio_path`], so what its stages
+//! allocate comes from the pool of the binary's allocator.
 //!
 //! There's no prefill: when the playback side runs short at the start, it plays silence and the
 //! samples that arrive later stay buffered, so the buffer settles at the latency the order and
@@ -17,6 +18,7 @@ use crate::atomic::AtomicF32;
 use crate::chain::Chain;
 use crate::frame_time::{FrameTime, Summary};
 use crate::level::{self, Meter, NoiseFloor};
+use crate::rt_alloc;
 use crate::stage::Frame;
 use crate::{FRAME_LEN, SAMPLE_RATE};
 
@@ -163,7 +165,8 @@ impl Capture {
         // Instant::now goes through the vDSO, no syscall
         let started = Instant::now();
         let input_db = level::frame_db(&self.frame);
-        if self.chain.process(&mut self.frame).is_err() {
+        // what the chain allocates (tract, for the noise suppression) comes from the pool
+        if rt_alloc::audio_path(|| self.chain.process(&mut self.frame)).is_err() {
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
             self.frame.fill(0.);
         }

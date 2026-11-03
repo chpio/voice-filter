@@ -49,3 +49,24 @@ impl Noise {
         (0..len).map(|_| 0.1 * self.sample()).collect()
     }
 }
+
+/// Something like a voice, sample `n`: harmonics of 150 Hz shaped by two formants (700 and
+/// 1200 Hz), in syllables of 200 ms with 50 ms between them; at a third of its level the model
+/// didn't take it for speech.
+pub fn vowel(n: usize) -> f32 {
+    let t = n as f32 / ::voice_filter::SAMPLE_RATE as f32;
+    let in_syllable = (t % 0.25) / 0.2;
+    if in_syllable >= 1. {
+        return 0.;
+    }
+    let envelope = (::std::f32::consts::PI * in_syllable).sin();
+    let formant = |f: f32, center: f32| (-((f - center) / 200.).powi(2)).exp();
+    let harmonics: f32 = (1..=20)
+        .map(|k| {
+            let f = 150. * k as f32;
+            (formant(f, 700.) + 0.6 * formant(f, 1200.) + 0.05)
+                * (::std::f32::consts::TAU * f * t).sin()
+        })
+        .sum();
+    0.06 * envelope * harmonics
+}

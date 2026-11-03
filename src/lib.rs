@@ -25,6 +25,7 @@ pub mod limiter;
 pub mod live;
 pub mod offline;
 pub mod param;
+pub mod rt_alloc;
 pub mod settings;
 pub mod stage;
 pub mod volume;

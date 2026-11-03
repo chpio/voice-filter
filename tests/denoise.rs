@@ -4,7 +4,7 @@ use ::voice_filter::FRAME_LEN;
 use ::voice_filter::denoise::{Denoise, MAX_INPUT_GAIN_DB};
 use ::voice_filter::echo::{Echo, Reference};
 use ::voice_filter::stage::{Frame, Stage};
-use common::Noise;
+use common::{Noise, vowel};
 
 /// How much `denoise` turns 1 s of the noise down, in dB, compared over the last half.
 fn ratio_db(denoise: &mut Denoise, noise: &mut Noise) -> f32 {
@@ -80,27 +80,6 @@ fn plays_nothing_from_before_a_pause() {
         let peak = frame.iter().fold(0f32, |peak, x| peak.max(x.abs()));
         assert!(peak < 1e-4, "frame {i}: peak {peak}");
     }
-}
-
-/// Something like a voice, sample `n`: harmonics of 150 Hz shaped by two formants (700 and
-/// 1200 Hz), in syllables of 200 ms with 50 ms between them; at a third of its level the model
-/// didn't take it for speech.
-fn vowel(n: usize) -> f32 {
-    let t = n as f32 / ::voice_filter::SAMPLE_RATE as f32;
-    let in_syllable = (t % 0.25) / 0.2;
-    if in_syllable >= 1. {
-        return 0.;
-    }
-    let envelope = (::std::f32::consts::PI * in_syllable).sin();
-    let formant = |f: f32, center: f32| (-((f - center) / 200.).powi(2)).exp();
-    let harmonics: f32 = (1..=20)
-        .map(|k| {
-            let f = 150. * k as f32;
-            (formant(f, 700.) + 0.6 * formant(f, 1200.) + 0.05)
-                * (::std::f32::consts::TAU * f * t).sin()
-        })
-        .sum();
-    0.06 * envelope * harmonics
 }
 
 /// What `denoise` makes of `frames` frames of a microphone picking up a voice ([`vowel`], with

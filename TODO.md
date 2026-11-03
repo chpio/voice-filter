@@ -28,11 +28,6 @@ Work items that don't change the design; the open design questions and TODOs are
 
 ## Audio path
 
-- [ ] `deep-filter-rt` allocates per frame, about 820 times (`cargo bench --bench stages`, on the
-  speech-like signal): almost all in tract running the model, `DfTract`'s own code keeps its STFT
-  buffers and rolling spectra (none at a limit of 0 dB, where the model doesn't run). Against the
-  rule of no allocations in the audio path; it needs a way to run tract's model on preallocated
-  tensors (it already runs on states kept between frames, `TypedSimpleState`).
 - [ ] Report to tract: its depthwise convolution (`tract-linalg` 0.23.9, `x86_64/depthwise.rs`)
   has an AVX kernel only for contiguous input (`in_stride == 1`), everything else runs a scalar
   loop compiled for the baseline, and DeepFilterNet3's convolutions mostly take that one. Built
