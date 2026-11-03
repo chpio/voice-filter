@@ -17,6 +17,7 @@ use ::std::time::{Duration, Instant};
 use ::anyhow::{Context, Result, ensure};
 use ::clap::Parser;
 use ::voice_filter::denoise::Denoise;
+use ::voice_filter::dsp::without_denormals;
 use ::voice_filter::param::Param;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, chain, offline};
@@ -133,11 +134,14 @@ fn main() -> Result<()> {
             }
             let mut frame = at(&input);
             let started = Instant::now();
-            for (stage, on) in chain.stages_mut().zip(&on) {
-                if *on {
-                    stage.process(&mut frame)?;
+            without_denormals(|| {
+                for (stage, on) in chain.stages_mut().zip(&on) {
+                    if *on {
+                        stage.process(&mut frame)?;
+                    }
                 }
-            }
+                Ok::<_, ::anyhow::Error>(())
+            })?;
             let elapsed = started.elapsed();
             total += elapsed;
             max = max.max(elapsed);

@@ -9,7 +9,7 @@ use crate::agc::Agc;
 use crate::compressor::Compressor;
 use crate::deesser::DeEsser;
 use crate::denoise::Denoise;
-use crate::dsp::ramp;
+use crate::dsp::{ramp, without_denormals};
 use crate::echo::{Echo, Reference};
 use crate::equalizer::Equalizer;
 use crate::expander::Expander;
@@ -157,26 +157,29 @@ impl Chain {
         self.slots.iter().map(|slot| slot.stage.latency()).sum()
     }
 
+    /// Runs the frame through the stages, with denormals flushed ([`without_denormals`]).
     pub fn process(&mut self, frame: &mut Frame) -> Result<()> {
-        // the end of the timed stage before, the start of this one
-        let mut clock = None;
-        for slot in &mut self.slots {
-            match slot.timer {
-                Some(timer) => {
-                    // Instant::now goes through the vDSO, no syscall
-                    let started = clock.unwrap_or_else(Instant::now);
-                    slot.process(frame)?;
-                    let now = Instant::now();
-                    self.times[timer] = (now - started).as_nanos() as u64;
-                    clock = Some(now);
-                }
-                None => {
-                    clock = None;
-                    slot.process(frame)?;
+        without_denormals(|| {
+            // the end of the timed stage before, the start of this one
+            let mut clock = None;
+            for slot in &mut self.slots {
+                match slot.timer {
+                    Some(timer) => {
+                        // Instant::now goes through the vDSO, no syscall
+                        let started = clock.unwrap_or_else(Instant::now);
+                        slot.process(frame)?;
+                        let now = Instant::now();
+                        self.times[timer] = (now - started).as_nanos() as u64;
+                        clock = Some(now);
+                    }
+                    None => {
+                        clock = None;
+                        slot.process(frame)?;
+                    }
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 

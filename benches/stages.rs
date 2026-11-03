@@ -11,6 +11,7 @@ use ::std::path::Path;
 use ::std::time::{Duration, Instant};
 
 use ::anyhow::Result;
+use ::voice_filter::dsp::without_denormals;
 use ::voice_filter::stage::Frame;
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE, chain, offline, samples_ms};
 
@@ -66,16 +67,20 @@ fn main() -> Result<()> {
         for samples in input.as_chunks::<FRAME_LEN>().0 {
             let mut frame: Frame = *samples;
             let mut total = Duration::ZERO;
-            for (i, stage) in chain.stages_mut().enumerate() {
-                let before = ALLOCATIONS.get();
-                let started = Instant::now();
-                stage.process(&mut frame)?;
-                let elapsed = started.elapsed();
-                allocations[i] += ALLOCATIONS.get() - before;
-                sums[i] += elapsed;
-                maxima[i] = maxima[i].max(elapsed);
-                total += elapsed;
-            }
+            // with denormals flushed, as in the chain
+            without_denormals(|| {
+                for (i, stage) in chain.stages_mut().enumerate() {
+                    let before = ALLOCATIONS.get();
+                    let started = Instant::now();
+                    stage.process(&mut frame)?;
+                    let elapsed = started.elapsed();
+                    allocations[i] += ALLOCATIONS.get() - before;
+                    sums[i] += elapsed;
+                    maxima[i] = maxima[i].max(elapsed);
+                    total += elapsed;
+                }
+                Ok::<_, ::anyhow::Error>(())
+            })?;
             max = max.max(total);
         }
         for (mean, sum) in means.iter_mut().zip(sums) {

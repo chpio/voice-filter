@@ -51,6 +51,11 @@ serde = { version = "1", optional = true }
 sonora = "0.2"
 zbus = { version = "6", default-features = false, features = ["default-rt", "service"] }
 
+# flushes denormals to zero around the audio processing (`dsp::without_denormals`), only for the
+# architectures the crate supports
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+no_denormals = "0.3"
+
 # serde is only named by the code the derive macros of zbus expand to
 [package.metadata.cargo-machete]
 ignored = ["serde"]

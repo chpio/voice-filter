@@ -11,6 +11,7 @@ use ::anyhow::{Context as _, Result, ensure};
 use ::hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 
 use crate::chain::Chain;
+use crate::dsp::without_denormals;
 use crate::echo::Reference;
 use crate::stage::Frame;
 use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
@@ -184,14 +185,18 @@ pub fn process(
             reference.push(&played);
         }
         let mut total = Duration::ZERO;
-        for (stage, (sum, stage_max)) in chain.stages_mut().zip(&mut times) {
-            let started = Instant::now();
-            stage.process(&mut frame)?;
-            let elapsed = started.elapsed();
-            *sum += elapsed;
-            *stage_max = (*stage_max).max(elapsed);
-            total += elapsed;
-        }
+        // stage by stage, to time each of them, with denormals flushed as in the chain
+        without_denormals(|| {
+            for (stage, (sum, stage_max)) in chain.stages_mut().zip(&mut times) {
+                let started = Instant::now();
+                stage.process(&mut frame)?;
+                let elapsed = started.elapsed();
+                *sum += elapsed;
+                *stage_max = (*stage_max).max(elapsed);
+                total += elapsed;
+            }
+            Ok::<_, ::anyhow::Error>(())
+        })?;
         max = max.max(total);
         output.extend_from_slice(&frame);
     }

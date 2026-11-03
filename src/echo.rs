@@ -7,6 +7,7 @@ use ::sonora::config::{EchoCanceller, MaxProcessingRate, Pipeline};
 use ::sonora::{AudioProcessing, Config, StreamConfig};
 
 use crate::atomic::AtomicF32;
+use crate::dsp::without_denormals;
 use crate::level;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
@@ -263,8 +264,15 @@ impl Stage for Echo {
         Some(("playing", f32::from(u8::from(self.status.playing()))))
     }
 
+    /// With denormals flushed (in the chain they are anyway): the filters of AEC3 decay toward
+    /// zero while the reference is silent, which made it 10–50× slower (sonora issue #34).
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
-        let _flush = FlushDenormals::new();
+        without_denormals(|| self.run(frame))
+    }
+}
+
+impl Echo {
+    fn run(&mut self, frame: &mut Frame) -> Result<()> {
         // the reference first, all of it there is: AEC3 buffers it and finds its delay to the
         // microphone
         if self.reference.slots() < FRAME_LEN {
@@ -333,42 +341,3 @@ impl Stage for Echo {
 /// The delay of the stage in samples, 5 ms: AEC3 works in blocks of 4 ms and splits the 48 kHz
 /// signal into three bands. Measured with noise through it, see the tests.
 pub const LATENCY: usize = 238;
-
-/// Sets flush to zero and denormals are zero in the MXCSR for as long as it lives, and restores
-/// it after. As WebRTC does around its audio processing: the filters of AEC3 decay towards zero
-/// while the reference is silent, and denormal floats are up to 100 times slower on x86
-/// (sonora issue #34). Nothing on other architectures.
-struct FlushDenormals {
-    #[cfg(target_arch = "x86_64")]
-    saved: u32,
-}
-
-impl FlushDenormals {
-    #[cfg(target_arch = "x86_64")]
-    fn new() -> Self {
-        /// Flush to zero (bit 15) and denormals are zero (bit 6).
-        const FTZ_DAZ: u32 = 0x8040;
-        let mut saved = 0u32;
-        // SAFETY: stmxcsr stores the 32-bit MXCSR to the given address, a local u32
-        unsafe { ::std::arch::asm!("stmxcsr [{}]", in(reg) &mut saved, options(nostack)) };
-        let flushing = saved | FTZ_DAZ;
-        // SAFETY: ldmxcsr loads a valid MXCSR value, the saved one with two mode bits set
-        unsafe { ::std::arch::asm!("ldmxcsr [{}]", in(reg) &flushing, options(nostack)) };
-        Self { saved }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Drop for FlushDenormals {
-    fn drop(&mut self) {
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: restores the MXCSR value stored in `new`
-        unsafe {
-            ::std::arch::asm!("ldmxcsr [{}]", in(reg) &self.saved, options(nostack))
-        };
-    }
-}

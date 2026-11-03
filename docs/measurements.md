@@ -145,6 +145,26 @@ Without the zeros the fan noise of the built-in microphone came through, the exp
 criterion (−50 dBFS) kept it open; with them 17.8 % of its speech frames were muted, without 6.7 %.
 On the USB microphone the zeros hardly matter.
 
+## Denormals
+
+In a pause `denoise` puts out exact zeros. The EQ's memory decays through the denormals of f32
+after it (on the call with the USB microphone 517,671 denormal samples in 1,853 frames, about two
+frames per pause, passed on down the chain), and the one-pole detectors of the de-esser and the
+compressor stick at a denormal (`y * factor` rounds to nothing). `cargo bench --bench stages` on that
+recording (61,248 frames, an AMD Ryzen 7 8840U), mean per frame, two runs each:
+
+| Stage      | without flushing | denormals flushed |
+| ---------- | ---------------: | ----------------: |
+| eq         |    2.58, 2.62 µs |     1.30, 1.31 µs |
+| deesser    |  12.02, 11.95 µs |     7.95, 8.05 µs |
+| compressor |    4.78, 4.78 µs |     3.15, 3.18 µs |
+| total      |  202.7, 199.2 µs |   192.8, 195.1 µs |
+
+The other stages and the maxima per frame (1.2–1.9 ms, from `denoise`) stayed the same; fat LTO
+with one codegen unit changed nothing beyond the noise either (202 and 196 µs). Intel CPUs take
+longer over a denormal than this Zen 4, so it may save more there. Hence `dsp::without_denormals`
+(flush to zero and denormals are zero, the `no_denormals` crate) around every frame of the chain.
+
 ## Open
 
 - The zero mask: measure again with the high-pass first and the input gain, and listen.

@@ -18,6 +18,26 @@ pub fn power_db(power: f32) -> f32 {
     10. * (power + 1e-12).log10()
 }
 
+/// Runs `f` with denormals flushed to zero, the flags restored after: flush to zero and
+/// denormals are zero in the MXCSR on x86, flush to zero in the FPCR on aarch64 (both per
+/// thread); elsewhere `f` runs as it is. Around every frame, as WebRTC does around its audio
+/// processing: denormals (below 1.2e-38 in f32) are many times slower to compute, and in a pause
+/// `denoise` puts out exact zeros, through which a filter's memory decays and toward which a
+/// one-pole smoothing sticks at a denormal (`y * factor` rounds to nothing). On a recording of a
+/// call it saved about 7 µs per frame in eq, deesser and compressor (an AMD Zen 4), AEC3 gets
+/// 10–50× slower while the reference is silent (sonora issue #34).
+pub fn without_denormals<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+    // SAFETY: Rust assumes the default floating-point environment, so what the compiler computes
+    // ahead of time can differ from what runs here in the denormals only, below 1.2e-38: far below
+    // anything audible, and no code in the audio path depends on them. A guard restores the flags
+    // when `f` returns or panics.
+    let result = unsafe { ::no_denormals::no_denormals(f) };
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
+    let result = f();
+    result
+}
+
 /// The factor per sample of a one-pole smoothing (`y += (x - y) * factor`) with the time constant
 /// `tau` in seconds.
 pub fn smoothing(tau: f32) -> f32 {

@@ -18,7 +18,7 @@ use ::std::path::PathBuf;
 
 use ::anyhow::{Context, Result, ensure};
 use ::clap::Parser;
-use ::voice_filter::dsp::power_db;
+use ::voice_filter::dsp::{power_db, without_denormals};
 use ::voice_filter::param::Param;
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE, chain, offline};
@@ -112,15 +112,18 @@ fn main() -> Result<()> {
         }
         let mut frame: Frame = *samples;
         powers[0] += power(&frame);
-        for (j, stage) in chain.stages_mut().enumerate() {
-            if on[j] {
-                stage.process(&mut frame)?;
-                if let Some((_, value)) = stage.trace() {
-                    sums[j] += f64::from(value);
+        without_denormals(|| {
+            for (j, stage) in chain.stages_mut().enumerate() {
+                if on[j] {
+                    stage.process(&mut frame)?;
+                    if let Some((_, value)) = stage.trace() {
+                        sums[j] += f64::from(value);
+                    }
                 }
+                powers[j + 1] += power(&frame);
             }
-            powers[j + 1] += power(&frame);
-        }
+            Ok::<_, ::anyhow::Error>(())
+        })?;
         if args.wav.is_some() {
             output.extend_from_slice(&frame);
         }
