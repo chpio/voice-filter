@@ -375,14 +375,25 @@ fn show_levels(widgets: &Widgets, status: &Status) {
     show_value(&widgets.input_level.0, &subtitle);
 }
 
+/// The stages stay adjustable while the filter is off, dimmed.
+fn dim_stages(widgets: &Widgets, filter_on: bool) {
+    for group in &widgets.groups {
+        group.set_opacity(if filter_on { 1. } else { 0.5 });
+    }
+}
+
 /// Sends what the user changes to the filter.
 fn connect_controls(widgets: &Rc<Widgets>) {
     let weak = Rc::downgrade(widgets);
     widgets.enabled.connect_active_notify(move |switch| {
+        let on = switch.is_active();
+        // at once, not after the daemon reports it back; also for a state read from it
+        if let Some(widgets) = weak.upgrade() {
+            dim_stages(&widgets, on);
+        }
         let Some(proxy) = sendable(&weak) else {
             return;
         };
-        let on = switch.is_active();
         send(
             "switch the filter",
             async move { proxy.set_enabled(on).await },
@@ -904,10 +915,8 @@ fn show(widgets: &Widgets, status: &Status) {
     show_echo(widgets, status);
     show_levels(widgets, status);
     widgets.enabled.set_active(status.enabled);
-    // the stages stay adjustable while the filter is off, dimmed
-    for group in &widgets.groups {
-        group.set_opacity(if status.enabled { 1. } else { 0.5 });
-    }
+    // the switch dims them when it changes; this covers a first state that's already off
+    dim_stages(widgets, widgets.enabled.is_active());
     widgets.listen.set_enable_expansion(status.listen);
     widgets.keep_listen.set_active(status.keep_listen);
     let volume = &widgets.listen_volume.1;
