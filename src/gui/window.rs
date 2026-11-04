@@ -99,6 +99,8 @@ struct Widgets {
     echo_status: adw::ActionRow,
     /// The frame counters of the echo cancellation at the last poll, to see whether they move.
     echo_frames: Cell<(f64, f64)>,
+    /// The switch of the whole filter.
+    enabled: adw::SwitchRow,
     /// Its switch switches listening, it expands to its volume and whether it's kept.
     listen: adw::ExpanderRow,
     /// The slider of the volume of Listen, with its value, and the scale in it.
@@ -177,6 +179,10 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         output_names: RefCell::new(Vec::new()),
         echo_status: row("Status"),
         echo_frames: Cell::new((0., 0.)),
+        enabled: adw::SwitchRow::builder()
+            .title("Filter")
+            .subtitle("Off, apps get the microphone as it is")
+            .build(),
         listen: adw::ExpanderRow::builder()
             .title("Listen")
             .subtitle("Plays it on the default output, use headphones")
@@ -217,11 +223,16 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     volume_row.add_suffix(&help::button(help::LISTEN_VOLUME));
     widgets.listen.add_row(&volume_row);
     widgets.listen.add_row(&widgets.keep_listen);
+    widgets.enabled.add_suffix(&help::button(help::FILTER));
     let page = adw::PreferencesPage::new();
     page.add(&group(
         "Input",
         Some("The filter reads from this microphone, apps read from “Voice Filter”."),
-        &[widgets.input.upcast_ref(), widgets.listen.upcast_ref()],
+        &[
+            widgets.enabled.upcast_ref(),
+            widgets.input.upcast_ref(),
+            widgets.listen.upcast_ref(),
+        ],
     ));
     page.add(&group(
         "Levels",
@@ -387,6 +398,17 @@ fn show_levels(widgets: &Widgets, status: &Status) {
 
 /// Sends what the user changes to the filter.
 fn connect_controls(widgets: &Rc<Widgets>) {
+    let weak = Rc::downgrade(widgets);
+    widgets.enabled.connect_active_notify(move |row| {
+        let Some(proxy) = sendable(&weak) else {
+            return;
+        };
+        let on = row.is_active();
+        send(
+            "switch the filter",
+            async move { proxy.set_enabled(on).await },
+        );
+    });
     let weak = Rc::downgrade(widgets);
     widgets.listen.connect_enable_expansion_notify(move |row| {
         let Some(proxy) = sendable(&weak) else {
@@ -895,6 +917,11 @@ fn show(widgets: &Widgets, status: &Status) {
     show_devices(widgets, Device::Output, status);
     show_echo(widgets, status);
     show_levels(widgets, status);
+    widgets.enabled.set_active(status.enabled);
+    // the stages stay adjustable while the filter is off, dimmed
+    for group in &widgets.groups {
+        group.set_opacity(if status.enabled { 1. } else { 0.5 });
+    }
     widgets.listen.set_enable_expansion(status.listen);
     widgets.keep_listen.set_active(status.keep_listen);
     let volume = &widgets.listen_volume.1;

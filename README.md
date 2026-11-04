@@ -159,6 +159,8 @@ its icon (it writes `~/.local/share/applications/net.b128.VoiceFilter.desktop` a
 `~/.local/share/icons/hicolor/scalable/apps/net.b128.VoiceFilter.svg`; delete them to remove it).
 In the app you can:
 
+- switch the whole **filter** off and on: off, apps get the microphone as it is, at the same
+  latency, and every stage keeps its own switch and settings
 - choose the **microphone**, switched while the filter keeps running
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
   there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the

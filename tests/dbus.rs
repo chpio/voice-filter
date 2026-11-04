@@ -418,6 +418,7 @@ fn the_app_reads_the_status_over_d_bus() {
         proxy.status().await.unwrap()
     });
 
+    assert!(status.enabled);
     assert!(!status.listen);
     assert!(!status.keep_listen);
     assert_eq!(status.listen_volume, 0.);

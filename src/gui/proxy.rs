@@ -14,6 +14,11 @@ pub trait VoiceFilter {
     fn set_stage_enabled(&self, name: &str, enabled: bool) -> ::zbus::Result<()>;
 
     #[zbus(property)]
+    fn enabled(&self) -> ::zbus::Result<bool>;
+    #[zbus(property)]
+    fn set_enabled(&self, on: bool) -> ::zbus::Result<()>;
+
+    #[zbus(property)]
     fn parameters(&self) -> ::zbus::Result<Vec<ParameterTuple>>;
     fn set_parameter(&self, stage: &str, name: &str, value: f64) -> ::zbus::Result<()>;
 
@@ -96,6 +101,8 @@ impl From<ParameterTuple> for Parameter {
 
 /// Everything the window shows, read in one go.
 pub struct Status {
+    /// The whole filter.
+    pub enabled: bool,
     pub listen: bool,
     pub keep_listen: bool,
     /// In dB.
@@ -125,6 +132,8 @@ pub struct Status {
 #[derive(DeserializeDict, Type)]
 #[zbus(signature = "a{sv}", rename_all = "PascalCase")]
 struct Properties {
+    /// Missing on a daemon from before the switch, which was always on.
+    enabled: Option<bool>,
     listen: bool,
     keep_listen: bool,
     listen_volume: f64,
@@ -159,6 +168,7 @@ impl VoiceFilterProxy<'_> {
             .await?;
         let properties: Properties = reply.body().deserialize()?;
         Ok(Status {
+            enabled: properties.enabled.unwrap_or(true),
             listen: properties.listen,
             keep_listen: properties.keep_listen,
             listen_volume: properties.listen_volume,
