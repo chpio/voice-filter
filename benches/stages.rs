@@ -1,5 +1,7 @@
 //! The processing time and the allocations per frame of every stage of the chain, on a WAV file
-//! (48 kHz) or else on a speech-like signal: `cargo bench --bench stages [-- in.wav]`. Finer than
+//! (48 kHz) or else on a speech-like signal: `cargo bench --bench stages [-- in.wav]
+//! [--thresholds -100,1000,1000]` (the noise suppression's thresholds, as in `examples/batch.rs`;
+//! these drop the zeros of its pauses, which skip its decoders). Finer than
 //! `voice-filter process`, which rounds to 10 µs; the mean is the best of a few runs, the maximum
 //! only means something on an idle machine. Without a reference, so the echo canceller has no
 //! echo to remove. The stages run in the audio path of the allocator of the binary, as live (what
@@ -11,7 +13,8 @@ use ::std::f32::consts::{PI, TAU};
 use ::std::path::Path;
 use ::std::time::{Duration, Instant};
 
-use ::anyhow::Result;
+use ::anyhow::{Context, Result, ensure};
+use ::voice_filter::denoise::Denoise;
 use ::voice_filter::dsp::without_denormals;
 use ::voice_filter::rt_alloc::{RtAlloc, audio_path};
 use ::voice_filter::stage::Frame;
@@ -50,24 +53,44 @@ const SECONDS: usize = 20;
 fn main() -> Result<()> {
     POOL.init();
     // cargo passes `--bench`
-    let path = ::std::env::args().skip(1).find(|arg| arg != "--bench");
+    let mut args = ::std::env::args().skip(1).filter(|arg| arg != "--bench");
+    let (mut path, mut thresholds) = (None, None);
+    while let Some(arg) = args.next() {
+        if arg == "--thresholds" {
+            let value = args
+                .next()
+                .context("--thresholds needs ZEROS,UNCHANGED,NO-DF")?;
+            let values: Vec<f32> = value
+                .split(',')
+                .map(str::parse)
+                .collect::<Result<_, _>>()
+                .with_context(|| format!("not three numbers: {value}"))?;
+            ensure!(values.len() == 3, "not three numbers: {value}");
+            thresholds = Some((values[0], values[1], values[2]));
+        } else {
+            path = Some(arg);
+        }
+    }
+    let build = || {
+        let mut denoise = Denoise::new()?;
+        if let Some((zeros, unchanged, no_df)) = thresholds {
+            denoise = denoise.with_thresholds(zeros, unchanged, no_df);
+        }
+        chain::build_with(denoise)
+    };
     let input = match &path {
         Some(path) => offline::read_wav(Path::new(path))?,
         None => speech(SECONDS * SAMPLE_RATE as usize),
     };
     let frames = input.len() / FRAME_LEN;
-    let names: Vec<&str> = chain::build(None)?
-        .0
-        .stages()
-        .map(|stage| stage.name())
-        .collect();
+    let names: Vec<&str> = build()?.0.stages().map(|stage| stage.name()).collect();
     let mut means = vec![Duration::MAX; names.len()];
     let mut maxima = vec![Duration::ZERO; names.len()];
     let mut allocations = vec![0; names.len()];
     // of a frame through the whole chain
     let mut max = Duration::ZERO;
     for _ in 0..RUNS {
-        let (mut chain, _reference) = chain::build(None)?;
+        let (mut chain, _reference) = build()?;
         let mut sums = vec![Duration::ZERO; names.len()];
         for samples in input.as_chunks::<FRAME_LEN>().0 {
             let mut frame: Frame = *samples;
@@ -96,7 +119,11 @@ fn main() -> Result<()> {
     }
 
     let source = path.unwrap_or_else(|| "a speech-like signal".to_owned());
-    println!("{source}: {frames} frames, the mean the best of {RUNS} runs");
+    let skipping = match thresholds {
+        Some((zeros, unchanged, no_df)) => format!(", thresholds {zeros},{unchanged},{no_df}"),
+        None => String::new(),
+    };
+    println!("{source}: {frames} frames{skipping}, the mean the best of {RUNS} runs");
     println!(
         "{:<12} {:>13} {:>13} {:>18}",
         "stage", "mean/frame", "max/frame", "allocations/frame"

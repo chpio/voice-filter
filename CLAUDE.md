@@ -15,7 +15,7 @@ cargo test --workspace
 cargo test --release -p deep-filter-rt   # the model runs about 10x faster than in debug builds
 cargo llvm-cov --workspace --ignore-filename-regex 'src/(live|gui/(window|help|proxy|mod))\.rs$'   # coverage as the CI measures it, at least 75 % of the lines
 cargo run --release -- process in.wav out.wav   # offline mode, prints latency and time per stage
-cargo bench --bench stages [-- in.wav]          # time (µs) and allocations per frame of every stage (from the pool, as live), on a WAV or a speech-like signal
+cargo bench --bench stages [-- in.wav] [--thresholds -100,1000,1000]   # time (µs) and allocations per frame of every stage (from the pool, as live), on a WAV or a speech-like signal
 cargo run --release --example trace -- in.wav [--reference played.wav] [--set expander.threshold=6] [--off echo] [--thresholds -100,1000,1000] [--interval 0.01] [--wav out.wav] > trace.tsv   # level after every stage and Stage::trace over time, --wav also writes the output
 cargo run --release --example batch -- in/ out/ [--only denoise] [--off echo] [--set denoise.level=-30] [--thresholds -10,30,20] [--reference-dir played/]   # every WAV of a directory, each with a fresh chain, lined up with the input, prints the time per frame
 .venv/bin/python scripts/score.py clean/ noisy/ out/a/ [out/b/ ...] [--start 1]   # PESQ, STOI and SI-SDR against the clean files, also by the input's SNR (python3 -m venv .venv && .venv/bin/pip install numpy scipy soundfile pesq pystoi)

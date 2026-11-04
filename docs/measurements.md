@@ -171,6 +171,22 @@ to −14 dB in the pauses, see [Steady tones](#steady-tones)). With the expander
 quiet; on the call it keeps the speech of the chain without the zeros and leaves 18.7 % of the
 pause frames above −60 dBFS. Not listened to yet.
 
+The zeros also save CPU: where the estimate is below −10 dB, `DfTract` runs only the encoder, not
+the two decoders. `cargo bench --bench stages -- in.wav [--thresholds -100,1000,1000]` (2026-11-04,
+the `x86-64-v4` build of this machine, see [Target CPU](#target-cpu); an idle AMD Ryzen 7 8840U,
+three rounds, each with the zeros and without one after the other, the median of the three means
+per frame, each the best of the benchmark's 5 passes), in µs:
+
+| Recording                                | estimate < −10 dB | `denoise`, zeros | without | chain, zeros | without |
+| ---------------------------------------- | ----------------: | ---------------: | ------: | -----------: | ------: |
+| the call, USB microphone (61,248 frames) |            73.7 % |            137.1 |   252.5 |        156.3 |   272.5 |
+| fans, built-in (10,244 frames)           |            75.6 % |            133.5 |   249.7 |        152.2 |   271.4 |
+
+A frame with the zeros takes about 96 µs (the encoder), one without about 250 µs: on the call 1.6
+instead of 2.7 % of a core. The noise suppression also allocates less (618–627 instead of 1027
+times per frame, from the pool); the de-esser takes 1–3 µs more without the zeros, the other stages
+the same.
+
 ## Steady tones
 
 Whether a filter for steady tones before the noise suppression is needed: the built-in microphone
