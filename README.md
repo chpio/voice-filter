@@ -82,6 +82,11 @@ cargo install --locked voice-filter --no-default-features
 cargo install --locked --path .
 ```
 
+Cargo builds for every x86-64 CPU. Built for yours instead
+(`RUSTFLAGS="-C target-cpu=native" cargo install --locked voice-filter`), it took 6 % less time
+per frame on an AMD Zen 4 ([measurements](docs/measurements.md#target-cpu)); such a binary only
+runs on CPUs with the same instruction set extensions.
+
 Built from the repository, the echo cancellation doesn't allocate memory while it runs. The
 version on crates.io still uses the last release of sonora (the Rust port of AEC3), which
 allocates in every 10 ms frame. It sounds the same, but on a busy system it makes dropouts more

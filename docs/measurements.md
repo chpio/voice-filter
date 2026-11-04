@@ -175,6 +175,42 @@ runs each, alternating): 12.37 s against 12.40 s with unwinding, the output bit 
 the binary 46.6 instead of 52.2 MB; it's in the profile for how a panic ends the daemon, not for
 speed.
 
+### Target CPU
+
+What `cargo install` builds runs on every x86-64 CPU (SSE2); tract picks its matrix kernels at
+runtime anyway (AVX-512 ones on this machine in every build), the rest of the code doesn't. The
+benchmark built four ways (`RUSTFLAGS`, each in a target directory of its own) at commit
+`38afbed`, on the call recording (61,248 frames), an AMD Ryzen 7 8840U (Zen 4) idle after a
+reboot: five rounds, each running the four binaries one after the other, the median of the five
+means per frame (each the best of the benchmark's 5 passes) and their range, in µs:
+
+| Stage      |               Baseline |           `+avx2,+fma` |    `target-cpu=native` |            `x86-64-v4` |
+| ---------- | ---------------------: | ---------------------: | ---------------------: | ---------------------: |
+| highpass   |       1.53 (1.49–1.53) |       1.21 (1.18–1.22) |       1.21 (1.18–1.21) |       1.20 (1.18–1.22) |
+| echo       |       5.26 (5.13–5.29) |       5.17 (4.98–5.27) |       5.30 (5.09–5.38) |       5.40 (5.33–5.50) |
+| denoise    | 145.88 (142.23–147.73) | 135.48 (134.08–136.11) | 140.89 (137.30–141.59) | 137.52 (135.60–138.76) |
+| eq         |       1.22 (1.20–1.23) |       1.22 (1.19–1.22) |       2.48 (2.43–2.49) |       1.24 (1.23–1.26) |
+| deesser    |       7.48 (7.31–7.55) |       5.68 (5.54–6.16) |       5.09 (4.98–5.11) |       5.80 (5.70–6.19) |
+| agc        |       0.60 (0.60–0.62) |       0.54 (0.53–0.56) |       0.39 (0.38–0.40) |       0.39 (0.39–0.39) |
+| compressor |       2.98 (2.91–3.00) |       2.20 (2.15–2.22) |       2.37 (2.31–2.38) |       2.27 (2.23–2.28) |
+| expander   |       0.43 (0.43–0.44) |       0.41 (0.40–0.43) |       0.40 (0.39–0.44) |       0.43 (0.42–0.45) |
+| limiter    |       3.60 (3.50–5.99) |       8.66 (8.42–8.70) |       2.00 (1.96–2.33) |       2.17 (2.13–2.52) |
+| total      | 170.41 (164.79–173.37) | 160.58 (158.47–161.78) | 160.40 (156.03–160.85) | 156.39 (154.21–158.48) |
+
+`x86-64-v4` saved 8 %, `native` and `+avx2,+fma` 6 % each, 10–14 µs per frame, about 0.1 % of a
+core. Most of it is in `denoise`, where `perf` put the difference in tract's depthwise
+convolution: for input that isn't contiguous it runs a scalar loop compiled for the baseline (see
+`TODO.md`), faster when the compiler may use AVX, though still one float per instruction. Our own
+stages differ by stage: the de-esser's FIR, the compressor and the high-pass gain from AVX in
+every variant, the limiter's peak loop takes 2.4 times as long with AVX2 alone and less with
+AVX-512, the EQ's biquads twice as long with `native` (tuned for Zen 4, which uses 512-bit
+registers throughout, where `x86-64-v4` mostly keeps to 256 bits). So none of these is set for
+the published crate: it would leave out older CPUs for little, and a `target-cpu` in a
+`.cargo/config.toml` of the repository wouldn't reach `cargo install` from crates.io anyway (only
+`cargo install --path .`). Earlier runs on a busy machine (another build running) had found
+`native` no faster than the baseline and `+avx2,+fma` 15 µs faster in `denoise`: differences of
+that size need an idle machine.
+
 ## Allocations of the noise suppression
 
 `cargo bench --bench stages` counted about 820 allocations per frame in `denoise`, all in tract
