@@ -41,6 +41,7 @@ clap = { version = "4", features = ["derive"] }
 deep-filter-rt = { path = "crates/deep-filter-rt", version = "0.1" }
 # the translations of the app and the tray, embedded (`i18n`)
 fluent-bundle = "0.16"
+# the version fluent-bundle uses, a newer one would be a second copy
 fluent-langneg = "0.13"
 # v4_10 for Scale::set_format_value_func
 gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = true }
