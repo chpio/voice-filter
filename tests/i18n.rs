@@ -175,6 +175,7 @@ fn falls_back_to_english() {
     assert_eq!(i18n::negotiate(&["de-DE".to_owned()]), "de");
     assert_eq!(i18n::negotiate(&["es-MX".to_owned()]), "es");
     assert_eq!(i18n::negotiate(&["fr-CA".to_owned()]), "fr");
+    assert_eq!(i18n::negotiate(&["ru-RU".to_owned()]), "ru");
     assert_eq!(
         i18n::negotiate(&["de-AT".to_owned(), "en".to_owned()]),
         "de"
@@ -192,7 +193,7 @@ fn joins_lines_and_keeps_paragraphs() {
 }
 
 /// The plural of the errors shows the count in every language, also for 0 (French counts 0 as
-/// one).
+/// one), and so does the one of the samples per cycle (Russian has three forms).
 #[test]
 fn the_plurals_show_the_count() {
     for (language, ftl) in LOCALES {
@@ -218,6 +219,22 @@ fn the_plurals_show_the_count() {
                 numbers,
                 ["5", "6", &errors.to_string()],
                 "{language}, {errors} errors: {text}"
+            );
+        }
+        let pattern = bundle
+            .get_message("processing-cycle")
+            .unwrap()
+            .value()
+            .unwrap();
+        for samples in [1u64, 2, 5, 21, 256, 480] {
+            let mut args = ::fluent_bundle::FluentArgs::new();
+            args.set("samples", samples);
+            let mut problems = Vec::new();
+            let text = bundle.format_pattern(pattern, Some(&args), &mut problems);
+            assert!(problems.is_empty(), "{language}: {problems:?}");
+            assert!(
+                text.starts_with(&format!("{samples} ")),
+                "{language}, {samples} samples: {text}"
             );
         }
     }
