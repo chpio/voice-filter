@@ -172,6 +172,11 @@ fn falls_back_to_english() {
     assert_eq!(i18n::negotiate(&[]), "en");
     assert_eq!(i18n::negotiate(&["xx-YY".to_owned()]), "en");
     assert_eq!(i18n::negotiate(&["en-US".to_owned()]), "en");
+    assert_eq!(i18n::negotiate(&["de-DE".to_owned()]), "de");
+    assert_eq!(
+        i18n::negotiate(&["de-AT".to_owned(), "en".to_owned()]),
+        "de"
+    );
     // a missing text shows its id
     assert_eq!(i18n::tr("no-such-text"), "no-such-text");
 }

@@ -17,7 +17,10 @@ use ::unic_langid::LanguageIdentifier;
 pub const FALLBACK: &str = "en";
 
 /// The translations, by language: add a line for a new one.
-pub const LOCALES: [(&str, &str); 1] = [("en", include_str!("../i18n/en.ftl"))];
+pub const LOCALES: [(&str, &str); 2] = [
+    ("en", include_str!("../i18n/en.ftl")),
+    ("de", include_str!("../i18n/de.ftl")),
+];
 
 struct Texts {
     /// The negotiated language first, then English.
