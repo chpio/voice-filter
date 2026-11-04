@@ -2,6 +2,7 @@
 /CLAUDE.local.md
 # the Python packages of scripts/
 /.venv/
+__pycache__/
 
 # test recordings for the offline mode
 /*.wav
