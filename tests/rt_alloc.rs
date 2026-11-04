@@ -120,11 +120,15 @@ fn run_chain(passes: usize) -> Vec<PoolStats> {
 fn the_chain_runs_on_the_pool() {
     let _serial = serial();
     let before = ALLOC.stats();
-    let stats = run_chain(3);
+    // on a thread of its own, as live: tract keeps buffers in thread-locals, allocated from the
+    // pool, which only go back when the thread ends, so before the next test takes the lock
+    let stats = ::std::thread::spawn(|| run_chain(3)).join().unwrap();
     eprintln!("pool after each pass: {stats:?}");
     for pass in &stats {
         assert_eq!(pass.outside, before.outside, "{pass:?}");
         assert!(pass.peak < POOL_SIZE / 2, "{pass:?}");
     }
     assert_eq!(stats[2].used, stats[1].used);
+    // all of it is back in the pool, the thread-locals too
+    assert_eq!(ALLOC.stats().used, before.used);
 }
