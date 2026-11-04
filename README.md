@@ -58,6 +58,10 @@ Switching crossfades over one frame, so there are no clicks. The echo cancellati
 seconds after being switched on until it removes the echo fully again, as it missed what the
 speakers played meanwhile. The whole filter switches off the same way, all stages at once, while
 each stage keeps its own switch for when the filter is on again; kept for the next runs too.
+Switched off, it still delays the microphone by its latency (37 ms, 30 ms of it the noise
+suppression, see below): dropping the delay would cut a piece out of the sound when switching off
+and insert a gap when switching on, heard as a click or a stutter in a call, while at the same
+latency switching just crossfades.
 
 **Latency.** About 56 ms from the microphone to the app with a USB microphone: 8 ms microphone,
 11 ms for turning PipeWire's blocks into 10 ms frames (both measured live) and 37 ms for the chain.
@@ -159,8 +163,9 @@ its icon (it writes `~/.local/share/applications/net.b128.VoiceFilter.desktop`,
 `~/.local/share/icons/hicolor/scalable/apps/net.b128.VoiceFilter.svg` and the two icons of the tray
 in `~/.local/share/icons/hicolor/symbolic/apps/`; delete them to remove it). In the app you can:
 
-- switch the whole **filter** off and on: off, apps get the microphone as it is, at the same
-  latency, and every stage keeps its own switch and settings
+- switch the whole **filter** off and on: off, apps get the microphone as it is, still at the
+  same latency (so switching doesn't click or stutter), and every stage keeps its own switch and
+  settings
 - choose the **microphone**, switched while the filter keeps running
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
   there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the

@@ -14,7 +14,8 @@ const STAGES: [(&str, &str); 9] = [
         "denoise",
         "A neural network (DeepFilterNet3) separates the voice from the background noise, such \
          as fans, keyboards or traffic, and removes the noise. It hears a quiet microphone \
-         raised to a level it works at.\n\nAdds 30 ms of latency, the most of all stages.",
+         raised to a level it works at.\n\nAdds 30 ms of latency, the most of all stages, even \
+         when switched off (why: see Filter at the top).",
     ),
     (
         "highpass",
@@ -200,8 +201,12 @@ const PARAMS: [(&str, &str, &str); 21] = [
 ];
 
 pub const FILTER: &str = "Switches the whole filter. Off, apps get the microphone as it is, \
-    at the same latency, while each stage keeps its own switch and settings for when it's on \
-    again. The icon in the tray switches it too.";
+    while each stage keeps its own switch and settings for when it's on again. The icon in the \
+    tray switches it too.\n\nThe latency stays the same when it's off: the microphone is \
+    delayed by as much as the filter would take (about 37 ms, 30 ms of it the noise \
+    suppression; the Latency row below shows all of it). Dropping the delay would cut a piece out of \
+    the sound when switching off and insert a gap when switching on, heard as a click or a \
+    stutter in a call; this way switching just crossfades.";
 
 pub const LISTEN_VOLUME: &str = "How loud you hear yourself. Only for listening: apps get \
     the voice at the level the filter brings it to.";
