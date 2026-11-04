@@ -176,6 +176,7 @@ fn falls_back_to_english() {
     assert_eq!(i18n::negotiate(&["es-MX".to_owned()]), "es");
     assert_eq!(i18n::negotiate(&["fr-CA".to_owned()]), "fr");
     assert_eq!(i18n::negotiate(&["ru-RU".to_owned()]), "ru");
+    assert_eq!(i18n::negotiate(&["ja-JP".to_owned()]), "ja");
     assert_eq!(i18n::negotiate(&["zh-CN".to_owned()]), "zh-Hans");
     assert_eq!(i18n::negotiate(&["zh-SG".to_owned()]), "zh-Hans");
     // traditional Chinese doesn't get the simplified one, as with gettext
