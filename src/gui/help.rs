@@ -251,6 +251,27 @@ pub fn param(stage: &str, name: &str) -> Option<&'static str> {
 }
 
 /// A flat info button that shows `text` in a popover.
+/// The explanation as the first row inside an expanding row, whose header has no room for an
+/// info button at its end (libadwaita puts the switch and the arrow there).
+pub fn text_row(text: &str) -> gtk::ListBoxRow {
+    let label = gtk::Label::builder()
+        .label(text)
+        .wrap(true)
+        .xalign(0.)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .css_classes(["dim-label"])
+        .build();
+    gtk::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(&label)
+        .build()
+}
+
+/// The info button, always the last widget of its row.
 pub fn button(text: &str) -> gtk::MenuButton {
     let label = gtk::Label::builder()
         .label(text)

@@ -99,8 +99,9 @@ struct Widgets {
     echo_status: adw::ActionRow,
     /// The frame counters of the echo cancellation at the last poll, to see whether they move.
     echo_frames: Cell<(f64, f64)>,
-    /// The switch of the whole filter.
-    enabled: adw::SwitchRow,
+    /// The switch of the whole filter and its row, which has the info button after it.
+    enabled: gtk::Switch,
+    enabled_row: adw::ActionRow,
     /// Its switch switches listening, it expands to its volume and whether it's kept.
     listen: adw::ExpanderRow,
     /// The slider of the volume of Listen, with its value, and the scale in it.
@@ -179,7 +180,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         output_names: RefCell::new(Vec::new()),
         echo_status: row("Status"),
         echo_frames: Cell::new((0., 0.)),
-        enabled: adw::SwitchRow::builder()
+        enabled: gtk::Switch::builder().valign(gtk::Align::Center).build(),
+        enabled_row: adw::ActionRow::builder()
             .title("Filter")
             .subtitle("Off, apps get the microphone as it is")
             .build(),
@@ -223,13 +225,18 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     volume_row.add_suffix(&help::button(help::LISTEN_VOLUME));
     widgets.listen.add_row(&volume_row);
     widgets.listen.add_row(&widgets.keep_listen);
-    widgets.enabled.add_suffix(&help::button(help::FILTER));
+    // not a SwitchRow: its switch would come after the info button
+    widgets.enabled_row.add_suffix(&widgets.enabled);
+    widgets.enabled_row.add_suffix(&help::button(help::FILTER));
+    widgets
+        .enabled_row
+        .set_activatable_widget(Some(&widgets.enabled));
     let page = adw::PreferencesPage::new();
     page.add(&group(
         "Input",
         Some("The filter reads from this microphone, apps read from “Voice Filter”."),
         &[
-            widgets.enabled.upcast_ref(),
+            widgets.enabled_row.upcast_ref(),
             widgets.input.upcast_ref(),
             widgets.listen.upcast_ref(),
         ],
@@ -399,11 +406,11 @@ fn show_levels(widgets: &Widgets, status: &Status) {
 /// Sends what the user changes to the filter.
 fn connect_controls(widgets: &Rc<Widgets>) {
     let weak = Rc::downgrade(widgets);
-    widgets.enabled.connect_active_notify(move |row| {
+    widgets.enabled.connect_active_notify(move |switch| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
-        let on = row.is_active();
+        let on = switch.is_active();
         send(
             "switch the filter",
             async move { proxy.set_enabled(on).await },
@@ -717,7 +724,7 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                 .show_enable_switch(true)
                 .build();
             if let Some(text) = help::stage(name) {
-                row.add_suffix(&help::button(text));
+                row.add_row(&help::text_row(text));
             }
             let scales = params
                 .iter()
@@ -999,8 +1006,16 @@ fn processing_row(toasts: &adw::ToastOverlay) -> (adw::ExpanderRow, ProcessingTa
         .margin_start(12)
         .margin_end(12)
         .build();
+    let text = Rc::new(RefCell::new(String::new()));
+    let copied = text.clone();
+    // the cycle below the table, the copy button at its end
+    let footer = gtk::Box::builder().spacing(12).build();
+    cycle.set_hexpand(true);
+    footer.append(&cycle);
+    footer.append(&copy_button(toasts, move || Some(copied.borrow().clone())));
     content.append(&grid);
-    content.append(&cycle);
+    content.append(&footer);
+    row.add_row(&help::text_row(help::PROCESSING));
     row.add_row(
         &gtk::ListBoxRow::builder()
             .activatable(false)
@@ -1008,10 +1023,6 @@ fn processing_row(toasts: &adw::ToastOverlay) -> (adw::ExpanderRow, ProcessingTa
             .child(&content)
             .build(),
     );
-    let text = Rc::new(RefCell::new(String::new()));
-    let copied = text.clone();
-    row.add_suffix(&copy_button(toasts, move || Some(copied.borrow().clone())));
-    row.add_suffix(&help::button(help::PROCESSING));
     let table = ProcessingTable {
         grid,
         rows: RefCell::new(Vec::new()),
