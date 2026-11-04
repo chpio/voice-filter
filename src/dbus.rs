@@ -7,6 +7,7 @@ use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::std::sync::{Arc, Mutex, mpsc};
 
 use ::anyhow::{Context as _, Result, anyhow};
+use ::zbus::object_server::InterfaceRef;
 use ::zbus::{connection, fdo, interface};
 
 use crate::bridge::Stats;
@@ -36,8 +37,8 @@ pub enum Control {
 pub struct Service {
     /// The switch of the whole filter, see [`crate::chain::Chain::enabled`].
     pub enabled: Arc<AtomicBool>,
-    /// Called after `enabled` or a stage was switched, to update the icon and the menu of the
-    /// tray.
+    /// Called after `enabled`, a stage or Listen was switched, to update the icon and the menu of
+    /// the tray.
     pub switched: Box<dyn Fn() + Send + Sync>,
     pub switches: Vec<(&'static str, Arc<AtomicBool>)>,
     /// The settings of the stages, with the name of their stage.
@@ -177,6 +178,7 @@ impl Service {
     pub fn set_listen(&mut self, on: bool) -> fdo::Result<()> {
         (self.send)(Control::SetListen(on)).map_err(failed)?;
         self.listening = on;
+        (self.switched)();
         if self.keep_listen {
             self.save_listen()?;
         }
@@ -400,8 +402,9 @@ impl Service {
 }
 
 /// Serves `service` under [`NAME`] on the session bus from a thread of its own, for as long as
-/// the program runs. Fails if the name is taken, i.e. another instance runs.
-pub fn serve(service: Service) -> Result<()> {
+/// the program runs; gives it back to be called in the process too, as the tray does. Fails if
+/// the name is taken, i.e. another instance runs.
+pub fn serve(service: Service) -> Result<InterfaceRef<Service>> {
     let (result_tx, result_rx) = mpsc::channel();
     ::std::thread::Builder::new()
         .name("dbus".into())
@@ -416,9 +419,17 @@ pub fn serve(service: Service) -> Result<()> {
                     .serve_at(PATH, service)
                     .build()
                     .await;
-                match connection {
-                    Ok(connection) => {
-                        let _ = result_tx.send(Ok(()));
+                let served = match connection {
+                    Ok(connection) => connection
+                        .object_server()
+                        .interface::<_, Service>(PATH)
+                        .await
+                        .map(|service| (connection, service)),
+                    Err(err) => Err(err),
+                };
+                match served {
+                    Ok((connection, service)) => {
+                        let _ = result_tx.send(Ok(service));
                         // serves until the program ends
                         ::std::future::pending::<()>().await;
                         drop(connection);
@@ -431,7 +442,7 @@ pub fn serve(service: Service) -> Result<()> {
         })
         .context("Could not start the D-Bus thread")?;
     match result_rx.recv()? {
-        Ok(()) => Ok(()),
+        Ok(service) => Ok(service),
         Err(::zbus::Error::NameTaken) => Err(anyhow!("Voice Filter is already running")),
         Err(err) => Err(err).context("Could not provide the D-Bus interface"),
     }

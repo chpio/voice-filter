@@ -7,7 +7,7 @@ use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::ksni::{MenuItem, Tray as _};
 use ::voice_filter::i18n::tr;
 use ::voice_filter::settings;
-use ::voice_filter::tray::{ICON_OFF, ICON_ON, ICONS, Tray, write_icons};
+use ::voice_filter::tray::{ICON_OFF, ICON_ON, ICONS, Toggle, Tray, write_icons};
 
 /// A tray over a chain without an echo cancellation.
 fn tray(settings_dir: Option<PathBuf>, app: Option<&str>) -> Tray {
@@ -16,6 +16,7 @@ fn tray(settings_dir: Option<PathBuf>, app: Option<&str>) -> Tray {
         switches: vec![("denoise", Arc::new(AtomicBool::new(true)))],
         params: Vec::new(),
         settings_dir,
+        listen: None,
         icon_theme_path: String::new(),
         app: app.map(PathBuf::from),
     }
@@ -103,6 +104,35 @@ fn the_echo_cancellation_waits_for_the_filter() {
     // its own switch, which only counts while the filter is on
     assert!(item.checked);
     assert!(!item.enabled);
+}
+
+#[test]
+fn the_menu_switches_listen_through_the_control_interface() {
+    let listening = Arc::new(AtomicBool::new(false));
+    let (get, set) = (listening.clone(), listening.clone());
+    let mut tray = Tray {
+        listen: Some(Toggle {
+            get: Box::new(move || get.load(Ordering::Relaxed)),
+            set: Box::new(move |on| set.store(on, Ordering::Relaxed)),
+        }),
+        ..tray(None, None)
+    };
+    let click = |tray: &mut Tray| {
+        let menu = tray.menu();
+        let MenuItem::Checkmark(item) = &menu[1] else {
+            panic!("without the echo cancellation Listen comes second: {menu:?}");
+        };
+        assert_eq!(item.label, tr("listen"));
+        assert_eq!(item.checked, listening.load(Ordering::Relaxed));
+        // the filter being off doesn't matter, Listen plays what apps get
+        assert!(item.enabled);
+        (item.activate)(tray);
+    };
+    tray.enabled.store(false, Ordering::Relaxed);
+    click(&mut tray);
+    assert!(listening.load(Ordering::Relaxed));
+    click(&mut tray);
+    assert!(!listening.load(Ordering::Relaxed));
 }
 
 #[test]

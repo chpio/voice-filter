@@ -20,6 +20,7 @@ use ::pipewire::spa;
 use ::pipewire::spa::pod::Pod;
 use ::pipewire::stream::{StreamFlags, StreamRc, StreamState};
 use ::pipewire::types::ObjectType;
+use ::zbus::object_server::InterfaceRef;
 
 use crate::bridge::{Capture, FRAME_TIME_PARTS, Playback, Stats, bridge};
 use crate::chain::Chain;
@@ -29,7 +30,7 @@ use crate::frame_time::{WINDOW_SECONDS, Window};
 use crate::param::Param;
 use crate::rt_alloc;
 use crate::settings;
-use crate::tray::{self, Tray};
+use crate::tray::{self, Toggle, Tray};
 use crate::volume::{self, Volume};
 use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
 
@@ -64,6 +65,7 @@ fn show_tray(
     switches: Vec<(&'static str, Arc<AtomicBool>)>,
     params: Vec<(&'static str, Param)>,
     settings_dir: Option<PathBuf>,
+    service: InterfaceRef<Service>,
 ) -> Option<Handle<Tray>> {
     let icons = tray::icons_dir(settings_dir.as_deref()).filter(|dir| {
         tray::write_icons(dir)
@@ -77,11 +79,23 @@ fn show_tray(
     } else {
         None
     };
+    // Listen as the app switches it, so it starts its streams and keeps it the same way
+    let get = service.clone();
+    let listen = Toggle {
+        get: Box::new(move || ::zbus::block_on(async { get.get().await.listen() })),
+        set: Box::new(move |on| {
+            let result = ::zbus::block_on(async { service.get_mut().await.set_listen(on) });
+            if let Err(err) = result {
+                eprintln!("Could not switch Listen: {err}");
+            }
+        }),
+    };
     let tray = Tray {
         enabled,
         switches,
         params,
         settings_dir,
+        listen: Some(listen),
         icon_theme_path: icons
             .and_then(|dir| dir.to_str().map(str::to_owned))
             .unwrap_or_default(),
@@ -145,14 +159,18 @@ pub fn run(
         settings_dir.clone(),
     );
     // first, so a second instance stops before it creates nodes or shows its icon
-    dbus::serve(Service {
+    let service = dbus::serve(Service {
         enabled,
         switched: Box::new({
             let tray = tray.clone();
             move || {
-                if let Some(tray) = tray.get() {
-                    // reads the switches again, updates icon, tooltip and menu
-                    tray.update(|_| ());
+                if let Some(tray) = tray.get().cloned() {
+                    // reads the switches again, updates icon, tooltip and menu; not here, as a
+                    // click in the tray's own menu switches Listen through the control interface
+                    // and holds the tray until it's done, `update` would wait for it forever
+                    let _ = ::std::thread::Builder::new()
+                        .name("tray-update".into())
+                        .spawn(move || tray.update(|_| ()));
                 }
             }
         }),
@@ -176,7 +194,7 @@ pub fn run(
         settings_dir,
     })?;
     let (enabled, switches, params, settings_dir) = tray_settings;
-    if let Some(handle) = show_tray(enabled, switches, params, settings_dir) {
+    if let Some(handle) = show_tray(enabled, switches, params, settings_dir, service) {
         let _ = tray.set(handle);
     }
 

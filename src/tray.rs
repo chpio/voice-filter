@@ -37,6 +37,12 @@ pub const ICONS: [(&str, &str); 2] = [
     ),
 ];
 
+/// A setting the menu switches through someone else: reads it and sets it.
+pub struct Toggle {
+    pub get: Box<dyn Fn() -> bool + Send>,
+    pub set: Box<dyn Fn(bool) + Send>,
+}
+
 pub struct Tray {
     /// The switch of the whole filter, see [`crate::chain::Chain::enabled`].
     pub enabled: Arc<AtomicBool>,
@@ -47,6 +53,9 @@ pub struct Tray {
     pub params: Vec<(&'static str, Param)>,
     /// Where switching is kept for the next runs.
     pub settings_dir: Option<PathBuf>,
+    /// Listen, through the control interface, which starts and stops its streams and keeps it if
+    /// asked to; `None` without one.
+    pub listen: Option<Toggle>,
     /// A directory with the icons (see [`write_icons`]), for hosts that look there first; empty
     /// if there's none.
     pub icon_theme_path: String,
@@ -185,6 +194,21 @@ impl ::ksni::Tray for Tray {
                     activate: Box::new(|tray: &mut Self| {
                         let on = tray.echo().is_some_and(|echo| echo.load(Ordering::Relaxed));
                         tray.set_echo(!on);
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        if let Some(listen) = &self.listen {
+            menu.push(
+                CheckmarkItem {
+                    label: tr("listen"),
+                    checked: (listen.get)(),
+                    activate: Box::new(|tray: &mut Self| {
+                        if let Some(listen) = &tray.listen {
+                            (listen.set)(!(listen.get)());
+                        }
                     }),
                     ..Default::default()
                 }
