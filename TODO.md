@@ -3,11 +3,6 @@
 Work items that don't change the design; the open design questions and TODOs are in
 [docs/concept.md](docs/concept.md). Remove an item once it's done.
 
-## CI
-
-- [ ] Check the first CI run with `crates/deep-filter-rt`: `cargo deny` (license allow list, sources),
-  `cargo machete` and the MSRV check (1.96) haven't run locally.
-
 ## Echo cancellation
 
 - [ ] Remove `[patch.crates-io]` for sonora from `Cargo.toml` (and its `allow-git` in `deny.toml`)
@@ -22,9 +17,6 @@ Work items that don't change the design; the open design questions and TODOs are
   while you talk (see the concept, "Double talk"). Still to try: AEC3's own configuration for it
   (its suppressor while the near end dominates), once sonora's builder takes one
   ([PR #41](https://github.com/dignifiedquire/sonora/pull/41)).
-- [ ] Keep the echo stage running while it's switched off (0.04 ms per frame): it pauses like the
-  others, misses what the speakers play and takes about 4 s to remove the echo fully after being
-  switched on again. Needs a way for a stage to opt out of pausing.
 
 ## Audio path
 
