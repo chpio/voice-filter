@@ -20,6 +20,7 @@ pub mod frame_time;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod highpass;
+pub mod i18n;
 pub mod level;
 pub mod limiter;
 pub mod live;

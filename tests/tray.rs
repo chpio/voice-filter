@@ -5,6 +5,7 @@ use ::std::sync::Arc;
 use ::std::sync::atomic::{AtomicBool, Ordering};
 
 use ::ksni::{MenuItem, Tray as _};
+use ::voice_filter::i18n::tr;
 use ::voice_filter::settings;
 use ::voice_filter::tray::{ICON_OFF, ICON_ON, ICONS, Tray, write_icons};
 
@@ -30,10 +31,10 @@ fn click_filter(tray: &mut Tray) {
 fn shows_whether_the_filter_is_on() {
     let tray = tray(None, None);
     assert_eq!(tray.icon_name(), ICON_ON);
-    assert_eq!(tray.tool_tip().description, "On");
+    assert_eq!(tray.tool_tip().description, tr("tray-on"));
     tray.enabled.store(false, Ordering::Relaxed);
     assert_eq!(tray.icon_name(), ICON_OFF);
-    assert!(tray.tool_tip().description.starts_with("Off"));
+    assert_eq!(tray.tool_tip().description, tr("tray-off"));
     let menu = tray.menu();
     let MenuItem::Checkmark(item) = &menu[0] else {
         panic!("{menu:?}");
@@ -62,7 +63,7 @@ fn opens_the_app_only_if_there_is_one() {
     let MenuItem::Standard(item) = &menu[2] else {
         panic!("{menu:?}");
     };
-    assert_eq!(item.label, "Open Voice Filter");
+    assert_eq!(item.label, tr("tray-open"));
 }
 
 #[test]

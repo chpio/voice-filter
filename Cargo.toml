@@ -19,6 +19,7 @@ keywords = ["audio", "pipewire", "noise-suppression", "voice", "microphone"]
 include = [
     "/src/**/*",
     "/data/**/*",
+    "/i18n/**/*",
     "/tests/**/*",
     "/benches/**/*",
     "/README.md",
@@ -38,6 +39,9 @@ adw = { package = "libadwaita", version = "0.9", features = ["v1_4"], optional =
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 deep-filter-rt = { path = "crates/deep-filter-rt", version = "0.1" }
+# the translations of the app and the tray, embedded (`i18n`)
+fluent-bundle = "0.16"
+fluent-langneg = "0.13"
 # v4_10 for Scale::set_format_value_func
 gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = true }
 hound = "3.5"
@@ -52,6 +56,7 @@ rtrb = "0.4"
 serde = { version = "1", optional = true }
 # AEC3, the echo canceller of WebRTC, in pure Rust; patched below
 sonora = "0.2"
+unic-langid = "0.9"
 zbus = { version = "6", default-features = false, features = ["default-rt", "service"] }
 
 # flushes denormals to zero around the audio processing (`dsp::without_denormals`), only for the

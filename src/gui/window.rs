@@ -8,49 +8,22 @@ use ::zbus::proxy::CacheProperties;
 
 use super::help;
 use super::proxy::{Parameter, Status, VoiceFilterProxy};
+use crate::i18n::{FluentValue, lookup, tr, tr_args};
 use crate::samples_ms;
 
-/// The stages the window shows: name in the chain and title; what they do is in the descriptions
-/// of their groups and behind the info button of their row ([`help`]), so the rows stay short.
-const STAGES: [(&str, &str); 9] = [
-    ("echo", "Echo Cancellation"),
-    ("denoise", "Noise Suppression"),
-    ("highpass", "High-Pass Filter"),
-    ("eq", "Equalizer"),
-    ("deesser", "De-Esser"),
-    ("agc", "Automatic Gain Control"),
-    ("compressor", "Compressor"),
-    ("expander", "Expander"),
-    ("limiter", "Limiter"),
+/// The groups of the stages: the id of their title and description (`group-…` in `i18n/`) and
+/// their stages, whose titles are `stage-…`; what the stages do is inside their rows ([`help`]).
+const GROUPS: [(&str, &[&str]); 4] = [
+    ("echo", &["echo"]),
+    ("denoise", &["denoise"]),
+    ("tone", &["highpass", "eq", "deesser"]),
+    ("level", &["agc", "compressor", "expander", "limiter"]),
 ];
 
-/// The groups of the stages: title, description and their stages.
-const GROUPS: [(&str, &str, &[&str]); 4] = [
-    (
-        "Echo Cancellation",
-        "Removes the echo of the speakers chosen here from the microphone, for calls without \
-         headphones.",
-        &["echo"],
-    ),
-    (
-        "Noise Suppression",
-        "Removes background noise. The limit keeps part of it: lower sounds more natural, 100 dB \
-         removes it all.",
-        &["denoise"],
-    ),
-    (
-        "Tone",
-        "Removes rumble, makes the voice clearer (less boom in the low mids, more presence) and \
-         tames harsh S sounds.",
-        &["highpass", "eq", "deesser"],
-    ),
-    (
-        "Level",
-        "Brings the voice to a constant level, evens out the loudness within words, keeps the \
-         noise down in speech pauses and the peaks below −1 dBFS.",
-        &["agc", "compressor", "expander", "limiter"],
-    ),
-];
+/// The title of a stage, its name if there's none.
+fn stage_title(name: &str) -> String {
+    lookup(&format!("stage-{name}"), &[]).unwrap_or_else(|| name.to_owned())
+}
 
 /// How often the window reads the state; the status properties don't emit change signals.
 const POLL: Duration = Duration::from_secs(1);
@@ -143,22 +116,22 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     // a status row with an info button
     let status_row = |title: &str, text: &str| {
         let row = row(title);
-        row.add_suffix(&help::button(text));
+        row.add_suffix(&help::button(&tr(text)));
         row
     };
     let widgets = Rc::new(Widgets {
         stack: gtk::Stack::new(),
         missing: adw::StatusPage::builder()
             .icon_name("audio-input-microphone-symbolic")
-            .title("Voice Filter Isn't Running")
-            .description("Start it with <tt>voice-filter run</tt>")
+            .title(tr("missing-title"))
+            .description(tr("missing-description"))
             .build(),
         groups: GROUPS
             .iter()
-            .map(|(title, description, _)| {
+            .map(|(id, _)| {
                 adw::PreferencesGroup::builder()
-                    .title(*title)
-                    .description(*description)
+                    .title(tr(&format!("group-{id}")))
+                    .description(tr(&format!("group-{id}-description")))
                     .build()
             })
             .collect(),
@@ -167,46 +140,43 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         // the chosen microphone as the subtitle, over the width of the row, instead of squeezed
         // next to the title
         input: adw::ComboRow::builder()
-            .title("Microphone")
+            .title(tr("microphone"))
             .use_subtitle(true)
             .model(&gtk::StringList::new(&[]))
             .build(),
         input_names: RefCell::new(Vec::new()),
         output: adw::ComboRow::builder()
-            .title("Speakers")
+            .title(tr("speakers"))
             .use_subtitle(true)
             .model(&gtk::StringList::new(&[]))
             .build(),
         output_names: RefCell::new(Vec::new()),
-        echo_status: row("Status"),
+        echo_status: row(&tr("echo-status")),
         echo_frames: Cell::new((0., 0.)),
         enabled: gtk::Switch::builder().valign(gtk::Align::Center).build(),
         enabled_row: adw::ActionRow::builder()
-            .title("Filter")
-            .subtitle("Off, apps get the microphone as it is")
+            .title(tr("filter"))
+            .subtitle(tr("filter-subtitle"))
             .build(),
         listen: adw::ExpanderRow::builder()
-            .title("Listen")
-            .subtitle("Plays it on the default output, use headphones")
+            .title(tr("listen"))
+            .subtitle(tr("listen-subtitle"))
             .show_enable_switch(true)
             .build(),
         listen_volume: slider(&listen_volume()),
         keep_listen: adw::SwitchRow::builder()
-            .title("Keep Listening")
-            .subtitle(
-                "Listens again after a restart. The microphone stays in use and the filter runs \
-                 all the time.",
-            )
+            .title(tr("keep-listening"))
+            .subtitle(tr("keep-listening-subtitle"))
             .build(),
-        input_level: meter_row("Microphone", help::INPUT_LEVEL, Some(&toasts)),
-        output_level: meter_row("Voice Filter", help::OUTPUT_LEVEL, None),
+        input_level: meter_row(&tr("level-input"), help::INPUT_LEVEL, Some(&toasts)),
+        output_level: meter_row(&tr("level-output"), help::OUTPUT_LEVEL, None),
         running: Cell::new(false),
         frames: Cell::new(0),
         noisy_polls: Cell::new(0),
-        latency: status_row("Latency", help::LATENCY),
+        latency: status_row(&tr("latency"), help::LATENCY),
         processing,
         processing_table,
-        dropouts: status_row("Dropouts Since the Start", help::DROPOUTS),
+        dropouts: status_row(&tr("dropouts"), help::DROPOUTS),
         updating: Cell::new(false),
         proxy: RefCell::new(None),
         defaults: RefCell::new(Vec::new()),
@@ -220,21 +190,23 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         }
         group
     };
-    let volume_row = adw::ActionRow::builder().title("Volume").build();
+    let volume_row = adw::ActionRow::builder().title(tr("listen-volume")).build();
     volume_row.add_suffix(&widgets.listen_volume.0);
-    volume_row.add_suffix(&help::button(help::LISTEN_VOLUME));
+    volume_row.add_suffix(&help::button(&tr(help::LISTEN_VOLUME)));
     widgets.listen.add_row(&volume_row);
     widgets.listen.add_row(&widgets.keep_listen);
     // not a SwitchRow: its switch would come after the info button
     widgets.enabled_row.add_suffix(&widgets.enabled);
-    widgets.enabled_row.add_suffix(&help::button(help::FILTER));
+    widgets
+        .enabled_row
+        .add_suffix(&help::button(&tr(help::FILTER)));
     widgets
         .enabled_row
         .set_activatable_widget(Some(&widgets.enabled));
     let page = adw::PreferencesPage::new();
     page.add(&group(
-        "Input",
-        Some("The filter reads from this microphone, apps read from “Voice Filter”."),
+        &tr("group-input"),
+        Some(&tr("group-input-description")),
         &[
             widgets.enabled_row.upcast_ref(),
             widgets.input.upcast_ref(),
@@ -242,7 +214,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         ],
     ));
     page.add(&group(
-        "Levels",
+        &tr("group-levels"),
         None,
         &[
             widgets.input_level.0.upcast_ref(),
@@ -253,7 +225,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         page.add(stage_group);
     }
     page.add(&group(
-        "Status",
+        &tr("group-status"),
         None,
         &[
             widgets.latency.upcast_ref(),
@@ -272,7 +244,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     toolbar.set_content(Some(&toasts));
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Voice Filter")
+        .title(tr("window-title"))
         .default_width(600)
         .default_height(720)
         .content(&toolbar)
@@ -315,7 +287,7 @@ fn meter_row(
         row.add_suffix(&copy_button(toasts, subtitle_of(&row)));
     }
     row.add_suffix(&bar);
-    row.add_suffix(&help::button(help));
+    row.add_suffix(&help::button(&tr(help)));
     (row, bar)
 }
 
@@ -336,7 +308,7 @@ fn copy_button(
 ) -> gtk::Button {
     let button = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
-        .tooltip_text("Copy")
+        .tooltip_text(tr("copy"))
         .valign(gtk::Align::Center)
         .build();
     button.add_css_class("flat");
@@ -347,7 +319,7 @@ fn copy_button(
         };
         button.clipboard().set_text(&text);
         if let Some(toasts) = toasts.upgrade() {
-            toasts.add_toast(adw::Toast::builder().title("Copied").timeout(2).build());
+            toasts.add_toast(adw::Toast::builder().title(tr("copied")).timeout(2).build());
         }
     });
     button
@@ -391,14 +363,14 @@ fn show_levels(widgets: &Widgets, status: &Status) {
     };
     widgets.noisy_polls.set(noisy_polls);
     let subtitle = if !running {
-        "Not running: no app records from “Voice Filter”".to_owned()
-    } else if noisy_polls >= NOISY_POLLS {
-        format!(
-            "Background noise at {floor:.0} dBFS, very loud: the noise suppression leaves a hiss. \
-             Lower the microphone boost, if it's up, or use a headset"
-        )
+        tr("input-not-running")
     } else {
-        format!("Background noise at {floor:.0} dBFS")
+        let id = if noisy_polls >= NOISY_POLLS {
+            "input-noise-loud"
+        } else {
+            "input-noise"
+        };
+        tr_args(id, &[("floor", format!("{floor:.0}").into())])
     };
     show_value(&widgets.input_level.0, &subtitle);
 }
@@ -523,14 +495,11 @@ fn main_menu(widgets: &Rc<Widgets>, window: &adw::ApplicationWindow) -> gtk::Men
     action.connect_activate(move |_, _| {
         let dialog = adw::MessageDialog::new(
             parent.upgrade().as_ref(),
-            Some("Reset the Filter?"),
-            Some(
-                "Switches all stages on and sets their settings to the defaults. The microphone \
-                 and the speakers stay as they are.",
-            ),
+            Some(&tr("reset-heading")),
+            Some(&tr("reset-body")),
         );
-        dialog.add_response("cancel", "_Cancel");
-        dialog.add_response("reset", "_Reset");
+        dialog.add_response("cancel", &tr("reset-cancel"));
+        dialog.add_response("reset", &tr("reset-confirm"));
         dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
@@ -552,10 +521,10 @@ fn main_menu(widgets: &Rc<Widgets>, window: &adw::ApplicationWindow) -> gtk::Men
     });
     window.add_action(&action);
     let menu = gio::Menu::new();
-    menu.append(Some("_Reset the Filter…"), Some("win.reset"));
+    menu.append(Some(&tr("menu-reset")), Some("win.reset"));
     gtk::MenuButton::builder()
         .icon_name("open-menu-symbolic")
-        .tooltip_text("Main Menu")
+        .tooltip_text(tr("main-menu"))
         .primary(true)
         .menu_model(&menu)
         .build()
@@ -705,35 +674,35 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
         group.remove(&row);
     }
     let mut stages = Vec::new();
-    for ((_, _, names), group) in GROUPS.iter().zip(&widgets.groups) {
+    for ((_, names), group) in GROUPS.iter().zip(&widgets.groups) {
         for name in *names {
             if !status.stages.iter().any(|(stage, _)| stage == name) {
                 continue;
             }
-            let title = STAGES
-                .iter()
-                .find(|(stage, _)| stage == name)
-                .map_or(*name, |(_, title)| title);
+            let title = stage_title(name);
             let params: Vec<&Parameter> = status
                 .parameters
                 .iter()
                 .filter(|param| param.stage == *name)
                 .collect();
             let row = adw::ExpanderRow::builder()
-                .title(title)
+                .title(title.as_str())
                 .show_enable_switch(true)
                 .build();
             if let Some(text) = help::stage(name) {
-                row.add_row(&help::text_row(text));
+                row.add_row(&help::text_row(&text));
             }
             let scales = params
                 .iter()
                 .map(|param| {
                     let (slider, scale) = scale(&weak, param);
-                    let param_row = adw::ActionRow::builder().title(&param.title).build();
+                    // the daemon's title is English, the window's in the user's language
+                    let param_title = lookup(&format!("param-{name}-{}", param.name), &[])
+                        .unwrap_or_else(|| param.title.clone());
+                    let param_row = adw::ActionRow::builder().title(param_title).build();
                     param_row.add_suffix(&slider);
                     if let Some(text) = help::param(name, &param.name) {
-                        param_row.add_suffix(&help::button(text));
+                        param_row.add_suffix(&help::button(&text));
                     }
                     row.add_row(&param_row);
                     (param.name.clone(), scale)
@@ -749,12 +718,14 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
                 .map(|param| (name.to_string(), param.name.clone(), param.default))
                 .collect::<Vec<_>>();
             let reset_button = gtk::Button::builder()
-                .label("Reset")
+                .label(tr("reset"))
                 .valign(gtk::Align::Center)
                 .build();
             let weak_reset = weak.clone();
             reset_button.connect_clicked(move |_| reset(&weak_reset, Vec::new(), defaults.clone()));
-            let reset_row = adw::ActionRow::builder().title("Default Settings").build();
+            let reset_row = adw::ActionRow::builder()
+                .title(tr("default-settings"))
+                .build();
             reset_row.add_suffix(&reset_button);
             row.add_row(&reset_row);
             let (weak, name) = (weak.clone(), *name);
@@ -801,8 +772,9 @@ async fn poll(widgets: Rc<Widgets>) {
     let connection = match ::zbus::Connection::session().await {
         Ok(connection) => connection,
         Err(err) => {
-            widgets.missing.set_description(Some(&format!(
-                "Could not connect to the session bus: {err}"
+            widgets.missing.set_description(Some(&tr_args(
+                "missing-no-bus",
+                &[("error", err.to_string().into())],
             )));
             return;
         }
@@ -815,9 +787,10 @@ async fn poll(widgets: Rc<Widgets>) {
     {
         Ok(proxy) => proxy,
         Err(err) => {
-            widgets
-                .missing
-                .set_description(Some(&format!("Could not create the proxy: {err}")));
+            widgets.missing.set_description(Some(&tr_args(
+                "missing-no-proxy",
+                &[("error", err.to_string().into())],
+            )));
             return;
         }
     };
@@ -841,19 +814,19 @@ async fn poll(widgets: Rc<Widgets>) {
 /// so the row shows what the filter waits for.
 fn show_devices(widgets: &Widgets, device: Device, status: &Status) {
     let (devices, chosen, default) = match device {
-        Device::Input => (&status.inputs, &status.input, "Default Input"),
-        Device::Output => (&status.outputs, &status.output, "Default Output"),
+        Device::Input => (&status.inputs, &status.input, tr("default-input")),
+        Device::Output => (&status.outputs, &status.output, tr("default-output")),
     };
     let (row, known) = device.picker(widgets);
     let mut names = vec![String::new()];
-    let mut labels = vec![default.to_owned()];
+    let mut labels = vec![default];
     for (name, description, _) in devices {
         names.push(name.clone());
         labels.push(description.clone());
     }
     if !names.contains(chosen) {
         names.push(chosen.clone());
-        labels.push(format!("{chosen} (unplugged)"));
+        labels.push(tr_args("unplugged", &[("device", chosen.clone().into())]));
     }
     if *known.borrow() != names {
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
@@ -876,22 +849,28 @@ fn show_echo(widgets: &Widgets, status: &Status) {
     let value = |name: &str| status.echo.get(name).copied();
     let (Some(capture), Some(reference)) = (value("capture-frames"), value("reference-frames"))
     else {
-        show_value(&widgets.echo_status, "Not in the chain");
+        show_value(&widgets.echo_status, &tr("echo-not-in-chain"));
         return;
     };
     let (last_capture, last_reference) = widgets.echo_frames.replace((capture, reference));
     let level = value("reference").unwrap_or(-120.);
     let subtitle = if capture == last_capture {
-        "Not running: switched off, or no app records from “Voice Filter”".to_owned()
+        tr("echo-not-running")
     } else if reference == last_reference || level < -60. {
-        "The speakers are silent, there's no echo to remove".to_owned()
+        tr("echo-silent")
     } else {
         // AEC3 estimates in blocks of 4 ms
         let delay = match value("delay").unwrap_or_default() {
-            delay if delay < 4. => "less than 4 ms".to_owned(),
-            delay => format!("about {delay:.0} ms"),
+            delay if delay < 4. => tr("echo-delay-short"),
+            delay => tr_args("echo-delay", &[("delay", format!("{delay:.0}").into())]),
         };
-        format!("Hears the speakers at {level:.0} dBFS, their echo comes back after {delay}")
+        tr_args(
+            "echo-hears",
+            &[
+                ("level", format!("{level:.0}").into()),
+                ("delay", delay.into()),
+            ],
+        )
     };
     show_value(&widgets.echo_status, &subtitle);
 }
@@ -937,15 +916,20 @@ fn show(widgets: &Widgets, status: &Status) {
     }
     widgets.updating.set(false);
 
-    let ms = |part: &str| status.latency.get(part).copied().unwrap_or_default();
+    let ms = |part: &str| {
+        let ms = status.latency.get(part).copied().unwrap_or_default();
+        FluentValue::from(format!("{ms:.1}"))
+    };
     show_value(
         &widgets.latency,
-        &format!(
-            "{:.1} ms until the app: microphone {:.1}, buffer {:.1}, processing {:.1}",
-            ms("total"),
-            ms("microphone"),
-            ms("bridge"),
-            ms("chain"),
+        &tr_args(
+            "latency-value",
+            &[
+                ("total", ms("total")),
+                ("microphone", ms("microphone")),
+                ("bridge", ms("bridge")),
+                ("chain", ms("chain")),
+            ],
         ),
     );
     show_processing(widgets, status);
@@ -954,17 +938,25 @@ fn show(widgets: &Widgets, status: &Status) {
     let count_ms = |name: &str| samples_ms(count(name) as f64);
     show_value(
         &widgets.dropouts,
-        &format!(
-            "{:.0} ms of silence, {:.0} ms dropped, {} errors",
-            count_ms("silence"),
-            count_ms("dropped"),
-            count("errors"),
+        &tr_args(
+            "dropouts-value",
+            &[
+                ("silence", format!("{:.0}", count_ms("silence")).into()),
+                ("dropped", format!("{:.0}", count_ms("dropped")).into()),
+                // a number, for the plural
+                ("errors", count("errors").into()),
+            ],
         ),
     );
 }
 
-/// The columns of the table of the processing time, after the part.
-const PROCESSING_COLUMNS: [&str; 4] = ["Mean", "95 %", "99 %", "Longest"];
+/// The columns of the table of the processing time, after the part: the ids of their titles.
+const PROCESSING_COLUMNS: [&str; 4] = [
+    "processing-mean",
+    "processing-p95",
+    "processing-p99",
+    "processing-longest",
+];
 
 /// The table the row of the processing time expands to, a row per part.
 struct ProcessingTable {
@@ -980,14 +972,14 @@ struct ProcessingTable {
 /// The row of the processing time: a summary, expanding to a table of the parts with a column
 /// each for mean, percentiles and the longest; the copy button copies the table as text.
 fn processing_row(toasts: &adw::ToastOverlay) -> (adw::ExpanderRow, ProcessingTable) {
-    let row = adw::ExpanderRow::builder().title("Processing Time").build();
+    let row = adw::ExpanderRow::builder().title(tr("processing")).build();
     let grid = gtk::Grid::builder()
         .column_spacing(18)
         .row_spacing(6)
         .build();
     for (column, title) in PROCESSING_COLUMNS.into_iter().enumerate() {
         let label = gtk::Label::builder()
-            .label(title)
+            .label(tr(title))
             .xalign(1.)
             .css_classes(["caption-heading", "dim-label"])
             .build();
@@ -1015,7 +1007,7 @@ fn processing_row(toasts: &adw::ToastOverlay) -> (adw::ExpanderRow, ProcessingTa
     footer.append(&copy_button(toasts, move || Some(copied.borrow().clone())));
     content.append(&grid);
     content.append(&footer);
-    row.add_row(&help::text_row(help::PROCESSING));
+    row.add_row(&help::text_row(&tr(help::PROCESSING)));
     row.add_row(
         &gtk::ListBoxRow::builder()
             .activatable(false)
@@ -1033,14 +1025,11 @@ fn processing_row(toasts: &adw::ToastOverlay) -> (adw::ExpanderRow, ProcessingTa
 }
 
 /// The title of a part of the processing time.
-fn part_title(part: &str) -> &str {
+fn part_title(part: &str) -> String {
     match part {
-        "total" => "All stages",
-        "other" => "Other stages",
-        part => STAGES
-            .iter()
-            .find(|(stage, _)| *stage == part)
-            .map_or(part, |(_, title)| title),
+        "total" => tr("processing-all"),
+        "other" => tr("processing-other"),
+        part => stage_title(part),
     }
 }
 
@@ -1078,7 +1067,11 @@ fn show_processing(widgets: &Widgets, status: &Status) {
             rows.push((part.clone(), title, values));
         }
     }
-    let mut text = format!("Per 10 ms frame in ms: {}", PROCESSING_COLUMNS.join(", "));
+    let columns: Vec<String> = PROCESSING_COLUMNS.iter().map(|id| tr(id)).collect();
+    let mut text = tr_args(
+        "processing-copied",
+        &[("columns", columns.join(", ").into())],
+    );
     for ((_, _, labels), (part, mean, p95, p99, max)) in rows.iter().zip(&status.frame_times) {
         let values = [mean, p95, p99, max].map(|ms| format!("{ms:.2}"));
         for (label, value) in labels.iter().zip(&values) {
@@ -1086,7 +1079,7 @@ fn show_processing(widgets: &Widgets, status: &Status) {
         }
         text += &format!("\n{}: {}", part_title(part), values.join(", "));
     }
-    let cycle = format!("{} samples per cycle", status.quantum);
+    let cycle = tr_args("processing-cycle", &[("samples", status.quantum.into())]);
     table.cycle.set_label(&cycle);
     *table.text.borrow_mut() = format!("{text}\n{cycle}");
     let total = status
@@ -1096,9 +1089,13 @@ fn show_processing(widgets: &Widgets, status: &Status) {
         .filter(|(.., max)| *max > 0.);
     widgets.processing.set_subtitle(&match total {
         Some((_, mean, .., max)) => {
-            format!("{mean:.2} ms per 10 ms frame, longest {max:.2} ms")
+            let (mean, max) = (format!("{mean:.2}"), format!("{max:.2}"));
+            tr_args(
+                "processing-summary",
+                &[("mean", mean.into()), ("max", max.into())],
+            )
         }
-        None => "Nothing processed in the last 10 seconds".to_owned(),
+        None => tr("processing-nothing"),
     });
 }
 

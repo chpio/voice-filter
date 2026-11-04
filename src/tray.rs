@@ -15,6 +15,7 @@ use ::ksni::blocking::{Handle, TrayMethods as _};
 use ::ksni::menu::{CheckmarkItem, StandardItem};
 use ::ksni::{Category, MenuItem, OfflineReason, ToolTip};
 
+use crate::i18n::tr;
 use crate::settings;
 
 /// The icons, by the names the app ID gives them; `voice-filter install-desktop` installs them
@@ -106,7 +107,7 @@ impl ::ksni::Tray for Tray {
     }
 
     fn title(&self) -> String {
-        "Voice Filter".into()
+        tr("tray-title")
     }
 
     fn category(&self) -> Category {
@@ -122,14 +123,10 @@ impl ::ksni::Tray for Tray {
     }
 
     fn tool_tip(&self) -> ToolTip {
-        let description = if self.is_on() {
-            "On"
-        } else {
-            "Off: the microphone passes unfiltered"
-        };
+        let description = tr(if self.is_on() { "tray-on" } else { "tray-off" });
         ToolTip {
-            title: "Voice Filter".into(),
-            description: description.into(),
+            title: tr("tray-title"),
+            description,
             ..Default::default()
         }
     }
@@ -141,7 +138,7 @@ impl ::ksni::Tray for Tray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut menu = vec![
             CheckmarkItem {
-                label: "Filter".into(),
+                label: tr("tray-filter"),
                 checked: self.is_on(),
                 activate: Box::new(|tray: &mut Self| tray.set(!tray.is_on())),
                 ..Default::default()
@@ -152,7 +149,7 @@ impl ::ksni::Tray for Tray {
             menu.push(MenuItem::Separator);
             menu.push(
                 StandardItem {
-                    label: "Open Voice Filter".into(),
+                    label: tr("tray-open"),
                     activate: Box::new(|tray: &mut Self| tray.open_app()),
                     ..Default::default()
                 }

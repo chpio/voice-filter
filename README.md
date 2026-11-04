@@ -188,6 +188,9 @@ filter, and the icon shows whether it's on (the microphone between noise and a c
 most other desktops show it as they are; GNOME Shell needs the extension “AppIndicator and
 KStatusNotifierItem Support” (on Arch `gnome-shell-extension-appindicator`).
 
+The app and the icon in the tray speak the language of the desktop (`LANG`, `LANGUAGE`), English
+where there's no translation; translations are in `i18n/`, one Fluent file per language.
+
 The info button at the end of a row explains what the setting or the status value means; an
 expanding row (a stage, the processing time) explains itself as the first line inside. The status
 values (latency, processing time, dropouts, the echo cancellation's status and the background noise)
