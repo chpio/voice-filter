@@ -10,9 +10,9 @@
 REFERENCE is the trace the pauses and the speech are taken from (its input) and what the others
 lose speech against, e.g. the chain as it is; the others are variants on the same recording. A
 frame is a pause where the median input level within ±150 ms is less than 8 dB above the noise
-floor (the quietest frame within ±1 s), speech where it's more than 20 dB above it. Noise in a
-pause: an output frame above −60 dBFS; speech lost: a speech frame that comes out below −45 dBFS
-while the reference keeps it above −30 dBFS.
+floor (the quietest frame within ±1 s), speech where it's more than 20 dB above it
+(`--speech-above`). Noise in a pause: an output frame above −60 dBFS; speech lost: a speech frame
+that comes out below −45 dBFS while the reference keeps it above −30 dBFS.
 """
 
 import argparse
@@ -65,6 +65,12 @@ def main():
     parser.add_argument("reference")
     parser.add_argument("others", nargs="*")
     parser.add_argument("--events", type=int, default=0, help="list the loudest noise in pauses")
+    parser.add_argument(
+        "--speech-above",
+        type=float,
+        default=SPEECH_ABOVE_FLOOR_DB,
+        help="dB above the noise floor a speech frame lies (for a noisy microphone, e.g. 12)",
+    )
     args = parser.parse_args()
 
     reference, output = load(args.reference)
@@ -72,7 +78,7 @@ def main():
     floor = rolling(np.min, level, 200)
     median = rolling(np.median, level, 31)
     pause = median < floor + PAUSE_ABOVE_FLOOR_DB
-    speech = median > floor + SPEECH_ABOVE_FLOOR_DB
+    speech = median > floor + args.speech_above
     kept = reference[output] > KEPT_DB
     print(f"{len(level)} frames: pauses {pause.mean() * 100:.0f} %, speech {speech.mean() * 100:.0f} %")
     names = [args.reference] + args.others

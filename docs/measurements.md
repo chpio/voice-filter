@@ -5,7 +5,7 @@ were measured, so they can be repeated. The decisions themselves are in the [con
 
 **Contents:** [Method](#method) · [Skipping frames](#skipping-frames-by-the-estimated-snr) ·
 [Low-latency variant](#low-latency-variant) · [High-pass and input level](#high-pass-and-input-level)
-· [Zero mask](#zero-mask) · [Open](#open)
+· [Zero mask](#zero-mask) · [Steady tones](#steady-tones) · [Open](#open)
 
 ## Method
 
@@ -30,8 +30,10 @@ were measured, so they can be repeated. The decisions themselves are in the [con
 **Repeating them:** `examples/batch.rs` runs every file of a directory through the chain or some of
 its stages (`--only`, `--off`, `--set`, `--thresholds` for the skipping), each with a fresh state,
 `scripts/score.py` scores the outputs against the clean files, `examples/trace.rs` traces a
-recording per frame and `scripts/trace_stats.py` takes the pauses, the noise in them and the lost
-speech from traces:
+recording per frame (`--thresholds` too) and `scripts/trace_stats.py` takes the pauses, the noise in
+them and the lost speech from traces (`--speech-above 12` for a noisy microphone, whose speech lies
+less than 20 dB above its noise floor); `scripts/tones.py` finds steady tones in a recording and
+writes a copy without them (`--remove`):
 
 ```bash
 # the Python packages, once (or `uv run scripts/score.py …`, which reads them from the script)
@@ -145,6 +147,62 @@ Without the zeros the fan noise of the built-in microphone came through, the exp
 criterion (−50 dBFS) kept it open; with them 17.8 % of its speech frames were muted, without 6.7 %.
 On the USB microphone the zeros hardly matter.
 
+Again with the chain as it is now (2026-11-04: the high-pass first, `denoise` raising its input,
+echo on without a reference), `trace --interval 0.01`, the zeros dropped with `--thresholds
+-100,1000,1000`, `trace_stats.py --speech-above 12` against the chain without the zeros; *speech
+quiet* are the speech frames that come out below −45 dBFS (which *speech lost* only counts where
+the reference keeps them above −30 dBFS, never here):
+
+| Built-in microphone                         | noise in pauses | median | speech lost | speech quiet |
+| ------------------------------------------- | --------------: | -----: | ----------: | -----------: |
+| fans, a minute of silence: with the zeros   |           4.9 % |  −120 |       0.0 % |       18.4 % |
+| without them                                |          74.4 % |  −44.9 |       0.0 % |        9.6 % |
+| without them, expander `level` −45 dBFS     |          66.0 % |  −44.9 |       0.0 % |        9.6 % |
+| without them, expander `level` −40 dBFS     |           8.9 % |  −64.7 |       0.0 % |       18.0 % |
+| the call (20 min): with the zeros           |           1.4 % |  −120 |       0.9 % |        8.0 % |
+| without them                                |          72.1 % |  −50.1 |       0.0 % |        4.3 % |
+| without them, expander `level` −45 dBFS     |          47.1 % |  −66.0 |       0.0 % |        4.4 % |
+| without them, expander `level` −40 dBFS     |          18.7 % |  −69.0 |       0.0 % |        4.8 % |
+
+Without the zeros the model lets broadband noise through, turned down, which the AGC and the
+compressor raise again and the expander's level criterion keeps open (the estimate stays at −13
+to −14 dB in the pauses, see [Steady tones](#steady-tones)). With the expander opening only above
+−40 dBFS the pauses of the fans go about as quiet as with the zeros, but as much speech comes out
+quiet; on the call it keeps the speech of the chain without the zeros and leaves 18.7 % of the
+pause frames above −60 dBFS. Not listened to yet.
+
+## Steady tones
+
+Whether a filter for steady tones before the noise suppression is needed: the built-in microphone
+sits next to the laptop's fans, and before the high-pass moved first, DeepFilterNet3's estimate rose
+to about 0 dB after 10 s of a pause and let their tones through (see the concept, "Tones"). Found
+with `scripts/tones.py` (spectra of 8192 samples every 100 ms, a tone more than 12 dB above the
+median within ±100 Hz):
+
+- *Fans:* on two recordings of the built-in microphone 6–9 tones between 1.06 and 1.68 kHz, 13–22 dB
+  above the noise around them, at −62 to −71 dBFS (pauses at −51 dBFS), in the pauses and in the
+  speech alike. Steady within a recording (moving about 1 Hz per 100 ms, the median per 10 s within
+  ±1 Hz over 100 s), not between them (1559 and 1670 Hz on one, 1506 and 1623 Hz on the other).
+  On the call (20 min, pauses at −44 dBFS) none: its noise is broadband.
+- *Electrical:* exact multiples of 833.3 Hz (2.5, 4.17, 5, 6.67, 7.5, 8.33, 10 kHz) on the first
+  two recordings, of 1 kHz (7, 8, 10, 11 kHz) on the call, at −68 to −88 dBFS, steady to 1 Hz.
+
+Taken out with `tones.py --remove` (notches of Q 30 at every tone of the pauses, zero phase) and
+traced as above, on the recording with the fans:
+
+| Built-in microphone, fans      | noise in pauses | median | estimate > 0 dB |
+| ------------------------------ | --------------: | -----: | --------------: |
+| with the zeros                 |           4.9 % |  −120 |           2.0 % |
+| with the zeros, tones removed  |           5.0 % |  −120 |           1.8 % |
+| without them                   |          74.4 % |  −44.9 |           2.0 % |
+| without them, tones removed    |          74.4 % |  −44.7 |           1.8 % |
+
+The estimate in the minute of silence (20–85 s) averages −13.6 dB with the tones and without, 19 of
+its 6500 frames above 0 dB in both. On the call the same (1.4 and 1.5 %, 72.1 and 72.0 %). With the
+high-pass first and the input gain the tones don't open the model anymore; what comes through
+without the zeros is broadband (the eight strongest tones are 1–2 % of the power of its pauses, of
+the raw microphone's 11–14 %).
+
 ## Denormals
 
 In a pause `denoise` puts out exact zeros. The EQ's memory decays through the denormals of f32
@@ -242,6 +300,7 @@ machine, so only the comparison counts): `denoise` 221, 229 and 225 µs per fram
 
 ## Open
 
-- The zero mask: measure again with the high-pass first and the input gain, and listen.
+- The zero mask: measured again (above), still to be listened to, with the expander's `level` at
+  −40 dBFS too.
 - A high-pass between 40 and 80 Hz in front, which may cost less on VoiceBank-DEMAND and still keep
   the rumble from the model.
