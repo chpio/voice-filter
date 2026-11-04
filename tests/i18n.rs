@@ -174,6 +174,7 @@ fn falls_back_to_english() {
     assert_eq!(i18n::negotiate(&["en-US".to_owned()]), "en");
     assert_eq!(i18n::negotiate(&["de-DE".to_owned()]), "de");
     assert_eq!(i18n::negotiate(&["es-MX".to_owned()]), "es");
+    assert_eq!(i18n::negotiate(&["fr-CA".to_owned()]), "fr");
     assert_eq!(
         i18n::negotiate(&["de-AT".to_owned(), "en".to_owned()]),
         "de"
@@ -188,4 +189,36 @@ fn joins_lines_and_keeps_paragraphs() {
         i18n::paragraphs("One line\n  goes on.\n\nA second."),
         "One line goes on.\n\nA second."
     );
+}
+
+/// The plural of the errors shows the count in every language, also for 0 (French counts 0 as
+/// one).
+#[test]
+fn the_plurals_show_the_count() {
+    for (language, ftl) in LOCALES {
+        let bundle = i18n::bundle(language, ftl).unwrap();
+        let pattern = bundle
+            .get_message("dropouts-value")
+            .unwrap()
+            .value()
+            .unwrap();
+        for errors in [0u64, 1, 2, 17] {
+            let mut args = ::fluent_bundle::FluentArgs::new();
+            args.set("silence", "5");
+            args.set("dropped", "6");
+            args.set("errors", errors);
+            let mut problems = Vec::new();
+            let text = bundle.format_pattern(pattern, Some(&args), &mut problems);
+            assert!(problems.is_empty(), "{language}: {problems:?}");
+            let numbers: Vec<&str> = text
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|number| !number.is_empty())
+                .collect();
+            assert_eq!(
+                numbers,
+                ["5", "6", &errors.to_string()],
+                "{language}, {errors} errors: {text}"
+            );
+        }
+    }
 }

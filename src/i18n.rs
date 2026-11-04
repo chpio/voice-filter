@@ -17,10 +17,11 @@ use ::unic_langid::LanguageIdentifier;
 pub const FALLBACK: &str = "en";
 
 /// The translations, by language: add a line for a new one.
-pub const LOCALES: [(&str, &str); 3] = [
+pub const LOCALES: [(&str, &str); 4] = [
     ("en", include_str!("../i18n/en.ftl")),
     ("de", include_str!("../i18n/de.ftl")),
     ("es", include_str!("../i18n/es.ftl")),
+    ("fr", include_str!("../i18n/fr.ftl")),
 ];
 
 struct Texts {
