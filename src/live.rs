@@ -59,7 +59,12 @@ pub struct Devices<'a> {
 
 /// Shows the icon in the tray, with the icons written where it finds them and the binary that
 /// opens the app (this one, it has the app built in). `None` if it can't, after saying why.
-fn show_tray(enabled: Arc<AtomicBool>, settings_dir: Option<PathBuf>) -> Option<Handle<Tray>> {
+fn show_tray(
+    enabled: Arc<AtomicBool>,
+    switches: Vec<(&'static str, Arc<AtomicBool>)>,
+    params: Vec<(&'static str, Param)>,
+    settings_dir: Option<PathBuf>,
+) -> Option<Handle<Tray>> {
     let icons = tray::icons_dir(settings_dir.as_deref()).filter(|dir| {
         tray::write_icons(dir)
             .inspect_err(|err| eprintln!("{err:#}"))
@@ -74,6 +79,8 @@ fn show_tray(enabled: Arc<AtomicBool>, settings_dir: Option<PathBuf>) -> Option<
     };
     let tray = Tray {
         enabled,
+        switches,
+        params,
         settings_dir,
         icon_theme_path: icons
             .and_then(|dir| dir.to_str().map(str::to_owned))
@@ -131,15 +138,20 @@ pub fn run(
     let listen_on = keep_listen == Some(true);
     // set once the control interface runs
     let tray = Arc::new(OnceLock::<Handle<Tray>>::new());
-    let tray_settings = (enabled.clone(), settings_dir.clone());
+    let tray_settings = (
+        enabled.clone(),
+        switches.clone(),
+        params.clone(),
+        settings_dir.clone(),
+    );
     // first, so a second instance stops before it creates nodes or shows its icon
     dbus::serve(Service {
         enabled,
-        enabled_changed: Box::new({
+        switched: Box::new({
             let tray = tray.clone();
             move || {
                 if let Some(tray) = tray.get() {
-                    // reads the switch again, updates icon, tooltip and menu
+                    // reads the switches again, updates icon, tooltip and menu
                     tray.update(|_| ());
                 }
             }
@@ -163,7 +175,8 @@ pub fn run(
         listen_volume: listen_volume.clone(),
         settings_dir,
     })?;
-    if let Some(handle) = show_tray(tray_settings.0, tray_settings.1) {
+    let (enabled, switches, params, settings_dir) = tray_settings;
+    if let Some(handle) = show_tray(enabled, switches, params, settings_dir) {
         let _ = tray.set(handle);
     }
 

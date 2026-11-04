@@ -16,7 +16,11 @@ use ::ksni::menu::{CheckmarkItem, StandardItem};
 use ::ksni::{Category, MenuItem, OfflineReason, ToolTip};
 
 use crate::i18n::tr;
+use crate::param::Param;
 use crate::settings;
+
+/// The stage the menu switches besides the whole filter.
+const ECHO: &str = "echo";
 
 /// The icons, by the names the app ID gives them; `voice-filter install-desktop` installs them
 /// into the icon theme too.
@@ -36,7 +40,12 @@ pub const ICONS: [(&str, &str); 2] = [
 pub struct Tray {
     /// The switch of the whole filter, see [`crate::chain::Chain::enabled`].
     pub enabled: Arc<AtomicBool>,
-    /// Where switching it is kept for the next runs.
+    /// The switches of the stages, as `Chain::switches` gives them; the menu switches the echo
+    /// cancellation (if the chain has it) and keeps them with the parameters, as the control
+    /// interface does.
+    pub switches: Vec<(&'static str, Arc<AtomicBool>)>,
+    pub params: Vec<(&'static str, Param)>,
+    /// Where switching is kept for the next runs.
     pub settings_dir: Option<PathBuf>,
     /// A directory with the icons (see [`write_icons`]), for hosts that look there first; empty
     /// if there's none.
@@ -48,6 +57,27 @@ pub struct Tray {
 impl Tray {
     pub fn is_on(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// The switch of the echo cancellation, if the chain has it.
+    pub fn echo(&self) -> Option<&Arc<AtomicBool>> {
+        self.switches
+            .iter()
+            .find(|(stage, _)| *stage == ECHO)
+            .map(|(_, enabled)| enabled)
+    }
+
+    /// Switches the echo cancellation and keeps the stages, as the control interface does.
+    pub fn set_echo(&mut self, on: bool) {
+        let Some(echo) = self.echo() else {
+            return;
+        };
+        echo.store(on, Ordering::Relaxed);
+        if let Some(dir) = &self.settings_dir
+            && let Err(err) = settings::save_chain(dir, &self.switches, &self.params)
+        {
+            eprintln!("{err:#}");
+        }
     }
 
     /// Switches the filter and keeps it, as the control interface does.
@@ -145,6 +175,22 @@ impl ::ksni::Tray for Tray {
             }
             .into(),
         ];
+        if let Some(echo) = self.echo() {
+            menu.push(
+                CheckmarkItem {
+                    label: tr("stage-echo"),
+                    checked: echo.load(Ordering::Relaxed),
+                    // its own switch, which counts while the filter is on
+                    enabled: self.is_on(),
+                    activate: Box::new(|tray: &mut Self| {
+                        let on = tray.echo().is_some_and(|echo| echo.load(Ordering::Relaxed));
+                        tray.set_echo(!on);
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
         if self.app.is_some() {
             menu.push(MenuItem::Separator);
             menu.push(

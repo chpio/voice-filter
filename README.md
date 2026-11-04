@@ -184,8 +184,9 @@ in `~/.local/share/icons/hicolor/symbolic/apps/`; delete them to remove it). In 
   together) and dropouts
 
 `voice-filter run` also shows an icon in the tray: a click opens the app, its menu switches the
-filter, and the icon shows whether it's on (the microphone between noise and a clean wave, as on the app icon, struck through while it's off). KDE and
-most other desktops show it as they are; GNOME Shell needs the extension “AppIndicator and
+filter and the echo cancellation (no echo with headphones), and the icon shows whether it's on (the
+microphone between noise and a clean wave, as on the app icon, struck through while it's off). KDE
+and most other desktops show it as they are; GNOME Shell needs the extension “AppIndicator and
 KStatusNotifierItem Support” (on Arch `gnome-shell-extension-appindicator`).
 
 The app and the icon in the tray speak the language of the desktop (`LANG`, `LANGUAGE`), English

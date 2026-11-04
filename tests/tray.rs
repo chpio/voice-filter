@@ -9,9 +9,12 @@ use ::voice_filter::i18n::tr;
 use ::voice_filter::settings;
 use ::voice_filter::tray::{ICON_OFF, ICON_ON, ICONS, Tray, write_icons};
 
+/// A tray over a chain without an echo cancellation.
 fn tray(settings_dir: Option<PathBuf>, app: Option<&str>) -> Tray {
     Tray {
         enabled: Arc::new(AtomicBool::new(true)),
+        switches: vec![("denoise", Arc::new(AtomicBool::new(true)))],
+        params: Vec::new(),
         settings_dir,
         icon_theme_path: String::new(),
         app: app.map(PathBuf::from),
@@ -52,6 +55,54 @@ fn the_menu_switches_the_filter_and_keeps_it() {
     click_filter(&mut tray);
     assert!(tray.enabled.load(Ordering::Relaxed));
     assert!(settings::load_enabled(dir.path()).unwrap());
+}
+
+/// The tray of the chain `run` builds.
+fn tray_of_the_chain(settings_dir: Option<PathBuf>) -> Tray {
+    let (chain, _) = ::voice_filter::chain::build(None).unwrap();
+    Tray {
+        enabled: chain.enabled(),
+        switches: chain.switches(),
+        params: chain.params(),
+        ..tray(settings_dir, None)
+    }
+}
+
+#[test]
+fn the_menu_switches_the_echo_cancellation_and_keeps_it() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let mut tray = tray_of_the_chain(Some(dir.path().to_owned()));
+    let echo = tray.echo().unwrap().clone();
+    let click = |tray: &mut Tray| {
+        let menu = tray.menu();
+        let MenuItem::Checkmark(item) = &menu[1] else {
+            panic!("the second entry switches the echo cancellation: {menu:?}");
+        };
+        assert_eq!(item.label, tr("stage-echo"));
+        assert_eq!(item.checked, echo.load(Ordering::Relaxed));
+        (item.activate)(tray);
+    };
+    click(&mut tray);
+    assert!(!echo.load(Ordering::Relaxed));
+    let chain = ::std::fs::read_to_string(dir.path().join("chain")).unwrap();
+    assert_eq!(chain, "echo off\n");
+    click(&mut tray);
+    assert!(echo.load(Ordering::Relaxed));
+    // the filter keeps on while the echo cancellation is switched
+    assert!(tray.enabled.load(Ordering::Relaxed));
+}
+
+#[test]
+fn the_echo_cancellation_waits_for_the_filter() {
+    let tray = tray_of_the_chain(None);
+    tray.enabled.store(false, Ordering::Relaxed);
+    let menu = tray.menu();
+    let MenuItem::Checkmark(item) = &menu[1] else {
+        panic!("{menu:?}");
+    };
+    // its own switch, which only counts while the filter is on
+    assert!(item.checked);
+    assert!(!item.enabled);
 }
 
 #[test]
