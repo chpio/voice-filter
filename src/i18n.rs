@@ -17,12 +17,13 @@ use ::unic_langid::LanguageIdentifier;
 pub const FALLBACK: &str = "en";
 
 /// The translations, by language: add a line for a new one.
-pub const LOCALES: [(&str, &str); 5] = [
+pub const LOCALES: [(&str, &str); 6] = [
     ("en", include_str!("../i18n/en.ftl")),
     ("de", include_str!("../i18n/de.ftl")),
     ("es", include_str!("../i18n/es.ftl")),
     ("fr", include_str!("../i18n/fr.ftl")),
     ("ru", include_str!("../i18n/ru.ftl")),
+    ("zh-Hans", include_str!("../i18n/zh-Hans.ftl")),
 ];
 
 struct Texts {
@@ -81,6 +82,8 @@ pub fn negotiate(requested: &[String]) -> &'static str {
     let requested: Vec<LanguageIdentifier> = requested
         .iter()
         .filter_map(|language| language.parse().ok())
+        // the negotiation would give traditional Chinese the simplified one, gettext doesn't
+        .filter(|language| !is_traditional_chinese(language))
         .collect();
     let available: Vec<LanguageIdentifier> = LOCALES
         .iter()
@@ -100,6 +103,17 @@ pub fn negotiate(requested: &[String]) -> &'static str {
         .iter()
         .find(|(language, _)| *language == chosen)
         .map_or(FALLBACK, |(language, _)| language)
+}
+
+/// Chinese in the traditional script, by its script or by the regions that write it.
+fn is_traditional_chinese(language: &LanguageIdentifier) -> bool {
+    language.language.as_str() == "zh"
+        && (language
+            .script
+            .is_some_and(|script| script.as_str() == "Hant")
+            || language
+                .region
+                .is_some_and(|region| ["TW", "HK", "MO"].contains(&region.as_str())))
 }
 
 fn texts() -> &'static Texts {

@@ -176,6 +176,16 @@ fn falls_back_to_english() {
     assert_eq!(i18n::negotiate(&["es-MX".to_owned()]), "es");
     assert_eq!(i18n::negotiate(&["fr-CA".to_owned()]), "fr");
     assert_eq!(i18n::negotiate(&["ru-RU".to_owned()]), "ru");
+    assert_eq!(i18n::negotiate(&["zh-CN".to_owned()]), "zh-Hans");
+    assert_eq!(i18n::negotiate(&["zh-SG".to_owned()]), "zh-Hans");
+    // traditional Chinese doesn't get the simplified one, as with gettext
+    for traditional in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant"] {
+        assert_eq!(i18n::negotiate(&[traditional.to_owned()]), "en");
+    }
+    assert_eq!(
+        i18n::negotiate(&["zh-TW".to_owned(), "de".to_owned()]),
+        "de"
+    );
     assert_eq!(
         i18n::negotiate(&["de-AT".to_owned(), "en".to_owned()]),
         "de"
@@ -232,8 +242,13 @@ fn the_plurals_show_the_count() {
             let mut problems = Vec::new();
             let text = bundle.format_pattern(pattern, Some(&args), &mut problems);
             assert!(problems.is_empty(), "{language}: {problems:?}");
-            assert!(
-                text.starts_with(&format!("{samples} ")),
+            let numbers: Vec<&str> = text
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|number| !number.is_empty())
+                .collect();
+            assert_eq!(
+                numbers,
+                [samples.to_string()],
                 "{language}, {samples} samples: {text}"
             );
         }
