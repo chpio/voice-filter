@@ -27,6 +27,7 @@ fn service_with(
     };
     Service {
         enabled: Arc::new(AtomicBool::new(true)),
+        enabled_changed: Box::new(|| {}),
         switches: vec![
             ("denoise", Arc::new(AtomicBool::new(true))),
             ("agc", Arc::new(AtomicBool::new(true))),

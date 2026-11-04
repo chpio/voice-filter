@@ -28,6 +28,7 @@ pub mod param;
 pub mod rt_alloc;
 pub mod settings;
 pub mod stage;
+pub mod tray;
 pub mod volume;
 
 /// The sample rate of the whole chain.

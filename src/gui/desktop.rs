@@ -1,6 +1,7 @@
 //! The desktop entry and the icon of the app. GNOME Shell shows the app among the others and
 //! takes the icon of its window from the desktop entry named after its app ID; `cargo install`
-//! only installs the binary, so `voice-filter install-desktop` writes them.
+//! only installs the binary, so `voice-filter install-desktop` writes them, with the symbolic
+//! icons of the tray ([`crate::tray::ICONS`]).
 
 use ::std::fs;
 use ::std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use ::std::process::Command;
 use ::anyhow::{Context as _, Result, anyhow};
 
 use super::APP_ID;
+use crate::tray::ICONS;
 
 const DESKTOP: &str = include_str!("../../data/net.b128.VoiceFilter.desktop");
 const ICON: &str = include_str!("../../data/net.b128.VoiceFilter.svg");
@@ -22,9 +24,9 @@ pub fn data_home() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Neither XDG_DATA_HOME nor HOME is set"))
 }
 
-/// Writes the desktop entry, which starts `exe` by its full path, and the icon into `data_home`;
-/// returns their paths.
-pub fn install(data_home: &Path, exe: &Path) -> Result<[PathBuf; 2]> {
+/// Writes the desktop entry, which starts `exe` by its full path, the icon and the icons of the
+/// tray into `data_home`; returns their paths, the entry and the icon first.
+pub fn install(data_home: &Path, exe: &Path) -> Result<Vec<PathBuf>> {
     let exe = exe
         .to_str()
         .ok_or_else(|| anyhow!("The path {} isn't UTF-8", exe.display()))?;
@@ -41,12 +43,19 @@ pub fn install(data_home: &Path, exe: &Path) -> Result<[PathBuf; 2]> {
     let icon = data_home
         .join("icons/hicolor/scalable/apps")
         .join(format!("{APP_ID}.svg"));
-    for (path, content) in [(&entry, desktop.as_str()), (&icon, ICON)] {
+    let symbolic = data_home.join("icons/hicolor/symbolic/apps");
+    let mut files = vec![(entry, desktop.as_str()), (icon, ICON)];
+    files.extend(
+        ICONS
+            .into_iter()
+            .map(|(name, svg)| (symbolic.join(format!("{name}.svg")), svg)),
+    );
+    for (path, content) in &files {
         let dir = path.parent().expect("a file in a directory");
         fs::create_dir_all(dir).with_context(|| format!("Could not create {}", dir.display()))?;
         fs::write(path, content).with_context(|| format!("Could not write {}", path.display()))?;
     }
-    Ok([entry, icon])
+    Ok(files.into_iter().map(|(path, _)| path).collect())
 }
 
 /// Updates the icon cache of `data_home`'s hicolor theme, if there's a tool for it: with a cache

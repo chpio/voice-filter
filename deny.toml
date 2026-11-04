@@ -18,6 +18,8 @@ allow = [
     "ISC",
     "Apache-2.0 WITH LLVM-exception",
 ]
+# the tray icon's crate, public domain in effect; only for it
+exceptions = [{ name = "ksni", allow = ["Unlicense"] }]
 
 [bans]
 # several versions of one crate are often unavoidable, so they only warn

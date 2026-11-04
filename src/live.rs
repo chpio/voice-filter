@@ -7,11 +7,12 @@ use ::std::cell::{Cell, RefCell};
 use ::std::collections::HashMap;
 use ::std::path::PathBuf;
 use ::std::rc::Rc;
-use ::std::sync::atomic::Ordering;
-use ::std::sync::{Arc, Mutex};
+use ::std::sync::atomic::{AtomicBool, Ordering};
+use ::std::sync::{Arc, Mutex, OnceLock};
 use ::std::time::Duration;
 
 use ::anyhow::{Context as _, Result, anyhow, bail};
+use ::ksni::blocking::Handle;
 use ::pipewire as pw;
 use ::pipewire::loop_::Signal;
 use ::pipewire::properties::properties;
@@ -28,6 +29,7 @@ use crate::frame_time::{WINDOW_SECONDS, Window};
 use crate::param::Param;
 use crate::rt_alloc;
 use crate::settings;
+use crate::tray::{self, Tray};
 use crate::volume::{self, Volume};
 use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
 
@@ -53,6 +55,34 @@ pub struct Devices<'a> {
     /// The `node.name` of the output device whose monitor is the reference of the echo canceller,
     /// without it the default output.
     pub output: Option<&'a str>,
+}
+
+/// Shows the icon in the tray, with the icons written where it finds them and the binary that
+/// opens the app (this one, it has the app built in). `None` if it can't, after saying why.
+fn show_tray(enabled: Arc<AtomicBool>, settings_dir: Option<PathBuf>) -> Option<Handle<Tray>> {
+    let icons = tray::icons_dir(settings_dir.as_deref()).filter(|dir| {
+        tray::write_icons(dir)
+            .inspect_err(|err| eprintln!("{err:#}"))
+            .is_ok()
+    });
+    let app = if cfg!(feature = "gui") {
+        ::std::env::current_exe()
+            .inspect_err(|err| eprintln!("The tray can't open the app: {err}"))
+            .ok()
+    } else {
+        None
+    };
+    let tray = Tray {
+        enabled,
+        settings_dir,
+        icon_theme_path: icons
+            .and_then(|dir| dir.to_str().map(str::to_owned))
+            .unwrap_or_default(),
+        app,
+    };
+    tray::spawn(tray)
+        .inspect_err(|err| eprintln!("{err:#}"))
+        .ok()
 }
 
 /// Runs until SIGINT or SIGTERM. `reference` feeds the echo canceller of the chain with what the
@@ -99,9 +129,21 @@ pub fn run(
         }
     }
     let listen_on = keep_listen == Some(true);
-    // first, so a second instance stops before it creates nodes
+    // set once the control interface runs
+    let tray = Arc::new(OnceLock::<Handle<Tray>>::new());
+    let tray_settings = (enabled.clone(), settings_dir.clone());
+    // first, so a second instance stops before it creates nodes or shows its icon
     dbus::serve(Service {
         enabled,
+        enabled_changed: Box::new({
+            let tray = tray.clone();
+            move || {
+                if let Some(tray) = tray.get() {
+                    // reads the switch again, updates icon, tooltip and menu
+                    tray.update(|_| ());
+                }
+            }
+        }),
         switches,
         params,
         stats: stats.clone(),
@@ -121,6 +163,9 @@ pub fn run(
         listen_volume: listen_volume.clone(),
         settings_dir,
     })?;
+    if let Some(handle) = show_tray(tray_settings.0, tray_settings.1) {
+        let _ = tray.set(handle);
+    }
 
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&mainloop, None)?;

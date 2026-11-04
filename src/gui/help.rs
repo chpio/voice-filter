@@ -201,7 +201,7 @@ const PARAMS: [(&str, &str, &str); 21] = [
 
 pub const FILTER: &str = "Switches the whole filter. Off, apps get the microphone as it is, \
     at the same latency, while each stage keeps its own switch and settings for when it's on \
-    again.";
+    again. The icon in the tray switches it too.";
 
 pub const LISTEN_VOLUME: &str = "How loud you hear yourself. Only for listening: apps get \
     the voice at the level the filter brings it to.";

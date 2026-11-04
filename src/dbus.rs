@@ -36,6 +36,8 @@ pub enum Control {
 pub struct Service {
     /// The switch of the whole filter, see [`crate::chain::Chain::enabled`].
     pub enabled: Arc<AtomicBool>,
+    /// Called after `enabled` changed, to update the icon in the tray.
+    pub enabled_changed: Box<dyn Fn() + Send + Sync>,
     pub switches: Vec<(&'static str, Arc<AtomicBool>)>,
     /// The settings of the stages, with the name of their stage.
     pub params: Vec<(&'static str, Param)>,
@@ -218,6 +220,7 @@ impl Service {
     #[zbus(property)]
     pub fn set_enabled(&mut self, on: bool) -> fdo::Result<()> {
         self.enabled.store(on, Ordering::Relaxed);
+        (self.enabled_changed)();
         self.save(|dir| settings::save_enabled(dir, on))
     }
 

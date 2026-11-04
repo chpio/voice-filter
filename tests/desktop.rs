@@ -7,8 +7,8 @@ use ::voice_filter::gui::desktop;
 #[test]
 fn installs_the_entry_and_the_icon() {
     let dir = ::tempfile::tempdir().unwrap();
-    let [entry, icon] =
-        desktop::install(dir.path(), Path::new("/opt/voice filter/voice-filter")).unwrap();
+    let files = desktop::install(dir.path(), Path::new("/opt/voice filter/voice-filter")).unwrap();
+    let [entry, icon, on, off] = files.try_into().unwrap();
     assert_eq!(
         entry,
         dir.path().join("applications/net.b128.VoiceFilter.desktop")
@@ -26,6 +26,11 @@ fn installs_the_entry_and_the_icon() {
     );
     assert!(entry.contains("\nIcon=net.b128.VoiceFilter\n"), "{entry}");
     assert!(::std::fs::read_to_string(icon).unwrap().starts_with("<svg"));
+    // the symbolic icons of the tray
+    let symbolic = dir.path().join("icons/hicolor/symbolic/apps");
+    assert_eq!(on, symbolic.join("net.b128.VoiceFilter-symbolic.svg"));
+    assert_eq!(off, symbolic.join("net.b128.VoiceFilter-off-symbolic.svg"));
+    assert!(::std::fs::read_to_string(off).unwrap().starts_with("<svg"));
 }
 
 #[test]
@@ -46,7 +51,9 @@ fn glib_reads_the_path_back_from_exec() {
 
     let dir = ::tempfile::tempdir().unwrap();
     let exe = r#"/opt/a "b" $c `d` \e 'f'/voice-filter"#;
-    let [entry, _] = desktop::install(dir.path(), Path::new(exe)).unwrap();
+    let entry = desktop::install(dir.path(), Path::new(exe))
+        .unwrap()
+        .remove(0);
     let file = glib::KeyFile::new();
     file.load_from_file(entry, glib::KeyFileFlags::NONE)
         .unwrap();

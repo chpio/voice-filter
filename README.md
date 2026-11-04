@@ -16,7 +16,7 @@ your voice without the echo of your speakers and the background noise, with a cl
 - **Runs on the CPU**: the whole chain takes about 0.3 % of the CPU (measured on an 8-core Ryzen 7
   8840U: 0.35 ms per 10 ms frame in a single thread, 3–4 % of one core)
 - **Switch and tune everything at runtime** from a GNOME app or over D-Bus, without clicks and
-  without changing the latency
+  without changing the latency; an icon in the tray switches the whole filter and opens the app
 - **Test offline** with WAV files: the same chain, with the latency and processing time of every
   stage
 
@@ -155,9 +155,9 @@ manager can start it again.
 
 `voice-filter ui` controls a running `voice-filter run`. It's a separate process, so closing it
 never interrupts the audio. `voice-filter install-desktop` adds it to the apps of the desktop, with
-its icon (it writes `~/.local/share/applications/net.b128.VoiceFilter.desktop` and
-`~/.local/share/icons/hicolor/scalable/apps/net.b128.VoiceFilter.svg`; delete them to remove it).
-In the app you can:
+its icon (it writes `~/.local/share/applications/net.b128.VoiceFilter.desktop`,
+`~/.local/share/icons/hicolor/scalable/apps/net.b128.VoiceFilter.svg` and the two icons of the tray
+in `~/.local/share/icons/hicolor/symbolic/apps/`; delete them to remove it). In the app you can:
 
 - switch the whole **filter** off and on: off, apps get the microphone as it is, at the same
   latency, and every stage keeps its own switch and settings
@@ -177,6 +177,11 @@ In the app you can:
 - watch the **latency**, the processing time per frame (mean, ~95 %, ~99 % and the longest, of
   all stages, the echo cancellation and the noise suppression on their own and the other stages
   together) and dropouts
+
+`voice-filter run` also shows an icon in the tray: a click opens the app, its menu switches the
+filter, and the icon shows whether it's on (the microphone between noise and a clean wave, as on the app icon, struck through while it's off). KDE and
+most other desktops show it as they are; GNOME Shell needs the extension “AppIndicator and
+KStatusNotifierItem Support” (on Arch `gnome-shell-extension-appindicator`).
 
 The info button on a row explains what the stage, the setting or the status value means. The
 status values (latency, processing time, dropouts, the echo cancellation's status and the
