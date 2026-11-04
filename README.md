@@ -56,7 +56,8 @@ Every stage can be switched off while it runs. A stage that is off is skipped (i
 its input plays instead, delayed by the stage's latency, so the total latency never changes.
 Switching crossfades over one frame, so there are no clicks. The echo cancellation takes a few
 seconds after being switched on until it removes the echo fully again, as it missed what the
-speakers played meanwhile.
+speakers played meanwhile. The whole filter switches off the same way, all stages at once, while
+each stage keeps its own switch for when the filter is on again; kept for the next runs too.
 
 **Latency.** About 56 ms from the microphone to the app with a USB microphone: 8 ms microphone,
 11 ms for turning PipeWire's blocks into 10 ms frames (both measured live) and 37 ms for the chain.
@@ -211,6 +212,7 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                                                            |
 | `KeepListen`      | `b`, read/write      | keeps `Listen` for the next runs (off by default)                                                                   |
 | `ListenVolume`    | `d`, read/write      | the volume of `Listen` in dB, −40 to 0, kept for the next runs                                                      |
+| `Enabled`         | `b`, read/write      | the whole filter on or off (off, the microphone passes as it is), kept for the next runs                            |
 | `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name, kept for the next runs                                                          |
 | `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value                                              |
 | `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range, kept for the next runs                            |
@@ -233,6 +235,7 @@ busctl --user introspect $vf
 busctl --user get-property $vf Parameters
 busctl --user call $vf SetParameter ssd denoise limit 12
 busctl --user call $vf SetStageEnabled sb agc false
+busctl --user set-property $vf Enabled b false
 ```
 
 The interface may still change before 1.0.

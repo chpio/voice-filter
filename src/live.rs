@@ -68,6 +68,7 @@ pub fn run(
     verbose: bool,
 ) -> Result<()> {
     pw::init();
+    let enabled = chain.enabled();
     let switches = chain.switches();
     let params = chain.params();
     let (mut capture, mut playback, stats) = bridge(chain);
@@ -92,10 +93,15 @@ pub fn run(
             Err(err) => eprintln!("Skipped the saved volume of Listen: {err:#}"),
         }
         keep_listen = settings::load_listen(dir)?;
+        match settings::load_enabled(dir) {
+            Ok(on) => enabled.store(on, Ordering::Relaxed),
+            Err(err) => eprintln!("Skipped the saved switch of the filter: {err:#}"),
+        }
     }
     let listen_on = keep_listen == Some(true);
     // first, so a second instance stops before it creates nodes
     dbus::serve(Service {
+        enabled,
         switches,
         params,
         stats: stats.clone(),

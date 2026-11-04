@@ -34,6 +34,8 @@ pub enum Control {
 }
 
 pub struct Service {
+    /// The switch of the whole filter, see [`crate::chain::Chain::enabled`].
+    pub enabled: Arc<AtomicBool>,
     pub switches: Vec<(&'static str, Arc<AtomicBool>)>,
     /// The settings of the stages, with the name of their stage.
     pub params: Vec<(&'static str, Param)>,
@@ -203,6 +205,20 @@ impl Service {
             .set(db as f32)
             .map_err(|err| fdo::Error::InvalidArgs(err.to_string()))?;
         self.save(|dir| settings::save_listen_volume(dir, db as f32))
+    }
+
+    /// Whether the filter is on. Off, every stage is, as if switched off by
+    /// [`Self::set_stage_enabled`] (crossfaded, at the same latency), while [`Self::stages`] keeps
+    /// what each stage's own switch says. Kept for the next runs.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    #[zbus(property)]
+    pub fn set_enabled(&mut self, on: bool) -> fdo::Result<()> {
+        self.enabled.store(on, Ordering::Relaxed);
+        self.save(|dir| settings::save_enabled(dir, on))
     }
 
     /// The stages in the order of the chain and whether they're on.

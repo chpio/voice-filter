@@ -26,6 +26,7 @@ fn service_with(
         priority,
     };
     Service {
+        enabled: Arc::new(AtomicBool::new(true)),
         switches: vec![
             ("denoise", Arc::new(AtomicBool::new(true))),
             ("agc", Arc::new(AtomicBool::new(true))),
@@ -259,6 +260,24 @@ fn keeps_the_stages_and_parameters() {
         ::std::fs::read_to_string(dir.path().join("chain")).unwrap(),
         "\n"
     );
+}
+
+#[test]
+fn switches_the_whole_filter_and_keeps_it() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let mut service = service_with(Arc::default(), Some(dir.path().to_owned()));
+    assert!(service.enabled());
+    service.set_enabled(false).unwrap();
+    assert!(!service.enabled.load(Ordering::Relaxed));
+    assert!(!settings::load_enabled(dir.path()).unwrap());
+    // the stages keep their own switches
+    assert_eq!(
+        service.stages(),
+        [("denoise".to_owned(), true), ("agc".to_owned(), true)]
+    );
+    service.set_enabled(true).unwrap();
+    assert!(service.enabled());
+    assert!(settings::load_enabled(dir.path()).unwrap());
 }
 
 #[test]

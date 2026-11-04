@@ -61,8 +61,11 @@ pub fn build_with(denoise: Denoise) -> Result<(Chain, Reference)> {
 /// its latency, and switching crossfades over a frame. A switched off stage doesn't process, so it
 /// costs nothing; switched on again, it resumes from its state before, first for
 /// [`Stage::resume_frames`] without being played, so nothing from before the pause is heard.
+/// [`Chain::enabled`] switches all of them off the same way, keeping their own switches.
 pub struct Chain {
     slots: Vec<Slot>,
+    /// Off, every stage is: the whole filter.
+    enabled: Arc<AtomicBool>,
     /// The processing time of the last frame of each stage given to [`Chain::time`], in ns.
     times: Vec<u64>,
 }
@@ -98,8 +101,15 @@ impl Chain {
             .collect();
         Self {
             slots,
+            enabled: Arc::new(AtomicBool::new(true)),
             times: Vec::new(),
         }
+    }
+
+    /// The switch of the whole filter: off, every stage is off as if switched off by its own
+    /// switch (see [`Self::switches`]), which keeps its setting for when it's on again.
+    pub fn enabled(&self) -> Arc<AtomicBool> {
+        self.enabled.clone()
     }
 
     /// Measures the processing time of the stages named `names` on every frame (only of these:
@@ -159,6 +169,7 @@ impl Chain {
 
     /// Runs the frame through the stages, with denormals flushed ([`without_denormals`]).
     pub fn process(&mut self, frame: &mut Frame) -> Result<()> {
+        let enabled = self.enabled.load(Ordering::Relaxed);
         without_denormals(|| {
             // the end of the timed stage before, the start of this one
             let mut clock = None;
@@ -167,14 +178,14 @@ impl Chain {
                     Some(timer) => {
                         // Instant::now goes through the vDSO, no syscall
                         let started = clock.unwrap_or_else(Instant::now);
-                        slot.process(frame)?;
+                        slot.process(frame, enabled)?;
                         let now = Instant::now();
                         self.times[timer] = (now - started).as_nanos() as u64;
                         clock = Some(now);
                     }
                     None => {
                         clock = None;
-                        slot.process(frame)?;
+                        slot.process(frame, enabled)?;
                     }
                 }
             }
@@ -184,8 +195,9 @@ impl Chain {
 }
 
 impl Slot {
-    fn process(&mut self, frame: &mut Frame) -> Result<()> {
-        let enabled = self.enabled.load(Ordering::Relaxed);
+    /// Runs the frame through the stage, which is off if `filter` is.
+    fn process(&mut self, frame: &mut Frame, filter: bool) -> Result<()> {
+        let enabled = filter && self.enabled.load(Ordering::Relaxed);
         if enabled && self.paused {
             self.paused = false;
             self.resuming = self.stage.resume_frames();

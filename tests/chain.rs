@@ -169,6 +169,60 @@ fn switching_on_during_the_resume_frames_starts_them_again() {
 }
 
 #[test]
+fn switches_the_whole_filter_and_keeps_the_switches_of_the_stages() {
+    let processed = [(); 2].map(|_| Arc::new(AtomicUsize::new(0)));
+    let mut chain = Chain::new(
+        processed
+            .iter()
+            .map(|processed| {
+                Box::new(DelayedGain {
+                    buffer: vec![0.; 100],
+                    processed: processed.clone(),
+                }) as Box<dyn Stage>
+            })
+            .collect(),
+    );
+    let filter = chain.enabled();
+    let second = chain.switches()[1].1.clone();
+    let counts = || {
+        processed
+            .each_ref()
+            .map(|count| count.load(Ordering::Relaxed))
+    };
+    // a constant input, so the delayed one is the same
+    let run = |chain: &mut Chain| {
+        let mut frame = [1.; FRAME_LEN];
+        chain.process(&mut frame).unwrap();
+        frame
+    };
+    for _ in 0..3 {
+        run(&mut chain);
+    }
+    assert!(run(&mut chain).iter().all(|&sample| sample == 4.));
+
+    // off: the crossfade frame and one more (the second stage still plays the end of the first
+    // one's crossfade, delayed), then the input as it is, delayed by both stages, which pause
+    second.store(false, Ordering::Relaxed);
+    filter.store(false, Ordering::Relaxed);
+    run(&mut chain);
+    let paused = counts();
+    run(&mut chain);
+    for _ in 0..3 {
+        assert!(run(&mut chain).iter().all(|&sample| sample == 1.));
+    }
+    assert_eq!(counts(), paused);
+    assert_eq!(chain.latency(), 200);
+
+    // on again: only the first stage, as the second one's own switch is still off
+    filter.store(true, Ordering::Relaxed);
+    for _ in 0..3 {
+        run(&mut chain);
+    }
+    assert!(run(&mut chain).iter().all(|&sample| sample == 2.));
+    assert_eq!(counts()[1], paused[1]);
+}
+
+#[test]
 fn the_stages_trace_what_they_applied() -> Result<()> {
     let (mut chain, _reference) = ::voice_filter::chain::build(None)?;
     // a loud tone, so the limiter acts

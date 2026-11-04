@@ -1,5 +1,6 @@
 //! Settings kept between runs, in `$XDG_STATE_HOME/voice-filter/` (`~/.local/state/voice-filter/`
-//! by default): the devices one file each, the stages and their parameters in `chain`.
+//! by default): the devices one file each, the stages and their parameters in `chain`, the whole
+//! filter switched off in `enabled`.
 
 use ::std::fmt::Write as _;
 use ::std::fs;
@@ -26,6 +27,26 @@ const OUTPUT: &str = "output";
 const CHAIN: &str = "chain";
 const LISTEN: &str = "listen";
 const LISTEN_VOLUME: &str = "listen-volume";
+const ENABLED: &str = "enabled";
+
+/// Whether the whole filter was on (see [`crate::chain::Chain::enabled`]); on unless it was
+/// switched off.
+pub fn load_enabled(dir: &Path) -> Result<bool> {
+    match load(dir, ENABLED)?.as_deref() {
+        None | Some("on") => Ok(true),
+        Some("off") => Ok(false),
+        Some(value) => Err(::anyhow::anyhow!("{value} isn't on or off")),
+    }
+}
+
+/// Keeps whether the whole filter is on; only off is written, as for the stages in `chain`.
+pub fn save_enabled(dir: &Path, on: bool) -> Result<()> {
+    if on {
+        remove(dir, ENABLED)
+    } else {
+        save(dir, ENABLED, "off")
+    }
+}
 
 /// The microphone chosen last, the `node.name` of a PipeWire source.
 pub fn load_input(dir: &Path) -> Result<Option<String>> {

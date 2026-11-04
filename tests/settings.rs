@@ -22,6 +22,22 @@ fn keeps_the_input() {
 }
 
 #[test]
+fn keeps_the_whole_filter_switched_off() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let path = dir.path().join("enabled");
+    assert!(settings::load_enabled(dir.path()).unwrap());
+    settings::save_enabled(dir.path(), false).unwrap();
+    assert_eq!(::std::fs::read_to_string(&path).unwrap(), "off\n");
+    assert!(!settings::load_enabled(dir.path()).unwrap());
+    // on is the default, nothing to keep
+    settings::save_enabled(dir.path(), true).unwrap();
+    assert!(!path.exists());
+    assert!(settings::load_enabled(dir.path()).unwrap());
+    ::std::fs::write(&path, "maybe\n").unwrap();
+    assert!(settings::load_enabled(dir.path()).is_err());
+}
+
+#[test]
 fn treats_an_empty_file_as_no_input() {
     let dir = ::tempfile::tempdir().unwrap();
     ::std::fs::write(dir.path().join("input"), "\n").unwrap();
