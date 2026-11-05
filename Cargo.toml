@@ -5,6 +5,7 @@ members = ["crates/deep-filter-rt"]
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
+repository = "https://gitlab.com/chpio/voice-filter"
 
 [package]
 name = "voice-filter"
@@ -14,6 +15,7 @@ rust-version.workspace = true
 description = "Live voice filter for PipeWire: a virtual microphone that removes the echo of the speakers and background noise (DeepFilterNet3) and enhances the voice"
 authors = ["Thomas Heck <t@b128.net>"]
 license.workspace = true
+repository.workspace = true
 categories = ["multimedia", "multimedia::audio"]
 keywords = ["audio", "pipewire", "noise-suppression", "voice", "microphone"]
 include = [
