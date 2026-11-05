@@ -12,7 +12,7 @@ A live voice filter for Linux that shows up in PipeWire as a virtual microphone.
 
 - **Live:** total latency below 40 ms if possible, so conversations stay natural.
 - **Features:** remove echo, remove noise, enhance the voice; optionally suppress other voices (postponed, see [Suppressing other voices](#suppressing-other-voices)).
-- **Hardware:** runs entirely on the CPU, with little load (the whole chain about 3 % of a core); no GPU.
+- **Hardware:** runs entirely on the CPU, with little load (the whole chain about 7 % of a core live while you talk, see `docs/measurements.md`, "Live CPU load"); no GPU.
 - **Platform:** Arch Linux, GNOME on Wayland, PipeWire.
 - **Operation:** stages and modes can be switched at runtime, without clicks.
 
@@ -247,7 +247,7 @@ The biggest risk is latency: all stages together must stay live.
 - Control: GNOME app over D-Bus.
 - No ML restoration: it would cost a GPU or a whole CPU core, the chain stays slim (see [Voice enhancement](#voice-enhancement)).
 - No low-latency variant of DeepFilterNet3: measured on the VoiceBank-DEMAND test set (824 sentences, the noise suppression alone, both models on every frame, without `DfTract` skipping frames by the estimated SNR), it delays by 10 instead of 30 ms, but needs about five times the CPU (1.8 instead of 0.37 ms per 10 ms frame: it makes up for the missing lookahead with a larger network) for the same quality (PESQ 3.07 against 3.16, STOI 0.950 against 0.945, SI-SDR 18.7 against 18.9 dB), and at 39 MB it can't be embedded.
-- No quantized weights (fp16, int8): the model fits the crate and needs less than 3 % of a core; it would only have mattered to embed the low-latency variant.
+- No quantized weights (fp16, int8): the model fits the crate and takes about 5 % of a core live; it would only have mattered to embed the low-latency variant.
 - No models trained ourselves, only released ones: personalized denoising that keeps only the user's voice needs an open model that runs in real time on little CPU, not DeepFilterNet3 trained with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
 - No presets for voice enhancement (such as "Call", "Stream", "Podcast"): there are no measurements of what each use needs, the defaults and the sliders in the app are enough.
 - No package for Arch (AUR).

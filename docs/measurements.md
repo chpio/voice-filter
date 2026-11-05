@@ -333,6 +333,31 @@ quantum grew by), and in some runs the bridge settled a frame higher, depending 
 callbacks at the start. At 256 the bridge sits at its minimum already. So the quantum stays as
 PipeWire chooses it, neither forced by the daemon nor through `clock.power-of-two-quantum = false`.
 
+## Live CPU load
+
+What the chain takes in the daemon, from the app's Processing Time (`FrameTimes`, the last 10 s),
+2026-11-05, the daemon from `cargo install` on this machine (so the `x86-64-v4` build, see
+[Target CPU](#target-cpu)), an AMD Ryzen 7 8840U (8 cores, 16 threads), quantum 256, in ms per
+frame:
+
+| Reading                               | Part    | Mean |  95 % |  99 % | Longest |
+| ------------------------------------- | ------- | ---: | ----: | ----: | ------: |
+| echo switched off                     | total   | 0.59 |  1.31 |  1.62 |    2.08 |
+|                                       | denoise | 0.54 |  1.26 |  1.59 |    2.03 |
+|                                       | other   | 0.05 |  0.07 |  0.08 |    0.14 |
+| echo on, speech about all of the time | total   | 0.68 |  1.39 |  1.93 |    2.23 |
+|                                       | echo    | 0.14 |  0.22 |  0.27 |    0.45 |
+|                                       | denoise | 0.50 |  1.20 |  1.70 |    1.99 |
+|                                       | other   | 0.04 |  0.07 |  0.08 |    0.10 |
+
+0.68 ms per 10 ms is 6.8 % of a core, 0.85 % of the 8 cores. That's about four times the benchmark
+(`denoise` 0.14 ms per frame with the zeros, the chain 0.16 ms, see [Zero mask](#zero-mask)), with
+less speech in it, but most likely also because the benchmark runs frame after frame, with warm
+caches and the clock up, while the daemon runs one frame every 10 ms and the core sleeps and clocks
+down in between. The benchmark has no reference for the echo canceller, hence its 5 µs for `echo`
+against 0.14 ms live. So the benchmark compares stages and builds, the CPU load users see is this
+one.
+
 ## Open
 
 - The zero mask: measured again (above), still to be listened to, with the expander's `level` at
