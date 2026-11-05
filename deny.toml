@@ -2,6 +2,13 @@
 
 [advisories]
 # the defaults: vulnerabilities, unmaintained and unsound crates fail, yanked crates warn
+# zbus 6 took these crates in, but ksni (0.3.7, the newest) still builds on zbus 5; nothing to
+# upgrade to until ksni moves to zbus 6, then drop these
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5, through ksni's zbus 5" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4, through ksni's zbus 5" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5, through ksni's zbus 5" },
+]
 
 [licenses]
 # Unicode-3.0 comes in through unicode-ident, Zlib through foldhash (via tract), CC0-1.0 through
