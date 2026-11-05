@@ -26,7 +26,7 @@ git_release_name = "v{{ version }}"
 name = "deep-filter-rt"
 
 [changelog]
-header = "# Changelog\n"
+header = "# Changelog\n\n"
 # The description of the conventional commit is the entry (`feat: add --foo` → `* add --foo`), in a
 # section per type, the empty ones are left out. Dependency updates get a single entry, the
 # commits release-plz sees are an incomplete list of them (see release_commits).
