@@ -5,7 +5,7 @@ were measured, so they can be repeated. The decisions themselves are in the [con
 
 **Contents:** [Method](#method) · [Skipping frames](#skipping-frames-by-the-estimated-snr) ·
 [Low-latency variant](#low-latency-variant) · [High-pass and input level](#high-pass-and-input-level)
-· [Zero mask](#zero-mask) · [Steady tones](#steady-tones) · [Open](#open)
+· [Zero mask](#zero-mask) · [Steady tones](#steady-tones) · [Quantum](#quantum) · [Open](#open)
 
 ## Method
 
@@ -313,6 +313,25 @@ and none of it goes to the system allocator (`tests/rt_alloc.rs`). `cargo bench 
 on the speech-like signal, three runs each, alternating (the `x86-64-v4` build, on a busy
 machine, so only the comparison counts): `denoise` 221, 229 and 225 µs per frame from the pool,
 227, 222 and 229 µs from glibc.
+
+## Quantum
+
+Whether a quantum of 480 samples, a frame, lowers the latency: PipeWire rounds the 480 of
+`node.latency` down to 256, so the bridge waits for almost a frame (448 samples at least) before the
+chain can run. Forced at runtime with `pw-metadata -n settings 0 clock.force-quantum 480` (and back
+with 0), the built-in microphone, PipeWire 1.6.10, `pw-record --target voice-filter` recording for
+10 s, the parts from the daemon's `Latency` property, three readings per run, each the same:
+
+| Quantum      | Microphone | Bridge | Chain |  Total |
+| ------------ | ---------: | -----: | ----: | -----: |
+| 256          |        6.0 |    9.3 |  37.0 |   52.3 |
+| 480, a run   |       10.7 |   15.3 |  37.0 |   63.0 |
+| 480, another |       10.7 |    5.3 |  37.0 |   53.0 |
+
+What the bridge saves at 480 (4 ms at best) the microphone loses (4.7 ms, the 224 samples the
+quantum grew by), and in some runs the bridge settled a frame higher, depending on the order of the
+callbacks at the start. At 256 the bridge sits at its minimum already. So the quantum stays as
+PipeWire chooses it, neither forced by the daemon nor through `clock.power-of-two-quantum = false`.
 
 ## Open
 
