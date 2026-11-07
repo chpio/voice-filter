@@ -17,12 +17,13 @@ use ::unic_langid::LanguageIdentifier;
 pub const FALLBACK: &str = "en";
 
 /// The translations, by language: add a line for a new one.
-pub const LOCALES: [(&str, &str); 7] = [
+pub const LOCALES: [(&str, &str); 8] = [
     ("en", include_str!("../i18n/en.ftl")),
     ("de", include_str!("../i18n/de.ftl")),
     ("es", include_str!("../i18n/es.ftl")),
     ("fr", include_str!("../i18n/fr.ftl")),
     ("ru", include_str!("../i18n/ru.ftl")),
+    ("lt", include_str!("../i18n/lt.ftl")),
     ("ja", include_str!("../i18n/ja.ftl")),
     ("zh-Hans", include_str!("../i18n/zh-Hans.ftl")),
 ];
