@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3
+
+### Fixes
+
+* keep the output from turning to NaN after 78 s of digital silence
+* keep the tray and the app from saving the settings over each other
+
+### Dependencies
+
+* update dependencies
+
 ## 0.1.2
 
 ### Features
