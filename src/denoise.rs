@@ -6,7 +6,7 @@ use ::deep_filter_rt::tract::{DfParams, DfTract, RuntimeParams};
 use ::ndarray::Array2;
 
 use crate::atomic::AtomicF32;
-use crate::dsp::{db_to_gain, ramp};
+use crate::dsp::{db_to_gain, ramp, slew};
 use crate::echo::Sidechain;
 use crate::level::{self, SpeechLevel};
 use crate::param::Param;
@@ -174,11 +174,12 @@ impl InputGain {
         let level_db = self.speech.push(level::frame_db(frame), true);
         let wanted = (self.level.get() - level_db).clamp(0., self.max_gain.get());
         let previous = self.gain_db;
-        self.gain_db = if wanted > previous {
-            wanted.min(previous + INPUT_RISE_DB_PER_S * FRAME_S)
-        } else {
-            wanted.max(previous - INPUT_FALL_DB_PER_S * FRAME_S)
-        };
+        self.gain_db = slew(
+            previous,
+            wanted,
+            INPUT_RISE_DB_PER_S * FRAME_S,
+            INPUT_FALL_DB_PER_S * FRAME_S,
+        );
         let gain = (db_to_gain(previous), db_to_gain(self.gain_db));
         let len = self.gains.len();
         self.gains[self.next] = gain;

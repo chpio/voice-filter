@@ -53,6 +53,17 @@ pub fn follow(value: f32, target: f32, attack: f32, release: f32) -> f32 {
     value + (target - value) * factor
 }
 
+/// `value` moved toward `target`, by at most `rise` up and `fall` down: a gain in dB that may
+/// change only so fast per frame.
+pub fn slew(value: f32, target: f32, rise: f32, fall: f32) -> f32 {
+    // not `clamp`, which panics on NaN
+    if target > value {
+        target.min(value + rise)
+    } else {
+        target.max(value - fall)
+    }
+}
+
 /// A linear ramp from `from` to `to` over a frame, a value per sample: the last one is `to`, so the
 /// next frame goes on from there without a step.
 pub fn ramp(from: f32, to: f32) -> impl Iterator<Item = f32> {

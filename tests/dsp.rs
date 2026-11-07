@@ -36,3 +36,12 @@ fn follow_falls_by_the_attack_and_rises_by_the_release() {
     assert_eq!(follow(-10., 0., 0.5, 0.1), -9.);
     assert_eq!(follow(-3., -3., 0.5, 0.1), -3.);
 }
+
+#[test]
+fn slew_limits_the_step() {
+    use ::voice_filter::dsp::slew;
+    assert_eq!(slew(0., 10., 2., 3.), 2.);
+    assert_eq!(slew(0., -10., 2., 3.), -3.);
+    assert_eq!(slew(0., 1., 2., 3.), 1.);
+    assert_eq!(slew(0., -1., 2., 3.), -1.);
+}
