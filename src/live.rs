@@ -198,12 +198,7 @@ pub fn run(
         let _ = tray.set(handle);
     }
 
-    let mainloop = pw::main_loop::MainLoopRc::new(None)?;
-    let context = pw::context::ContextRc::new(&mainloop, None)?;
-    let core = context
-        .connect_rc(None)
-        .context("Could not connect to PipeWire")?;
-    let registry = core.get_registry_rc()?;
+    let (mainloop, _context, core, registry) = connect_server()?;
     let _inputs_listener = watch_devices(&registry, Direction::Input, inputs);
     let _outputs_listener = watch_devices(&registry, Direction::Output, outputs);
 
@@ -883,12 +878,7 @@ fn watch_devices(
 /// first.
 pub fn devices(direction: Direction) -> Result<Vec<Device>> {
     pw::init();
-    let mainloop = pw::main_loop::MainLoopRc::new(None)?;
-    let context = pw::context::ContextRc::new(&mainloop, None)?;
-    let core = context
-        .connect_rc(None)
-        .context("Could not connect to PipeWire")?;
-    let registry = core.get_registry_rc()?;
+    let (mainloop, _context, core, registry) = connect_server()?;
     let devices = Arc::new(Mutex::new(Vec::new()));
     let _registry_listener = watch_devices(&registry, direction, devices.clone());
     // all globals are announced once the server answers the sync
@@ -907,6 +897,23 @@ pub fn devices(direction: Direction) -> Result<Vec<Device>> {
     mainloop.run();
     let devices = devices.lock().unwrap().clone();
     Ok(devices)
+}
+
+/// A main loop connected to the PipeWire server, with its context (kept for as long as the
+/// connection), the core and the registry.
+fn connect_server() -> Result<(
+    pw::main_loop::MainLoopRc,
+    pw::context::ContextRc,
+    pw::core::CoreRc,
+    pw::registry::RegistryRc,
+)> {
+    let mainloop = pw::main_loop::MainLoopRc::new(None)?;
+    let context = pw::context::ContextRc::new(&mainloop, None)?;
+    let core = context
+        .connect_rc(None)
+        .context("Could not connect to PipeWire")?;
+    let registry = core.get_registry_rc()?;
+    Ok((mainloop, context, core, registry))
 }
 
 /// The time of the graph cycle in nanoseconds and the delay to the device in samples (including
