@@ -39,6 +39,10 @@ Two variants for more than plain noise suppression:
 
 An instance does either `analyze` or `process`/`process_with`, they share its state.
 
+After 5 frames of digital silence (below −70 dBFS) `process` skips the model and puts out zeros
+(not at a limit of 0 dB, where the output is the input), so a muted microphone costs next to
+nothing; it stays finite with denormals flushed to zero, as real-time hosts run it.
+
 Debug builds run the model about 10 times slower than release builds. The feature `timings` logs
 the processing time per frame.
 

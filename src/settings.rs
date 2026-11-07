@@ -6,8 +6,8 @@ use ::std::fmt::Write as _;
 use ::std::fs;
 use ::std::io;
 use ::std::path::{Path, PathBuf};
-use ::std::sync::Arc;
 use ::std::sync::atomic::{AtomicBool, Ordering};
+use ::std::sync::{Arc, Mutex, PoisonError};
 
 use ::anyhow::{Context as _, Result};
 
@@ -195,6 +195,10 @@ fn remove(dir: &Path, name: &str) -> Result<()> {
 /// Writes a file next to it and renames that over it, so a crash never leaves half a setting
 /// (a slider in the app saves many times while it's dragged).
 fn save(dir: &Path, name: &str, value: &str) -> Result<()> {
+    // one at a time: the D-Bus service and the tray save from threads of their own, and would
+    // write the same temporary file
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _saving = SAVING.lock().unwrap_or_else(PoisonError::into_inner);
     fs::create_dir_all(dir).with_context(|| format!("Could not create {}", dir.display()))?;
     let path = dir.join(name);
     let temporary = dir.join(format!(".{name}.tmp"));

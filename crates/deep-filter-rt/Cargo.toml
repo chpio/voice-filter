@@ -43,3 +43,7 @@ tract-pulse = "0.23.9"
 
 [dev-dependencies]
 ndarray = "0.17"
+
+# flushes denormals to zero in tests, as a real-time host does (`tests/denormals.rs`)
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dev-dependencies]
+no_denormals = "0.3"

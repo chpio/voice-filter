@@ -4,7 +4,7 @@ use ::anyhow::{Result, ensure};
 
 use crate::FRAME_S;
 use crate::denoise::{Speech, SpeechReader};
-use crate::dsp::{db_to_gain, ramp};
+use crate::dsp::{db_to_gain, ramp, slew};
 use crate::level::{self, SpeechLevel};
 pub use crate::level::{MIN_SPEECH_FRAMES, SPEECH_ABOVE_FLOOR_DB};
 use crate::param::Param;
@@ -154,11 +154,12 @@ impl Stage for Agc {
         let level_db = self.level.push(frame_db, heard);
         let wanted = (self.target.get() - level_db).clamp(MIN_GAIN_DB, self.max_gain.get());
         let previous = self.gain_db;
-        self.gain_db = if wanted > previous {
-            wanted.min(previous + RISE_DB_PER_S * FRAME_S)
-        } else {
-            wanted.max(previous - FALL_DB_PER_S * FRAME_S)
-        };
+        self.gain_db = slew(
+            previous,
+            wanted,
+            RISE_DB_PER_S * FRAME_S,
+            FALL_DB_PER_S * FRAME_S,
+        );
 
         // a ramp from the previous to the new gain over the frame, no steps
         let gains = ramp(db_to_gain(previous), db_to_gain(self.gain_db));

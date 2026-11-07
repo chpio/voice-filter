@@ -315,3 +315,29 @@ fn times_the_stages_asked_for() {
     assert!((4. ..20.).contains(&ms(*second)), "{second}");
     assert_eq!(*missing, 0);
 }
+
+#[test]
+fn stays_finite_after_long_digital_silence() -> Result<()> {
+    // a muted microphone sends exact zeros: after 78 s DeepFilterNet3's unit norm divided 0 by 0
+    // with denormals flushed to zero, and the filters after it kept the NaN (upstream issue #713)
+    let (mut chain, _reference) = ::voice_filter::chain::build(None)?;
+    ::voice_filter::dsp::without_denormals(|| -> Result<()> {
+        for _ in 0..8000 {
+            let mut frame = [0.; FRAME_LEN];
+            chain.process(&mut frame)?;
+            assert!(frame.iter().all(|x| x.is_finite()));
+        }
+        let mut energy = 0.;
+        for i in 0..100 {
+            let mut frame: Frame = ::std::array::from_fn(|n| {
+                let t = (i * FRAME_LEN + n) as f32 / ::voice_filter::SAMPLE_RATE as f32;
+                0.1 * (::std::f32::consts::TAU * 440. * t).sin()
+            });
+            chain.process(&mut frame)?;
+            assert!(frame.iter().all(|x| x.is_finite()));
+            energy += frame.iter().map(|x| x * x).sum::<f32>();
+        }
+        assert!(energy > 0.);
+        Ok(())
+    })
+}

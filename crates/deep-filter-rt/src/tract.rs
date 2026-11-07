@@ -1,5 +1,5 @@
 use ::std::fs;
-use ::std::io::{Cursor, Read};
+use ::std::io::Cursor;
 use ::std::path::Path;
 #[cfg(feature = "timings")]
 use ::std::time::Instant;
@@ -76,18 +76,6 @@ pub enum ReduceMask {
     MAX = 1,
     MEAN = 2,
 }
-impl TryFrom<i32> for ReduceMask {
-    type Error = ();
-
-    fn try_from(v: i32) -> Result<Self, Self::Error> {
-        match v {
-            x if x == ReduceMask::NONE as i32 => Ok(ReduceMask::NONE),
-            x if x == ReduceMask::MAX as i32 => Ok(ReduceMask::MAX),
-            x if x == ReduceMask::MEAN as i32 => Ok(ReduceMask::MEAN),
-            _ => Err(()),
-        }
-    }
-}
 pub struct RuntimeParams {
     pub n_ch: usize,
     pub post_filter: bool,
@@ -99,27 +87,6 @@ pub struct RuntimeParams {
     pub reduce_mask: ReduceMask,
 }
 impl RuntimeParams {
-    pub fn new(
-        n_ch: usize,
-        post_filter_beta: f32,
-        atten_lim_db: f32,
-        min_db_thresh: f32,
-        max_db_erb_thresh: f32,
-        max_db_df_thresh: f32,
-        reduce_mask: ReduceMask,
-    ) -> Self {
-        let post_filter = post_filter_beta > 0.;
-        Self {
-            n_ch,
-            post_filter,
-            post_filter_beta,
-            atten_lim_db,
-            min_db_thresh,
-            max_db_erb_thresh,
-            max_db_df_thresh,
-            reduce_mask,
-        }
-    }
     pub fn with_post_filter(mut self, beta: f32) -> Self {
         assert!(beta >= 0.); // Cannot be negative
         if beta > 0. {
@@ -225,16 +192,15 @@ impl DfTract {
         let df_cfg = config.section(Some("df")).unwrap();
         let ch = rp.n_ch;
 
-        let enc = init_encoder_from_read(&mut Cursor::new(dfp.enc), df_cfg, ch)?;
-        let erb_dec = init_erb_decoder_from_read(
-            &mut Cursor::new(dfp.erb_dec),
+        let enc = init_encoder(read_onnx(&dfp.enc)?, df_cfg, ch)?;
+        let erb_dec = init_erb_decoder(
+            read_onnx(&dfp.erb_dec)?,
             model_cfg,
             df_cfg,
             ch,
-            Some(rp.reduce_mask.clone()),
+            rp.reduce_mask.clone(),
         )?;
-        let df_dec =
-            init_df_decoder_from_read(&mut Cursor::new(dfp.df_dec), model_cfg, df_cfg, ch)?;
+        let df_dec = init_df_decoder(read_onnx(&dfp.df_dec)?, model_cfg, df_cfg, ch)?;
         let enc = TypedSimpleState::new(&enc.into_runnable()?)?;
         let erb_dec = TypedSimpleState::new(&erb_dec.into_runnable()?)?;
         let df_dec = TypedSimpleState::new(&df_dec.into_runnable()?)?;
@@ -300,10 +266,6 @@ impl DfTract {
         let rolling_spec_buf_y = VecDeque::with_capacity(df_order + lookahead);
         let rolling_spec_buf_x = VecDeque::with_capacity(lookahead.max(df_order));
 
-        let mut state = DFState::new(sr, fft_size, hop_size, nb_erb, min_nb_erb_freqs);
-        state.init_norm_states(nb_df);
-        let df_states = vec![state];
-
         let mut m = Self {
             enc,
             erb_dec,
@@ -331,7 +293,7 @@ impl DfTract {
             cplx_buf,
             rolling_spec_buf_y,
             rolling_spec_buf_x,
-            df_states,
+            df_states: Vec::new(),
             post_filter: rp.post_filter,
             post_filter_beta: rp.post_filter_beta,
             skip_counter: 0,
@@ -390,7 +352,19 @@ impl DfTract {
         self.atten_lim != Some(1.)
     }
 
-    pub fn init(&mut self) -> Result<()> {
+    /// An STFT state for a channel, without the norm states of the features.
+    fn new_state(&self) -> DFState {
+        DFState::new(
+            self.sr,
+            self.fft_size,
+            self.hop_size,
+            self.nb_erb,
+            self.min_nb_erb_freqs,
+        )
+    }
+
+    /// Sets up the buffers and the STFT states for `ch` channels, once by `new`.
+    fn init(&mut self) -> Result<()> {
         let ch = self.ch;
         let spec_shape = [ch, 1, 1, self.n_freqs, 2];
         self.rolling_spec_buf_y.clear();
@@ -402,30 +376,14 @@ impl DfTract {
             self.rolling_spec_buf_x
                 .push_back(tensor0(0f32).broadcast_scalar_to_shape(&spec_shape)?);
         }
-        if ch > self.df_states.len() {
-            for _ in self.df_states.len()..ch {
-                let mut state = DFState::new(
-                    self.sr,
-                    self.fft_size,
-                    self.hop_size,
-                    self.nb_erb,
-                    self.min_nb_erb_freqs,
-                );
-                state.init_norm_states(self.nb_df);
-                self.df_states.push(state)
-            }
-        }
-        self.apply_states = (0..ch)
+        self.df_states = (0..ch)
             .map(|_| {
-                DFState::new(
-                    self.sr,
-                    self.fft_size,
-                    self.hop_size,
-                    self.nb_erb,
-                    self.min_nb_erb_freqs,
-                )
+                let mut state = self.new_state();
+                state.init_norm_states(self.nb_df);
+                state
             })
             .collect();
+        self.apply_states = (0..ch).map(|_| self.new_state()).collect();
         self.apply_spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.erb_buf = TValue::from(Tensor::zero::<f32>(&[ch, 1, 1, self.nb_erb])?);
@@ -498,14 +456,7 @@ impl DfTract {
     /// whether what the speakers play has speech). The rolling buffers stay as they are, so an
     /// instance does either this or [`Self::process`].
     pub fn analyze(&mut self, noisy: ArrayView2<f32>) -> Result<f32> {
-        let (ch, n_freqs) = (self.ch, self.n_freqs);
-        for (ns_ch, mut spec, state) in izip!(
-            noisy.axis_iter(Axis(0)),
-            spec_view_mut(&mut self.spec_buf, ch, n_freqs)?.outer_iter_mut(),
-            self.df_states.iter_mut(),
-        ) {
-            state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
-        }
+        analysis(&mut self.df_states, noisy, &mut self.spec_buf, self.n_freqs)?;
         let (lsnr, _) = self.encode()?;
         Ok(lsnr)
     }
@@ -571,7 +522,8 @@ impl DfTract {
         } else {
             self.skip_counter = 0;
         }
-        if self.skip_counter > 5 {
+        // not at a limit of 0 dB: the output is the input then, however quiet
+        if self.skip_counter > 5 && self.attenuates() {
             enh.fill(0.);
             return Ok(-15.);
         }
@@ -584,21 +536,14 @@ impl DfTract {
         let mut spec_y = self.rolling_spec_buf_y.pop_front().unwrap();
         let mut spec_x = self.rolling_spec_buf_x.pop_front().unwrap();
         let (ch, n_freqs) = (self.ch, self.n_freqs);
-        for (ns_ch, mut spec, state) in izip!(
-            noisy.axis_iter(Axis(0)),
-            spec_view_mut(&mut self.spec_buf, ch, n_freqs)?.outer_iter_mut(),
-            self.df_states.iter_mut(),
-        ) {
-            state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
-        }
+        analysis(&mut self.df_states, noisy, &mut self.spec_buf, n_freqs)?;
         if let Some(apply) = apply {
-            for (ap_ch, mut spec, state) in izip!(
-                apply.axis_iter(Axis(0)),
-                spec_view_mut(&mut self.apply_spec_buf, ch, n_freqs)?.outer_iter_mut(),
-                self.apply_states.iter_mut(),
-            ) {
-                state.analysis(ap_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
-            }
+            analysis(
+                &mut self.apply_states,
+                apply,
+                &mut self.apply_spec_buf,
+                n_freqs,
+            )?;
             copy_tensor(&self.apply_spec_buf, &mut spec_y)?;
             copy_tensor(&self.apply_spec_buf, &mut spec_x)?;
         } else {
@@ -637,10 +582,6 @@ impl DfTract {
                     self.df_states[0].apply_mask(spec_ch.as_slice_mut().unwrap(), gain_slc);
                 }
             }
-            self.skip_counter = 0;
-        } else {
-            // gains are None => skipped due to LSNR
-            self.skip_counter += 1;
         }
 
         // This spectrum will only be used for the upper frequencies
@@ -714,35 +655,6 @@ impl DfTract {
             (true, false, true)
         }
     }
-
-    pub fn set_spec_buffer(&mut self, spec: ArrayView2<f32>) -> Result<()> {
-        debug_assert_eq!(self.spec_buf.shape(), spec.shape());
-        let mut buf = self
-            .spec_buf
-            .to_plain_array_view_mut()?
-            .into_shape_with_order([self.ch, self.n_freqs])?;
-        for (i_ch, mut b_ch) in spec.outer_iter().zip(buf.outer_iter_mut()) {
-            for (&i, b) in i_ch.iter().zip(b_ch.iter_mut()) {
-                *b = i
-            }
-        }
-        Ok(())
-    }
-
-    pub fn get_spec_noisy(&self) -> ArrayView2<'_, Complex32> {
-        spec_view(
-            &self.rolling_spec_buf_x[self.noisy_index()],
-            self.ch,
-            self.n_freqs,
-        )
-        .unwrap()
-    }
-    pub fn get_spec_enh(&self) -> ArrayView2<'_, Complex32> {
-        spec_view(&self.spec_buf, self.ch, self.n_freqs).unwrap()
-    }
-    pub fn get_mut_spec_enh(&mut self) -> ArrayViewMut2<'_, Complex32> {
-        spec_view_mut(&mut self.spec_buf, self.ch, self.n_freqs).unwrap()
-    }
 }
 
 /// The values of an f32 tensor as a flat slice. Unlike a view of ndarray it doesn't allocate:
@@ -797,6 +709,24 @@ fn synthesis(
             enh_out_ch.as_slice_mut().unwrap(),
         );
     }
+}
+
+/// The STFT of a frame of every channel of `signal` into `spec`, of shape
+/// `[ch, 1, 1, n_freqs, 2]`, a state per channel.
+fn analysis(
+    states: &mut [DFState],
+    signal: ArrayView2<f32>,
+    spec: &mut Tensor,
+    n_freqs: usize,
+) -> Result<()> {
+    for (channel, mut spec, state) in izip!(
+        signal.axis_iter(Axis(0)),
+        spec_view_mut(spec, states.len(), n_freqs)?.outer_iter_mut(),
+        states.iter_mut(),
+    ) {
+        state.analysis(channel.as_slice().unwrap(), spec.as_slice_mut().unwrap());
+    }
+    Ok(())
 }
 
 /// Copies the values of `from` into `to`, an f32 tensor of the same shape, without allocating
@@ -855,7 +785,14 @@ fn df(
     Ok(())
 }
 
-fn init_encoder_impl(
+/// Reads one of the model's ONNX files.
+fn read_onnx(onnx: &[u8]) -> Result<InferenceModel> {
+    tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_read(&mut Cursor::new(onnx))
+}
+
+fn init_encoder(
     mut m: InferenceModel,
     df_cfg: &ini::Properties,
     n_ch: usize,
@@ -888,23 +825,13 @@ fn init_encoder_impl(
     let m = pulsed.into_typed()?.into_optimized()?;
     Ok(m)
 }
-fn init_encoder_from_read(
-    m: &mut dyn Read,
-    df_cfg: &ini::Properties,
-    n_ch: usize,
-) -> Result<TypedModel> {
-    let m = tract_onnx::onnx()
-        .with_ignore_output_shapes(true)
-        .model_for_read(m)?;
-    init_encoder_impl(m, df_cfg, n_ch)
-}
 
-fn init_erb_decoder_impl(
+fn init_erb_decoder(
     mut m: InferenceModel,
     net_cfg: &ini::Properties,
     df_cfg: &ini::Properties,
     n_ch: usize,
-    mask_reduction: Option<ReduceMask>,
+    mask_reduction: ReduceMask,
 ) -> Result<TypedModel> {
     log::debug!("Start init ERB decoder.");
     let s = m.symbols.sym("S");
@@ -951,40 +878,37 @@ fn init_erb_decoder_impl(
     let mut m = pulsed.into_typed()?;
     log::info!("Init ERB decoder");
 
-    if let Some(r) = mask_reduction {
-        let outlets = m.output_outlets()?;
-        let mask_outlet = outlets[0];
-        let ch_axis = 0;
-        match r {
-            ReduceMask::MAX => {
-                output_name = "reduce_mask_max".to_string();
-                m.wire_node(
-                    "reduce_mask_max",
-                    ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Max),
-                    &[mask_outlet],
-                )?;
-            }
-            ReduceMask::MEAN => {
-                let sum = m.wire_node(
-                    "reduce_mask_sum".to_string(),
-                    ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Sum),
-                    &[mask_outlet],
-                )?[0];
-                let ch_i = m
-                    .add_const(
-                        "ch".to_string(),
-                        Tensor::from_shape(&[1, 1, 1, 1], &[1. / n_ch as f32])?,
-                    )
-                    .unwrap();
-                output_name = "reduce_mask_div_ch".to_string();
-                m.wire_node(
-                    "reduce_mask_div_ch",
-                    tract_core::ops::math::mul(),
-                    &[sum, ch_i],
-                )?;
-            }
-            _ => (),
+    let mask_outlet = m.output_outlets()?[0];
+    let ch_axis = 0;
+    match mask_reduction {
+        ReduceMask::MAX => {
+            output_name = "reduce_mask_max".to_string();
+            m.wire_node(
+                "reduce_mask_max",
+                ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Max),
+                &[mask_outlet],
+            )?;
         }
+        ReduceMask::MEAN => {
+            let sum = m.wire_node(
+                "reduce_mask_sum".to_string(),
+                ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Sum),
+                &[mask_outlet],
+            )?[0];
+            let ch_i = m
+                .add_const(
+                    "ch".to_string(),
+                    Tensor::from_shape(&[1, 1, 1, 1], &[1. / n_ch as f32])?,
+                )
+                .unwrap();
+            output_name = "reduce_mask_div_ch".to_string();
+            m.wire_node(
+                "reduce_mask_div_ch",
+                tract_core::ops::math::mul(),
+                &[sum, ch_i],
+            )?;
+        }
+        ReduceMask::NONE => (),
     }
     m = m.with_outputs_by_name(&[output_name])?;
 
@@ -992,20 +916,8 @@ fn init_erb_decoder_impl(
 
     Ok(m)
 }
-fn init_erb_decoder_from_read(
-    m: &mut dyn Read,
-    net_cfg: &ini::Properties,
-    df_cfg: &ini::Properties,
-    n_ch: usize,
-    mask_reduction: Option<ReduceMask>,
-) -> Result<TypedModel> {
-    let m = tract_onnx::onnx()
-        .with_ignore_output_shapes(true)
-        .model_for_read(m)?;
-    init_erb_decoder_impl(m, net_cfg, df_cfg, n_ch, mask_reduction)
-}
 
-fn init_df_decoder_impl(
+fn init_df_decoder(
     mut m: InferenceModel,
     net_cfg: &ini::Properties,
     df_cfg: &ini::Properties,
@@ -1045,17 +957,6 @@ fn init_df_decoder_impl(
     let m = pulsed.into_typed()?.into_optimized()?;
     Ok(m)
 }
-fn init_df_decoder_from_read(
-    m: &mut dyn Read,
-    net_cfg: &ini::Properties,
-    df_cfg: &ini::Properties,
-    n_ch: usize,
-) -> Result<TypedModel> {
-    let m = tract_onnx::onnx()
-        .with_ignore_output_shapes(true)
-        .model_for_read(m)?;
-    init_df_decoder_impl(m, net_cfg, df_cfg, n_ch)
-}
 
 fn calc_norm_alpha(sr: usize, hop_size: usize, tau: f32) -> f32 {
     let dt = hop_size as f32 / sr as f32;
@@ -1086,35 +987,6 @@ pub fn as_slice_mut_complex(buffer: &mut [f32]) -> &mut [Complex32] {
     }
 }
 
-#[allow(clippy::needless_pass_by_ref_mut)]
-pub fn as_slice_mut_real(buffer: &mut [Complex32]) -> &mut [f32] {
-    unsafe {
-        let ptr = buffer.as_ptr() as *mut f32;
-        let len = buffer.len();
-        std::slice::from_raw_parts_mut(ptr, len * 2)
-    }
-}
-
-pub fn slice_as_arrayview<'a>(
-    buffer: &[f32],
-    shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
-) -> ArrayViewD<'a, f32> {
-    debug_assert_eq!(buffer.len(), shape.iter().product::<usize>());
-    unsafe {
-        let ptr = buffer.as_ptr(); // as *mut Complex32;
-        ArrayViewD::from_shape_ptr(shape, ptr)
-    }
-}
-pub fn mut_slice_as_arrayviewmut<'a>(
-    buffer: &mut [f32],
-    shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
-) -> ArrayViewMutD<'a, f32> {
-    debug_assert_eq!(buffer.len(), shape.iter().product::<usize>());
-    unsafe {
-        let ptr = buffer.as_mut_ptr(); // as *mut Complex32;
-        ArrayViewMutD::from_shape_ptr(shape, ptr)
-    }
-}
 pub fn as_arrayview_complex<'a>(
     buffer: ArrayViewD<'a, f32>,
     shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
@@ -1124,17 +996,6 @@ pub fn as_arrayview_complex<'a>(
     unsafe {
         let ptr = buffer.as_ptr() as *mut Complex32;
         ArrayViewD::from_shape_ptr(shape, ptr)
-    }
-}
-pub fn as_arrayview_mut_complex<'a>(
-    buffer: ArrayViewMutD<'a, f32>,
-    shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
-) -> ArrayViewMutD<'a, Complex32> {
-    debug_assert_eq!(buffer.shape().last().unwrap(), &2);
-    debug_assert_eq!(buffer.len(), 2 * shape.iter().product::<usize>());
-    unsafe {
-        let ptr = buffer.as_ptr() as *mut Complex32;
-        ArrayViewMutD::from_shape_ptr(shape, ptr)
     }
 }
 pub fn tvalue_to_array_view_mut(x: &mut TValue) -> ArrayViewMutD<'_, f32> {
