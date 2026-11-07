@@ -255,42 +255,49 @@ pub fn run(
 
     let mut samples = Vec::with_capacity(MAX_QUANTUM);
     let capture_stats = stats.clone();
-    let _input_listener = input
-        .add_local_listener_with_user_data(())
-        .process(move |stream, _| {
-            let delay = read_into(stream, &mut capture, &mut samples);
-            capture_stats.capture_delay.store(delay, Ordering::Relaxed);
-        })
-        .register()?;
+    let input = ListenedStream::new(input, |input| {
+        input
+            .add_local_listener_with_user_data(())
+            .process(move |stream, _| {
+                let delay = read_into(stream, &mut capture, &mut samples);
+                capture_stats.capture_delay.store(delay, Ordering::Relaxed);
+            })
+            .register()
+    })?;
 
     let mut played = Vec::with_capacity(MAX_QUANTUM);
-    let _reference_listener = reference_stream
-        .add_local_listener_with_user_data(())
-        .process(move |stream, _| {
-            // what doesn't fit while the echo canceller is off or behind gets dropped
-            if dequeue_samples(stream, &mut played) {
-                reference.push(&played);
-            }
-        })
-        .register()?;
+    let reference_stream = ListenedStream::new(reference_stream, |reference_stream| {
+        reference_stream
+            .add_local_listener_with_user_data(())
+            .process(move |stream, _| {
+                // what doesn't fit while the echo canceller is off or behind gets dropped
+                if dequeue_samples(stream, &mut played) {
+                    reference.push(&played);
+                }
+            })
+            .register()
+    })?;
 
     let mut pulled = vec![0.; MAX_QUANTUM];
     let playback_stats = stats.clone();
-    let _output_listener = output
-        .add_local_listener_with_user_data(())
-        .process(move |stream, _| {
-            let delay = write_from(stream, &mut playback, &mut pulled);
-            playback_stats
-                .playback_delay
-                .store(delay, Ordering::Relaxed);
-        })
-        .state_changed(|_, _, _, new| {
-            if let StreamState::Error(error) = new {
-                eprintln!("Voice Filter stream error: {error}");
-            }
-        })
-        .register()?;
-    let _graph = Graph::watch(&core, &registry, [input.clone(), reference_stream.clone()])?;
+    let output = ListenedStream::new(output, |output| {
+        output
+            .add_local_listener_with_user_data(())
+            .process(move |stream, _| {
+                let delay = write_from(stream, &mut playback, &mut pulled);
+                playback_stats
+                    .playback_delay
+                    .store(delay, Ordering::Relaxed);
+            })
+            .state_changed(|_, _, _, new| {
+                if let StreamState::Error(error) = new {
+                    eprintln!("Voice Filter stream error: {error}");
+                }
+            })
+            .register()
+    })?;
+    let captures = [input.stream.clone(), reference_stream.stream.clone()];
+    let _graph = Graph::watch(&core, &registry, captures)?;
 
     let listening = Rc::new(RefCell::new(None));
     let start_listening = {
@@ -306,8 +313,8 @@ pub fn run(
         }
     };
     let _commands = command_receiver.attach(mainloop.loop_(), {
-        let input = input.clone();
-        let reference_stream = reference_stream.clone();
+        let input = input.stream.clone();
+        let reference_stream = reference_stream.stream.clone();
         let listening = listening.clone();
         let start_listening = start_listening.clone();
         move |control| match control {
@@ -328,7 +335,7 @@ pub fn run(
 
     // not `connect`, the session manager mustn't link it
     let format = format_param();
-    output.connect(
+    output.stream.connect(
         spa::utils::Direction::Output,
         None,
         StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
@@ -396,10 +403,8 @@ const LISTEN_NODE_NAME: &str = "voice-filter-listen";
 /// device drives the playback stream itself, and the bridge hands over between the two clocks,
 /// as for the reference of the echo canceller.
 struct Listen {
-    _capture: StreamRc,
-    _playback: StreamRc,
-    _capture_listener: pw::stream::StreamListener<()>,
-    _playback_listener: pw::stream::StreamListener<()>,
+    _capture: ListenedStream,
+    _playback: ListenedStream,
 }
 
 impl Listen {
@@ -432,27 +437,59 @@ impl Listen {
             &[(*pw::keys::MEDIA_CATEGORY, "Playback")],
         )?;
         let mut samples = Vec::with_capacity(MAX_QUANTUM);
-        let capture_listener = capture_stream
-            .add_local_listener_with_user_data(())
-            .process(move |stream, _| {
-                read_into(stream, &mut capture, &mut samples);
-            })
-            .register()?;
+        let capture_stream = ListenedStream::new(capture_stream, |capture_stream| {
+            capture_stream
+                .add_local_listener_with_user_data(())
+                .process(move |stream, _| {
+                    read_into(stream, &mut capture, &mut samples);
+                })
+                .register()
+        })?;
         let mut pulled = vec![0.; MAX_QUANTUM];
-        let playback_listener = playback_stream
-            .add_local_listener_with_user_data(())
-            .process(move |stream, _| {
-                write_from(stream, &mut playback, &mut pulled);
-            })
-            .register()?;
-        connect(&capture_stream, spa::utils::Direction::Input)?;
-        connect(&playback_stream, spa::utils::Direction::Output)?;
+        let playback_stream = ListenedStream::new(playback_stream, |playback_stream| {
+            playback_stream
+                .add_local_listener_with_user_data(())
+                .process(move |stream, _| {
+                    write_from(stream, &mut playback, &mut pulled);
+                })
+                .register()
+        })?;
+        connect(&capture_stream.stream, spa::utils::Direction::Input)?;
+        connect(&playback_stream.stream, spa::utils::Direction::Output)?;
         Ok(Self {
             _capture: capture_stream,
             _playback: playback_stream,
-            _capture_listener: capture_listener,
-            _playback_listener: playback_listener,
         })
+    }
+}
+
+/// A stream with its listener, which goes first: pipewire-rs's listener doesn't keep its stream
+/// alive, removed from a destroyed stream it writes into the freed memory. Dropping it disconnects
+/// the stream, even one with other owners.
+struct ListenedStream {
+    // before the stream, fields drop in order
+    _listener: pw::stream::StreamListener<()>,
+    stream: StreamRc,
+}
+
+impl ListenedStream {
+    /// `stream` with the listener `listen` registers on it.
+    fn new(
+        stream: StreamRc,
+        listen: impl FnOnce(&StreamRc) -> Result<pw::stream::StreamListener<()>, pw::Error>,
+    ) -> Result<Self> {
+        let listener = listen(&stream)?;
+        Ok(Self {
+            _listener: listener,
+            stream,
+        })
+    }
+}
+
+impl Drop for ListenedStream {
+    fn drop(&mut self) {
+        // before the listener goes, so the data loop no longer calls it (`RT_PROCESS`)
+        let _ = self.stream.disconnect();
     }
 }
 
