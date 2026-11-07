@@ -1,5 +1,5 @@
 use ::std::fs;
-use ::std::io::{Cursor, Read};
+use ::std::io::Cursor;
 use ::std::path::Path;
 #[cfg(feature = "timings")]
 use ::std::time::Instant;
@@ -192,16 +192,15 @@ impl DfTract {
         let df_cfg = config.section(Some("df")).unwrap();
         let ch = rp.n_ch;
 
-        let enc = init_encoder_from_read(&mut Cursor::new(dfp.enc), df_cfg, ch)?;
-        let erb_dec = init_erb_decoder_from_read(
-            &mut Cursor::new(dfp.erb_dec),
+        let enc = init_encoder(read_onnx(&dfp.enc)?, df_cfg, ch)?;
+        let erb_dec = init_erb_decoder(
+            read_onnx(&dfp.erb_dec)?,
             model_cfg,
             df_cfg,
             ch,
             rp.reduce_mask.clone(),
         )?;
-        let df_dec =
-            init_df_decoder_from_read(&mut Cursor::new(dfp.df_dec), model_cfg, df_cfg, ch)?;
+        let df_dec = init_df_decoder(read_onnx(&dfp.df_dec)?, model_cfg, df_cfg, ch)?;
         let enc = TypedSimpleState::new(&enc.into_runnable()?)?;
         let erb_dec = TypedSimpleState::new(&erb_dec.into_runnable()?)?;
         let df_dec = TypedSimpleState::new(&df_dec.into_runnable()?)?;
@@ -267,10 +266,6 @@ impl DfTract {
         let rolling_spec_buf_y = VecDeque::with_capacity(df_order + lookahead);
         let rolling_spec_buf_x = VecDeque::with_capacity(lookahead.max(df_order));
 
-        let mut state = DFState::new(sr, fft_size, hop_size, nb_erb, min_nb_erb_freqs);
-        state.init_norm_states(nb_df);
-        let df_states = vec![state];
-
         let mut m = Self {
             enc,
             erb_dec,
@@ -298,7 +293,7 @@ impl DfTract {
             cplx_buf,
             rolling_spec_buf_y,
             rolling_spec_buf_x,
-            df_states,
+            df_states: Vec::new(),
             post_filter: rp.post_filter,
             post_filter_beta: rp.post_filter_beta,
             skip_counter: 0,
@@ -357,7 +352,19 @@ impl DfTract {
         self.atten_lim != Some(1.)
     }
 
-    pub fn init(&mut self) -> Result<()> {
+    /// An STFT state for a channel, without the norm states of the features.
+    fn new_state(&self) -> DFState {
+        DFState::new(
+            self.sr,
+            self.fft_size,
+            self.hop_size,
+            self.nb_erb,
+            self.min_nb_erb_freqs,
+        )
+    }
+
+    /// Sets up the buffers and the STFT states for `ch` channels, once by `new`.
+    fn init(&mut self) -> Result<()> {
         let ch = self.ch;
         let spec_shape = [ch, 1, 1, self.n_freqs, 2];
         self.rolling_spec_buf_y.clear();
@@ -369,30 +376,14 @@ impl DfTract {
             self.rolling_spec_buf_x
                 .push_back(tensor0(0f32).broadcast_scalar_to_shape(&spec_shape)?);
         }
-        if ch > self.df_states.len() {
-            for _ in self.df_states.len()..ch {
-                let mut state = DFState::new(
-                    self.sr,
-                    self.fft_size,
-                    self.hop_size,
-                    self.nb_erb,
-                    self.min_nb_erb_freqs,
-                );
-                state.init_norm_states(self.nb_df);
-                self.df_states.push(state)
-            }
-        }
-        self.apply_states = (0..ch)
+        self.df_states = (0..ch)
             .map(|_| {
-                DFState::new(
-                    self.sr,
-                    self.fft_size,
-                    self.hop_size,
-                    self.nb_erb,
-                    self.min_nb_erb_freqs,
-                )
+                let mut state = self.new_state();
+                state.init_norm_states(self.nb_df);
+                state
             })
             .collect();
+        self.apply_states = (0..ch).map(|_| self.new_state()).collect();
         self.apply_spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.spec_buf = Tensor::zero::<f32>(&spec_shape)?;
         self.erb_buf = TValue::from(Tensor::zero::<f32>(&[ch, 1, 1, self.nb_erb])?);
@@ -465,14 +456,7 @@ impl DfTract {
     /// whether what the speakers play has speech). The rolling buffers stay as they are, so an
     /// instance does either this or [`Self::process`].
     pub fn analyze(&mut self, noisy: ArrayView2<f32>) -> Result<f32> {
-        let (ch, n_freqs) = (self.ch, self.n_freqs);
-        for (ns_ch, mut spec, state) in izip!(
-            noisy.axis_iter(Axis(0)),
-            spec_view_mut(&mut self.spec_buf, ch, n_freqs)?.outer_iter_mut(),
-            self.df_states.iter_mut(),
-        ) {
-            state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
-        }
+        analysis(&mut self.df_states, noisy, &mut self.spec_buf, self.n_freqs)?;
         let (lsnr, _) = self.encode()?;
         Ok(lsnr)
     }
@@ -551,21 +535,14 @@ impl DfTract {
         let mut spec_y = self.rolling_spec_buf_y.pop_front().unwrap();
         let mut spec_x = self.rolling_spec_buf_x.pop_front().unwrap();
         let (ch, n_freqs) = (self.ch, self.n_freqs);
-        for (ns_ch, mut spec, state) in izip!(
-            noisy.axis_iter(Axis(0)),
-            spec_view_mut(&mut self.spec_buf, ch, n_freqs)?.outer_iter_mut(),
-            self.df_states.iter_mut(),
-        ) {
-            state.analysis(ns_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
-        }
+        analysis(&mut self.df_states, noisy, &mut self.spec_buf, n_freqs)?;
         if let Some(apply) = apply {
-            for (ap_ch, mut spec, state) in izip!(
-                apply.axis_iter(Axis(0)),
-                spec_view_mut(&mut self.apply_spec_buf, ch, n_freqs)?.outer_iter_mut(),
-                self.apply_states.iter_mut(),
-            ) {
-                state.analysis(ap_ch.as_slice().unwrap(), spec.as_slice_mut().unwrap());
-            }
+            analysis(
+                &mut self.apply_states,
+                apply,
+                &mut self.apply_spec_buf,
+                n_freqs,
+            )?;
             copy_tensor(&self.apply_spec_buf, &mut spec_y)?;
             copy_tensor(&self.apply_spec_buf, &mut spec_x)?;
         } else {
@@ -733,6 +710,24 @@ fn synthesis(
     }
 }
 
+/// The STFT of a frame of every channel of `signal` into `spec`, of shape
+/// `[ch, 1, 1, n_freqs, 2]`, a state per channel.
+fn analysis(
+    states: &mut [DFState],
+    signal: ArrayView2<f32>,
+    spec: &mut Tensor,
+    n_freqs: usize,
+) -> Result<()> {
+    for (channel, mut spec, state) in izip!(
+        signal.axis_iter(Axis(0)),
+        spec_view_mut(spec, states.len(), n_freqs)?.outer_iter_mut(),
+        states.iter_mut(),
+    ) {
+        state.analysis(channel.as_slice().unwrap(), spec.as_slice_mut().unwrap());
+    }
+    Ok(())
+}
+
 /// Copies the values of `from` into `to`, an f32 tensor of the same shape, without allocating
 /// (unlike `clone`, which `clone_from` falls back to).
 fn copy_tensor(from: &Tensor, to: &mut Tensor) -> Result<()> {
@@ -789,7 +784,14 @@ fn df(
     Ok(())
 }
 
-fn init_encoder_impl(
+/// Reads one of the model's ONNX files.
+fn read_onnx(onnx: &[u8]) -> Result<InferenceModel> {
+    tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_read(&mut Cursor::new(onnx))
+}
+
+fn init_encoder(
     mut m: InferenceModel,
     df_cfg: &ini::Properties,
     n_ch: usize,
@@ -822,18 +824,8 @@ fn init_encoder_impl(
     let m = pulsed.into_typed()?.into_optimized()?;
     Ok(m)
 }
-fn init_encoder_from_read(
-    m: &mut dyn Read,
-    df_cfg: &ini::Properties,
-    n_ch: usize,
-) -> Result<TypedModel> {
-    let m = tract_onnx::onnx()
-        .with_ignore_output_shapes(true)
-        .model_for_read(m)?;
-    init_encoder_impl(m, df_cfg, n_ch)
-}
 
-fn init_erb_decoder_impl(
+fn init_erb_decoder(
     mut m: InferenceModel,
     net_cfg: &ini::Properties,
     df_cfg: &ini::Properties,
@@ -923,20 +915,8 @@ fn init_erb_decoder_impl(
 
     Ok(m)
 }
-fn init_erb_decoder_from_read(
-    m: &mut dyn Read,
-    net_cfg: &ini::Properties,
-    df_cfg: &ini::Properties,
-    n_ch: usize,
-    mask_reduction: ReduceMask,
-) -> Result<TypedModel> {
-    let m = tract_onnx::onnx()
-        .with_ignore_output_shapes(true)
-        .model_for_read(m)?;
-    init_erb_decoder_impl(m, net_cfg, df_cfg, n_ch, mask_reduction)
-}
 
-fn init_df_decoder_impl(
+fn init_df_decoder(
     mut m: InferenceModel,
     net_cfg: &ini::Properties,
     df_cfg: &ini::Properties,
@@ -975,17 +955,6 @@ fn init_df_decoder_impl(
     log::info!("Init DF decoder");
     let m = pulsed.into_typed()?.into_optimized()?;
     Ok(m)
-}
-fn init_df_decoder_from_read(
-    m: &mut dyn Read,
-    net_cfg: &ini::Properties,
-    df_cfg: &ini::Properties,
-    n_ch: usize,
-) -> Result<TypedModel> {
-    let m = tract_onnx::onnx()
-        .with_ignore_output_shapes(true)
-        .model_for_read(m)?;
-    init_df_decoder_impl(m, net_cfg, df_cfg, n_ch)
 }
 
 fn calc_norm_alpha(sr: usize, hop_size: usize, tau: f32) -> f32 {
