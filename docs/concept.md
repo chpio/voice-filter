@@ -251,6 +251,7 @@ The biggest risk is latency: all stages together must stay live.
 - No models trained ourselves, only released ones: personalized denoising that keeps only the user's voice needs an open model that runs in real time on little CPU, not DeepFilterNet3 trained with a speaker embedding (see [Suppressing other voices](#suppressing-other-voices)).
 - No presets for voice enhancement (such as "Call", "Stream", "Podcast"): there are no measurements of what each use needs, the defaults and the sliders in the app are enough.
 - No package for Arch (AUR).
+- No filter for incoming audio (the speaker side): the chain only filters the microphone.
 - No filter for steady tones (fans) before DeepFilterNet3: with the high-pass first and the input gain the tones of the built-in microphone's fans don't open the model anymore, taking them out left the noise in the pauses and the estimate as they were (see [measurements](measurements.md#steady-tones)).
 
 **Open questions:**
@@ -259,7 +260,6 @@ The biggest risk is latency: all stages together must stay live.
 - [ ] Defaults of the expander: speech threshold 6 dB and opening above −40 dBFS (see [DeepFilterNet3 on recordings](#model-choice)), once more recordings and clean speech confirm it.
 - [ ] Drop the zero mask of DeepFilterNet3 (see [Model choice](#model-choice)): on the VoiceBank-DEMAND test set PESQ 3.16 instead of 2.70 and quiet speech isn't muted anymore, but the pauses aren't exact silence anymore, the expander has to keep the noise down. Through the chain on the recordings: on the USB microphone hardly any difference, the noise of the built-in microphone came through at −44 to −50 dBFS in three quarters of the pause frames without it (the expander's level criterion, −50 dBFS, kept it open). Measured again with the chain now: the same; with the expander opening only above −40 dBFS the pauses of the fans went about as quiet as with the zeros (8.9 against 4.9 % of the frames above −60 dBFS) but as much speech came out below −45 dBFS (18 %), on the call 18.7 against 1.4 % in the pauses and 4.8 against 8.0 % of the speech ([measurements](measurements.md#zero-mask)). The zeros also skip the model's decoders, which saves about 40 % of the chain's CPU (156 instead of 272 µs per frame on the call, three quarters of its frames zeroed); to be decided by listening.
 - [ ] Settings per microphone: they're global, while a good and a noisy microphone want different ones (the expander's thresholds, the level the noise suppression hears the voice at); they'd follow the input chosen.
-- [ ] Should the chain also filter incoming audio (speaker side)?
 - [ ] Test coverage of the live mode and the app's window, which the CI's coverage leaves out as whole files (they need PipeWire or a display): either pull what can be tested out into files of their own, as with the bridge and the settings (on stable, only whole files can be left out), or measure on nightly and leave out single functions with `#[cfg_attr(coverage_nightly, coverage(off))]`. Not decided whether it's worth it.
 
 ## Roadmap

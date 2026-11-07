@@ -27,10 +27,3 @@ Work items that don't change the design; the open design questions and TODOs are
   vectorized as written. The fix belongs in tract (the strided case vectorized, or compiled with
   `#[target_feature]` like the contiguous one): `multiversion` on our functions doesn't reach it,
   and a `target-cpu` doesn't apply to `cargo install`.
-
-## Releases
-
-- [ ] The release PR title `chore: bump version (v{{ version }})` in `release-plz.toml` works while
-  voice-filter and deep-filter-rt get the same version (0.1.0, 0.1.1); once one PR releases them
-  with different versions (e.g. a breaking change of deep-filter-rt), release-plz probably can't
-  fill in `version`: check that PR's title.
