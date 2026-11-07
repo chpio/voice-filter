@@ -4,5 +4,17 @@
         "autoAllowBashIfSandboxed": false,
         "allowUnsandboxedCommands": false,
         "excludedCommands": ["git commit *", "git tag *", "git rebase *"]
+    },
+    "permissions": {
+        "deny": [
+            "Read(~/.ssh/**)",
+            "Read(~/.gnupg/private-keys-v1.d/**)",
+            "Edit(./.claude/settings.json)",
+            "Write(./.claude/settings.json)",
+            "Edit(./.claude/settings.local.json)",
+            "Write(./.claude/settings.local.json)",
+            "Edit(~/.claude/settings.json)",
+            "Write(~/.claude/settings.json)"
+        ]
     }
 }
