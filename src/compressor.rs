@@ -1,7 +1,7 @@
 use ::anyhow::Result;
 
 use crate::agc;
-use crate::dsp::{db_to_gain, power_db, smoothing};
+use crate::dsp::{db_to_gain, follow, power_db, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 
@@ -135,12 +135,7 @@ impl Stage for Compressor {
             } else {
                 0.
             };
-            let speed = if wanted < self.reduction_db {
-                attack
-            } else {
-                release
-            };
-            self.reduction_db += (wanted - self.reduction_db) * speed;
+            self.reduction_db = follow(self.reduction_db, wanted, attack, release);
             *sample *= db_to_gain(self.reduction_db + makeup);
         }
         Ok(())

@@ -28,3 +28,11 @@ fn without_denormals_restores_the_flags_after_a_panic() {
     assert!(result.is_err());
     assert_eq!(half_of_smallest().classify(), FpCategory::Subnormal);
 }
+
+#[test]
+fn follow_falls_by_the_attack_and_rises_by_the_release() {
+    use ::voice_filter::dsp::follow;
+    assert_eq!(follow(0., -10., 0.5, 0.1), -5.);
+    assert_eq!(follow(-10., 0., 0.5, 0.1), -9.);
+    assert_eq!(follow(-3., -3., 0.5, 0.1), -3.);
+}

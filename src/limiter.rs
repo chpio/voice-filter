@@ -1,6 +1,6 @@
 use ::anyhow::Result;
 
-use crate::dsp::{db_to_gain, gain_to_db, smoothing};
+use crate::dsp::{db_to_gain, follow, gain_to_db, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -83,8 +83,7 @@ impl Stage for Limiter {
         }
         for (i, (out, peak)) in frame.iter_mut().zip(peaks).enumerate() {
             let wanted = if peak > ceiling { ceiling / peak } else { 1. };
-            let rate = if wanted < self.gain { attack } else { release };
-            self.gain += (wanted - self.gain) * rate;
+            self.gain = follow(self.gain, wanted, attack, release);
             // the smoothing may lag behind a steep peak, the clamp catches what's left
             *out = (work[i] * self.gain).clamp(-ceiling, ceiling);
         }

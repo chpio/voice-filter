@@ -44,6 +44,15 @@ pub fn smoothing(tau: f32) -> f32 {
     1. - (-1. / (tau * SAMPLE_RATE as f32)).exp()
 }
 
+/// One sample of a one-pole smoothing of `value` toward `target` that falls by the factor `attack`
+/// and rises by `release` (see [`smoothing`]): the detector of a gain or a reduction in dB, which
+/// turn down by falling.
+#[inline]
+pub fn follow(value: f32, target: f32, attack: f32, release: f32) -> f32 {
+    let factor = if target < value { attack } else { release };
+    value + (target - value) * factor
+}
+
 /// A linear ramp from `from` to `to` over a frame, a value per sample: the last one is `to`, so the
 /// next frame goes on from there without a step.
 pub fn ramp(from: f32, to: f32) -> impl Iterator<Item = f32> {

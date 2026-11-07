@@ -2,7 +2,7 @@ use ::std::f64::consts::PI;
 
 use ::anyhow::Result;
 
-use crate::dsp::{db_to_gain, smoothing};
+use crate::dsp::{db_to_gain, follow, smoothing};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, SAMPLE_RATE};
@@ -168,12 +168,7 @@ impl Stage for DeEsser {
             } else {
                 0.
             };
-            let speed = if wanted < self.reduction_db {
-                attack
-            } else {
-                release
-            };
-            self.reduction_db += (wanted - self.reduction_db) * speed;
+            self.reduction_db = follow(self.reduction_db, wanted, attack, release);
             // the release only nears 0, back to the unchanged input once it's inaudible
             if wanted == 0. && self.reduction_db > -0.01 {
                 self.reduction_db = 0.;
