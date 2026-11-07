@@ -5,9 +5,6 @@ Work items that don't change the design; the open design questions and TODOs are
 
 ## Echo cancellation
 
-- [ ] Remove `[patch.crates-io]` for sonora from `Cargo.toml` (and its `allow-git` in `deny.toml`)
-  once a release of sonora has [PR #40](https://github.com/dignifiedquire/sonora/pull/40), its
-  allocation-free echo canceller; `tests/echo.rs` checks there are no allocations per frame.
 - [ ] A second test recording with only speech from the speakers, like the other side of a call,
   through `process --reference`: in the first one DeepFilterNet3 alone already removed the echo,
   while it let speech from a phone through in an earlier test.
@@ -15,8 +12,8 @@ Work items that don't change the design; the open design questions and TODOs are
   that AEC3 keeps up with the drift.
 - [ ] Less choppy speech when talking into the playback: Voice Protection keeps part of the voice
   while you talk (see the concept, "Double talk"). Still to try: AEC3's own configuration for it
-  (its suppressor while the near end dominates), once sonora's builder takes one
-  ([PR #41](https://github.com/dignifiedquire/sonora/pull/41)).
+  (its suppressor while the near end dominates), which sonora's builder takes since 0.3.0
+  (`echo_canceller3_config`).
 
 ## Audio path
 

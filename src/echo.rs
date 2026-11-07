@@ -7,7 +7,6 @@ use ::sonora::config::{EchoCanceller, MaxProcessingRate, Pipeline};
 use ::sonora::{AudioProcessing, Config, StreamConfig};
 
 use crate::atomic::AtomicF32;
-use crate::dsp::without_denormals;
 use crate::level;
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
@@ -264,10 +263,10 @@ impl Stage for Echo {
         Some(("playing", f32::from(u8::from(self.status.playing()))))
     }
 
-    /// With denormals flushed (in the chain they are anyway): the filters of AEC3 decay toward
-    /// zero while the reference is silent, which made it 10–50× slower (sonora issue #34).
+    /// sonora flushes denormals itself in every call (since 0.3.0): the filters of AEC3 decay
+    /// toward zero while the reference is silent, which made it 10–50× slower (sonora issue #34).
     fn process(&mut self, frame: &mut Frame) -> Result<()> {
-        without_denormals(|| self.run(frame))
+        self.run(frame)
     }
 }
 

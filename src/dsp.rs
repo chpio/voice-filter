@@ -24,8 +24,8 @@ pub fn power_db(power: f32) -> f32 {
 /// processing: denormals (below 1.2e-38 in f32) are many times slower to compute, and in a pause
 /// `denoise` puts out exact zeros, through which a filter's memory decays and toward which a
 /// one-pole smoothing sticks at a denormal (`y * factor` rounds to nothing). On a recording of a
-/// call it saved about 7 µs per frame in eq, deesser and compressor (an AMD Zen 4), AEC3 gets
-/// 10–50× slower while the reference is silent (sonora issue #34).
+/// call it saved about 7 µs per frame in eq, deesser and compressor (an AMD Zen 4). AEC3, 10–50×
+/// slower while the reference is silent (sonora issue #34), flushes them itself since sonora 0.3.0.
 pub fn without_denormals<T>(f: impl FnOnce() -> T) -> T {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
     // SAFETY: Rust assumes the default floating-point environment, so what the compiler computes

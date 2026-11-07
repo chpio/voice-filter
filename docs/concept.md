@@ -71,12 +71,12 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 
 - Echo alone: 28–34 dB removed. The speaker alone, without playback: unchanged.
 - Talking into the playback: the level of the output no longer follows the playback (correlation 0.04, the microphone 0.37). But DeepFilterNet3 alone did as well in this recording (0.00); in an earlier test it let speech from a phone through, so a test with only speech played back is still to do.
-- 60 µs per frame on average, at most 0.6 ms; flushing denormals changed nothing here. About 40 allocations per frame, which have to go first (see `TODO.md`).
+- 60 µs per frame on average, at most 0.6 ms; flushing denormals changed nothing here. About 40 allocations per frame, gone since sonora 0.3.0 (its PR #40).
 **Live test** (2026-10-31, a video with speech over the speakers, nobody talking, the echo cancellation switched every 15 s, only it and the tone stages on, recorded from "Voice Filter"):
 
 - With it −72 to −76 dBFS, without it −38 to −49 dBFS: about 30 dB of the echo removed. Switched on again it took about 4 s to remove it fully: a stage that's off pauses and misses what the speakers play meanwhile.
 - In the first version the reference stream was in the `node.group` and `node.link-group` of the other streams. PipeWire puts the nodes of both on one driver, so the speakers ran under the USB microphone's clock and its quantum of 256 while an app recorded: xruns at every join and leave (511 at the output, 3134 at Firefox's playback, which wants 900–3600), heard as dropouts and a choppy video. Without them, the reference stream follows the speakers' clock and hands over through its ring.
-- Talking into the playback, the voice gets choppy now and then: AEC3's suppressor turns down what's left of the echo frequency by frequency, and the voice with it, the more the louder the echo is against the voice (quiet here, about −36 dBFS at the microphone). AEC3's configuration could make it gentler, but sonora 0.2 doesn't take it yet ([PR #41](https://github.com/dignifiedquire/sonora/pull/41) would); the plan is now to let DeepFilterNet3 shape the voice instead, see [Double talk](#double-talk-the-echo-cancellation-only-decides).
+- Talking into the playback, the voice gets choppy now and then: AEC3's suppressor turns down what's left of the echo frequency by frequency, and the voice with it, the more the louder the echo is against the voice (quiet here, about −36 dBFS at the microphone). AEC3's configuration could make it gentler, which sonora's builder takes since 0.3.0 (`echo_canceller3_config`, not tried yet, see `TODO.md`); the plan is now to let DeepFilterNet3 shape the voice instead, see [Double talk](#double-talk-the-echo-cancellation-only-decides).
 - AEC3's own metrics only cover its linear filter: on the spike's recording, which lost 30 dB of echo, it reported 5–7 dB ERLE and an ERL stuck at its initial 20 dB, so the app doesn't show them. Its delay comes in steps of 4 ms, 4 ms on that recording, 0 live with the USB microphone (another microphone showed more).
 
 ### Double talk: the echo cancellation only decides
@@ -277,7 +277,7 @@ Three phases, each usable on its own. Each phase ends with a latency and listeni
    - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
 3. **Echo**
    - [x] spike: AEC3 from sonora on a recording (see [Echo cancellation](#echo-cancellation))
-   - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; sonora patched to its allocation-free PR until a release)
+   - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; allocation-free since sonora 0.3.0)
    - [x] live test: about 30 dB of the echo removed, the reference stream on the speakers' clock
    - [x] offline: what the echo cancellation costs the voice in double talk, the sidechain against it, and DeepFilterNet3's encoder telling speech in the reference from music (see [Double talk](#double-talk-the-echo-cancellation-only-decides))
    - [x] less choppy speech when talking into the playback: the sidechain in the chain while you talk (Voice Protection, 25 %; live still to listen to)

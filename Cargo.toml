@@ -57,8 +57,8 @@ rlsf = "0.2"
 rtrb = "0.4"
 # for the app: the derive of zbus that reads all properties at once expands to serde
 serde = { version = "1", optional = true }
-# AEC3, the echo canceller of WebRTC, in pure Rust; patched below
-sonora = "0.2"
+# AEC3, the echo canceller of WebRTC, in pure Rust
+sonora = "0.3"
 unic-langid = "0.9"
 zbus = { version = "6", default-features = false, features = ["default-rt", "service"] }
 
@@ -88,15 +88,3 @@ harness = false
 [profile.release]
 panic = "abort"
 
-# sonora 0.2.0 allocates about 40 times per 10 ms frame in the echo canceller; PR #40
-# (https://github.com/dignifiedquire/sonora/pull/40) makes it allocation-free with byte-identical
-# output. Until a release has it, this workspace builds sonora from that commit; a published
-# voice-filter falls back to 0.2.0 from crates.io. Remove it with the next release of sonora.
-[patch.crates-io]
-sonora = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
-sonora-aec3 = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
-sonora-agc2 = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
-sonora-common-audio = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
-sonora-fft = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
-sonora-ns = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
-sonora-simd = { git = "https://github.com/dignifiedquire/sonora", rev = "16b486dac0b07f0a8ee071381761d7277ff9ebe9" }
