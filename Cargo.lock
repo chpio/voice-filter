@@ -584,6 +584,7 @@ dependencies = [
  "itertools 0.15.0",
  "log",
  "ndarray",
+ "no_denormals",
  "num-complex",
  "realfft",
  "rust-ini",
