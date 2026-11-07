@@ -37,7 +37,7 @@ use ::clap::Parser;
 use ::sonora::config::EchoCanceller3Config;
 use ::voice_filter::denoise::Denoise;
 use ::voice_filter::dsp::{power_db, ramp};
-use ::voice_filter::echo::{Echo, Reference};
+use ::voice_filter::echo::{self, Echo, Reference};
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE, offline};
 
@@ -73,7 +73,7 @@ struct Args {
         allow_negative_numbers = true
     )]
     speech_db: Vec<f32>,
-    /// The tunings of AEC3 to try, see [`aec3`].
+    /// The tunings of AEC3 to try, see [`aec3`] (`default`: AEC3's own, not the chain's).
     #[arg(long, value_delimiter = ',', default_value = "default")]
     aec3: Vec<String>,
     /// Writes every variant's output over the whole recording into this directory.
@@ -99,11 +99,12 @@ fn seconds(arg: &str) -> Result<Range<f32>, String> {
 ///   0.1/0.3),
 /// - `ep=`: the echo path's default gain (1), which scales its estimate of the echo everywhere.
 ///
-/// Presets: `detect` (`enr=1+snr=10+trigger=6+hold=100`), `transparent` (`lf=3/4+hf=1/2`),
-/// `nearend` (both).
+/// Presets: `chain` (the chain's, [`echo::aec3_config`]: `lf=6/8+hf=2/4+enr=1`), `detect`
+/// (`enr=1+snr=10+trigger=6+hold=100`), `transparent` (`lf=3/4+hf=1/2`), `nearend` (both).
 fn aec3(tuning: &str) -> Result<Option<EchoCanceller3Config>> {
     let tuning = match tuning {
         "default" => return Ok(None),
+        "chain" => return Ok(Some(echo::aec3_config())),
         "detect" => "enr=1+snr=10+trigger=6+hold=100",
         "transparent" => "lf=3/4+hf=1/2",
         "nearend" => "enr=1+snr=10+trigger=6+hold=100+lf=3/4+hf=1/2",

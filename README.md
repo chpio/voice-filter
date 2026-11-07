@@ -147,10 +147,10 @@ manager can start it again.
   volume above 100 % in software doesn't help, the automatic gain control does that anyway.
 - With **headphones** there's no echo, switch the echo cancellation off. Over speakers it removes
   the echo; what's left of it it turns down band by band, and the voice with it while you talk
-  into the playback. While you talk it keeps part of your voice as it was (**Voice Protection**,
-  25 %) and leaves the rest of the echo to the noise suppression, which removes music by itself;
-  while you're silent it acts fully. Higher keeps more of the voice but lets more of the playback
-  through under it; if the other side of a call hears itself, lower it.
+  into the playback, less while it hears you talk (tuned for that). **Voice Protection** (off,
+  0 %) keeps a part of your voice as it was while you talk and leaves the rest of the echo to the
+  noise suppression, which removes music by itself; while you're silent the echo cancellation acts
+  fully. Higher keeps more of the voice but lets more of the playback through under it.
 
 ### The GNOME app
 

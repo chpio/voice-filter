@@ -420,6 +420,7 @@ against it), all as in the concept's [Double talk](concept.md#double-talk-the-ec
   instead of 8.0 dB, music 16.1 instead of 10.7 dB with another section and level), measured with
   sonora 0.2.0 on other sections; not compared on the same ones.
 - Not listened to yet; a double talk built from two takes, not a real one.
+- Hence the chain runs AEC3 tuned so (`echo::aec3_config`), Voice Protection at 0 % by default.
 
 ## Open
 

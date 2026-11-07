@@ -23,8 +23,9 @@ use crate::{FRAME_LEN, SAMPLE_RATE};
 /// stages after it do that. It runs first, so the other stages don't take the echo for speech.
 ///
 /// While you talk into the playback, AEC3's suppressor turns down the voice with what's left of
-/// the echo. So it also hands the noise suppression the microphone as it was (a [`Sidechain`]) and
-/// whether the speakers play: while they do and you talk, the noise suppression applies its gains
+/// the echo, less so as tuned ([`aec3_config`]). It also hands the noise suppression the
+/// microphone as it was (a [`Sidechain`]) and whether the speakers play: with Voice Protection
+/// above 0 (off by default), while they do and you talk, the noise suppression applies its gains
 /// partly to the raw microphone (music it removes by itself; while you're silent the echo
 /// cancellation acts fully, else the music came through in the pauses).
 pub struct Echo {
@@ -43,6 +44,23 @@ pub struct Echo {
     silent: usize,
     /// Frames of the microphone in a row without a frame of the reference.
     idle: usize,
+}
+
+/// AEC3's configuration in the chain: its defaults, but while you talk into the playback it takes
+/// you for dominant sooner (an echo-to-near-end ratio below 1 instead of 0.25) and then suppresses
+/// less (it leaves the low bands alone up to a ratio of 6 instead of 1.09, the high ones up to 2
+/// instead of 0.1, suppressing fully above 8 and 4): in double talk built from recordings it kept
+/// 1.3–5.3 dB more of the voice, with the echo alone as before (`docs/measurements.md`, "AEC3
+/// tuning in double talk").
+pub fn aec3_config() -> EchoCanceller3Config {
+    let mut config = EchoCanceller3Config::default();
+    config.suppressor.dominant_nearend_detection.enr_threshold = 1.;
+    let nearend = &mut config.suppressor.nearend_tuning;
+    nearend.mask_lf.enr_transparent = 6.;
+    nearend.mask_lf.enr_suppress = 8.;
+    nearend.mask_hf.enr_transparent = 2.;
+    nearend.mask_hf.enr_suppress = 4.;
+    config
 }
 
 /// Below this level (dBFS) a frame of the reference counts as silent.
@@ -172,9 +190,9 @@ impl EchoStatus {
 const REFERENCE_CAPACITY: usize = 16384;
 
 impl Echo {
-    /// The stage and the reference to feed it with.
+    /// The stage and the reference to feed it with, AEC3 tuned by [`aec3_config`].
     pub fn new() -> (Self, Reference) {
-        Self::with_aec3(None)
+        Self::with_aec3(Some(aec3_config()))
     }
 
     /// The same with AEC3 tuned (`None`: its defaults), for experiments.
@@ -203,7 +221,7 @@ impl Echo {
             frames: AtomicU64::new(0),
             raw: ::std::array::from_fn(|_| AtomicF32::new(0.)),
             status: status.clone(),
-            protect: Param::new("protect", "Voice Protection", "%", (0., 100., 5.), 25.),
+            protect: Param::new("protect", "Voice Protection", "%", (0., 100., 5.), 0.),
         });
         let echo = Self {
             apm,

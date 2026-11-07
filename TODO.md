@@ -12,9 +12,8 @@ Work items that don't change the design; the open design questions and TODOs are
   that AEC3 keeps up with the drift.
 - [ ] Less choppy speech when talking into the playback: Voice Protection keeps part of the voice
   while you talk (see the concept, "Double talk"). AEC3's own configuration, measured offline
-  ("AEC3 tuning in double talk" in `docs/measurements.md`): tuned, AEC3 alone keeps more of the
-  voice than the chain today and lets less through besides it; still to decide whether it replaces
-  Voice Protection, and to listen to live.
+  ("AEC3 tuning in double talk" in `docs/measurements.md`) kept more of the voice, so the chain
+  runs it tuned with Voice Protection at 0 %; still to listen to live.
 
 ## Audio path
 
