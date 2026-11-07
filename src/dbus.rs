@@ -224,7 +224,7 @@ impl Service {
     pub fn set_enabled(&mut self, on: bool) -> fdo::Result<()> {
         self.enabled.store(on, Ordering::Relaxed);
         (self.switched)();
-        self.save(|dir| settings::save_enabled(dir, on))
+        self.save(|dir| settings::save_enabled(dir, &self.enabled))
     }
 
     /// The stages in the order of the chain and whether they're on.

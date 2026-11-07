@@ -244,8 +244,7 @@ fn keeps_the_stages_and_parameters() {
     assert!(service.set_parameter("agc", "target", -40.).is_err());
 
     let restored = service_with(Arc::default(), None);
-    let warnings =
-        settings::restore_chain(dir.path(), &restored.switches, &restored.params).unwrap();
+    let warnings = settings::restore_chain(dir.path(), &restored.switches, &restored.params);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(restored.params[0].1.get(), 24.);
     assert_eq!(restored.params[1].1.get(), -18.);

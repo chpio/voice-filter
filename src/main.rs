@@ -90,8 +90,16 @@ fn device(
             Some(name)
         }
         (Some(name), None) => Some(name),
-        (None, Some(dir)) => load(dir)?,
+        (None, Some(dir)) => saved(dir, load),
         (None, None) => None,
+    })
+}
+
+/// The saved device, `None` with a warning if its file can't be read: the default device then.
+fn saved(dir: &Path, load: fn(&Path) -> Result<Option<String>>) -> Option<String> {
+    load(dir).unwrap_or_else(|err| {
+        eprintln!("Skipped the saved device: {err:#}");
+        None
     })
 }
 
@@ -101,7 +109,7 @@ fn list(
     settings_dir: Option<&Path>,
     load: fn(&Path) -> Result<Option<String>>,
 ) -> Result<()> {
-    let saved = settings_dir.map(load).transpose()?.flatten();
+    let saved = settings_dir.and_then(|dir| saved(dir, load));
     for device in live::devices(direction)? {
         let mark = if saved.as_deref() == Some(&device.name) {
             "*"
@@ -149,7 +157,7 @@ fn main() -> Result<ExitCode> {
             let (chain, reference) = chain::build(args.atten_lim)?;
             if let Some(dir) = settings_dir {
                 let (switches, params) = (chain.switches(), chain.params());
-                for warning in settings::restore_chain(dir, &switches, &params)? {
+                for warning in settings::restore_chain(dir, &switches, &params) {
                     eprintln!("{warning}");
                 }
                 // a limit given on the command line wins over the kept one, and is kept instead

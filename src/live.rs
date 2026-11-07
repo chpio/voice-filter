@@ -143,7 +143,10 @@ pub fn run(
             Ok(None) => {}
             Err(err) => eprintln!("Skipped the saved volume of Listen: {err:#}"),
         }
-        keep_listen = settings::load_listen(dir)?;
+        match settings::load_listen(dir) {
+            Ok(listen) => keep_listen = listen,
+            Err(err) => eprintln!("Skipped the saved switch of Listen: {err:#}"),
+        }
         match settings::load_enabled(dir) {
             Ok(on) => enabled.store(on, Ordering::Relaxed),
             Err(err) => eprintln!("Skipped the saved switch of the filter: {err:#}"),

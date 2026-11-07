@@ -93,7 +93,7 @@ impl Tray {
     pub fn set(&mut self, on: bool) {
         self.enabled.store(on, Ordering::Relaxed);
         if let Some(dir) = &self.settings_dir
-            && let Err(err) = settings::save_enabled(dir, on)
+            && let Err(err) = settings::save_enabled(dir, &self.enabled)
         {
             eprintln!("{err:#}");
         }

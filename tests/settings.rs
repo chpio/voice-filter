@@ -25,12 +25,15 @@ fn keeps_the_input() {
 fn keeps_the_whole_filter_switched_off() {
     let dir = ::tempfile::tempdir().unwrap();
     let path = dir.path().join("enabled");
+    let enabled = AtomicBool::new(true);
     assert!(settings::load_enabled(dir.path()).unwrap());
-    settings::save_enabled(dir.path(), false).unwrap();
+    enabled.store(false, Ordering::Relaxed);
+    settings::save_enabled(dir.path(), &enabled).unwrap();
     assert_eq!(::std::fs::read_to_string(&path).unwrap(), "off\n");
     assert!(!settings::load_enabled(dir.path()).unwrap());
     // on is the default, nothing to keep
-    settings::save_enabled(dir.path(), true).unwrap();
+    enabled.store(true, Ordering::Relaxed);
+    settings::save_enabled(dir.path(), &enabled).unwrap();
     assert!(!path.exists());
     assert!(settings::load_enabled(dir.path()).unwrap());
     ::std::fs::write(&path, "maybe\n").unwrap();
@@ -38,10 +41,53 @@ fn keeps_the_whole_filter_switched_off() {
 }
 
 #[test]
+fn saves_the_switch_as_it_is_when_it_saves() {
+    // the tray switches on, the app off and saves, then the tray saves: off, as it runs, not the
+    // on the tray switched to
+    let dir = ::tempfile::tempdir().unwrap();
+    let enabled = AtomicBool::new(false);
+    enabled.store(true, Ordering::Relaxed);
+    enabled.store(false, Ordering::Relaxed);
+    settings::save_enabled(dir.path(), &enabled).unwrap();
+    settings::save_enabled(dir.path(), &enabled).unwrap();
+    assert!(!settings::load_enabled(dir.path()).unwrap());
+}
+
+#[test]
 fn treats_an_empty_file_as_no_input() {
     let dir = ::tempfile::tempdir().unwrap();
     ::std::fs::write(dir.path().join("input"), "\n").unwrap();
     assert_eq!(settings::load_input(dir.path()).unwrap(), None);
+}
+
+#[test]
+fn names_a_file_it_cant_read() {
+    // `run` prints the error and takes the default device instead
+    let dir = ::tempfile::tempdir().unwrap();
+    let path = dir.path().join("input");
+    ::std::fs::write(&path, b"usb-mic\xff\n").unwrap();
+    let err = settings::load_input(dir.path()).unwrap_err();
+    assert!(
+        format!("{err:#}").contains(&path.display().to_string()),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn restores_the_defaults_from_a_file_it_cant_read() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let path = dir.path().join("chain");
+    ::std::fs::write(&path, b"agc off\ndenoise.limit 30\xff\n").unwrap();
+    let (switches, params) = chain();
+    let warnings = settings::restore_chain(dir.path(), &switches, &params);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains(&path.display().to_string()),
+        "{}",
+        warnings[0]
+    );
+    assert!(switches[1].1.load(Ordering::Relaxed));
+    assert_eq!(params[0].1.get(), 100.);
 }
 
 #[test]
@@ -98,7 +144,7 @@ fn keeps_the_stages_and_parameters() {
     );
 
     let (switches, params) = chain();
-    let warnings = settings::restore_chain(dir.path(), &switches, &params).unwrap();
+    let warnings = settings::restore_chain(dir.path(), &switches, &params);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(switches[0].1.load(Ordering::Relaxed));
     assert!(!switches[1].1.load(Ordering::Relaxed));
@@ -111,7 +157,7 @@ fn keeps_the_stages_and_parameters() {
 fn restores_nothing_without_saved_settings() {
     let dir = ::tempfile::tempdir().unwrap();
     let (switches, params) = chain();
-    let warnings = settings::restore_chain(dir.path(), &switches, &params).unwrap();
+    let warnings = settings::restore_chain(dir.path(), &switches, &params);
     assert!(warnings.is_empty());
     assert_eq!(params[0].1.get(), 100.);
 }
@@ -126,7 +172,7 @@ fn skips_what_doesnt_fit_the_chain() {
     )
     .unwrap();
     let (switches, params) = chain();
-    let warnings = settings::restore_chain(dir.path(), &switches, &params).unwrap();
+    let warnings = settings::restore_chain(dir.path(), &switches, &params);
     assert_eq!(warnings.len(), 6, "{warnings:?}");
     assert!(warnings[0].contains("reverb off"), "{}", warnings[0]);
     // the rest still applies

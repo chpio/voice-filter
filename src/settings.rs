@@ -39,13 +39,12 @@ pub fn load_enabled(dir: &Path) -> Result<bool> {
     }
 }
 
-/// Keeps whether the whole filter is on; only off is written, as for the stages in `chain`.
-pub fn save_enabled(dir: &Path, on: bool) -> Result<()> {
-    if on {
-        remove(dir, ENABLED)
-    } else {
-        save(dir, ENABLED, "off")
-    }
+/// Keeps whether the whole filter is on, as `enabled` says when it's this save's turn (saves go
+/// one at a time); only off is written, as for the stages in `chain`.
+pub fn save_enabled(dir: &Path, enabled: &AtomicBool) -> Result<()> {
+    save_with(dir, ENABLED, || {
+        Ok((!enabled.load(Ordering::Relaxed)).then(|| "off".to_owned()))
+    })
 }
 
 /// The microphone chosen last, the `node.name` of a PipeWire source.
@@ -96,38 +95,44 @@ pub fn save_listen_volume(dir: &Path, db: f32) -> Result<()> {
 }
 
 /// Keeps what differs from the defaults: the stages switched off (`denoise off`) and the
-/// parameters not at their default (`denoise.limit 30`), one per line. A default changed in a
-/// later version applies to everything the user didn't change.
+/// parameters not at their default (`denoise.limit 30`), one per line, as they are when it's this
+/// save's turn (saves go one at a time). A default changed in a later version applies to
+/// everything the user didn't change.
 pub fn save_chain(
     dir: &Path,
     switches: &[(&'static str, Arc<AtomicBool>)],
     params: &[(&'static str, Param)],
 ) -> Result<()> {
-    let mut chain = String::new();
-    for (stage, enabled) in switches {
-        if !enabled.load(Ordering::Relaxed) {
-            writeln!(chain, "{stage} off")?;
+    save_with(dir, CHAIN, || {
+        let mut chain = String::new();
+        for (stage, enabled) in switches {
+            if !enabled.load(Ordering::Relaxed) {
+                writeln!(chain, "{stage} off")?;
+            }
         }
-    }
-    for (stage, param) in params {
-        let value = param.get();
-        if value != param.default {
-            writeln!(chain, "{stage}.{} {value}", param.name)?;
+        for (stage, param) in params {
+            let value = param.get();
+            if value != param.default {
+                writeln!(chain, "{stage}.{} {value}", param.name)?;
+            }
         }
-    }
-    save(dir, CHAIN, chain.trim_end())
+        Ok(Some(chain.trim_end().to_owned()))
+    })
 }
 
 /// Switches the stages and sets the parameters as [`save_chain`] kept them. What doesn't fit the
 /// chain (a stage or parameter that's gone, a value out of range, a line it can't read) is skipped
-/// and returned as a warning each, the rest still applies.
+/// and returned as a warning each, the rest still applies; a file it can't read is one warning,
+/// and everything stays at its default.
 pub fn restore_chain(
     dir: &Path,
     switches: &[(&'static str, Arc<AtomicBool>)],
     params: &[(&'static str, Param)],
-) -> Result<Vec<String>> {
-    let Some(chain) = load(dir, CHAIN)? else {
-        return Ok(Vec::new());
+) -> Vec<String> {
+    let chain = match load(dir, CHAIN) {
+        Ok(Some(chain)) => chain,
+        Ok(None) => return Vec::new(),
+        Err(err) => return vec![format!("Skipped the saved stages and parameters: {err:#}")],
     };
     let mut warnings = Vec::new();
     for line in chain.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -135,7 +140,7 @@ pub fn restore_chain(
             warnings.push(format!("Skipped “{line}” of the saved settings: {warning}"));
         }
     }
-    Ok(warnings)
+    warnings
 }
 
 fn restore_line(
@@ -183,24 +188,32 @@ fn load(dir: &Path, name: &str) -> Result<Option<String>> {
 }
 
 fn remove(dir: &Path, name: &str) -> Result<()> {
-    let path = dir.join(name);
-    match fs::remove_file(&path) {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => {
-            Err(err).with_context(|| format!("Could not remove {}", path.display()))
-        }
-        _ => Ok(()),
-    }
+    save_with(dir, name, || Ok(None))
 }
 
-/// Writes a file next to it and renames that over it, so a crash never leaves half a setting
-/// (a slider in the app saves many times while it's dragged).
 fn save(dir: &Path, name: &str, value: &str) -> Result<()> {
+    save_with(dir, name, || Ok(Some(value.to_owned())))
+}
+
+/// Keeps what `value` gives in the file `name`, `None` removes it. Writes a file next to it and
+/// renames that over it, so a crash never leaves half a setting (a slider in the app saves many
+/// times while it's dragged).
+fn save_with(dir: &Path, name: &str, value: impl FnOnce() -> Result<Option<String>>) -> Result<()> {
     // one at a time: the D-Bus service and the tray save from threads of their own, and would
-    // write the same temporary file
+    // write the same temporary file; `value` is read in turn, so the last save writes what's
+    // switched and set now, not what was when another save began
     static SAVING: Mutex<()> = Mutex::new(());
     let _saving = SAVING.lock().unwrap_or_else(PoisonError::into_inner);
-    fs::create_dir_all(dir).with_context(|| format!("Could not create {}", dir.display()))?;
     let path = dir.join(name);
+    let Some(value) = value()? else {
+        return match fs::remove_file(&path) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => {
+                Err(err).with_context(|| format!("Could not remove {}", path.display()))
+            }
+            _ => Ok(()),
+        };
+    };
+    fs::create_dir_all(dir).with_context(|| format!("Could not create {}", dir.display()))?;
     let temporary = dir.join(format!(".{name}.tmp"));
     fs::write(&temporary, format!("{value}\n"))
         .with_context(|| format!("Could not write {}", temporary.display()))?;
