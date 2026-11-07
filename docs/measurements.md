@@ -5,7 +5,8 @@ were measured, so they can be repeated. The decisions themselves are in the [con
 
 **Contents:** [Method](#method) · [Skipping frames](#skipping-frames-by-the-estimated-snr) ·
 [Low-latency variant](#low-latency-variant) · [High-pass and input level](#high-pass-and-input-level)
-· [Zero mask](#zero-mask) · [Steady tones](#steady-tones) · [Quantum](#quantum) · [Open](#open)
+· [Zero mask](#zero-mask) · [Steady tones](#steady-tones) · [Quantum](#quantum) ·
+[AEC3 tuning](#aec3-tuning-in-double-talk) · [Open](#open)
 
 ## Method
 
@@ -371,6 +372,54 @@ caches and the clock up, while the daemon runs one frame every 10 ms and the cor
 down in between. The benchmark has no reference for the echo canceller, hence its 5 µs for `echo`
 against 0.14 ms live. So the benchmark compares stages and builds, the CPU load users see is this
 one.
+
+## AEC3 tuning in double talk
+
+Whether AEC3's own configuration (sonora 0.3.0, `echo_canceller3_config`) keeps more of the voice
+while you talk into the playback than Voice Protection. 2026-11-07, `examples/sidechain.rs` with
+`--aec3` (the settings in its docs), the Razer on the laptop's video with speech (`--voice 0..21
+--echo 60..85`, also with `--echo-gain 12`) and on the Bluetooth music (`--voice 67..90`, without
+vocals `--echo 30..61 --echo-gain 10`, the song with vocals `--echo 193..238`), `--mix 1,0.75
+--speech-db 10`. *Echo* is what's left of the echo alone (dBFS), *loss* the mean loss of the voice
+(dB), *lost* the share of it more than 6 dB down, *gaps* what comes through besides the voice (dB
+against it), all as in the concept's [Double talk](concept.md#double-talk-the-echo-cancellation-only-decides).
+*Now* is the chain today (AEC3's defaults, Voice Protection 25 % while you talk: `adapt+10-0.75-nodf`),
+*AEC3 alone* without Voice Protection (`mix-1.00`), *tuned* with
+`lf=6/8+hf=2/4+enr=1`: AEC3 takes you for dominant at an echo-to-near-end ratio below 1 instead of
+0.25 and then leaves the bands alone up to a ratio of 6 (low) and 2 (high) instead of 1.09 and 0.1.
+
+| Echo               | Variant                 |  Echo | Loss | Lost |  Gaps |
+| ------------------ | ----------------------- | ----: | ---: | ---: | ----: |
+| Video, speech      | now                     | −88.7 |  6.3 | 29 % | −33.4 |
+|                    | AEC3 alone              | −94.6 |  6.5 | 29 % | −41.8 |
+|                    | tuned, alone            | −94.6 |  3.7 | 16 % | −39.3 |
+|                    | tuned, Voice Protection | −88.7 |  4.9 | 20 % | −30.8 |
+| Video, +12 dB      | now                     | −78.8 |  5.6 | 25 % | −28.6 |
+|                    | AEC3 alone              | −78.8 |  5.5 | 24 % | −36.9 |
+|                    | tuned, alone            | −78.8 |  4.3 | 20 % | −36.0 |
+|                    | tuned, Voice Protection | −78.8 |  4.9 | 21 % | −26.2 |
+| Music, no vocals   | now                     | −87.6 | 13.4 | 53 % | −26.6 |
+|                    | AEC3 alone              | −87.6 | 16.1 | 63 % | −32.4 |
+|                    | tuned, alone            | −86.2 | 10.8 | 44 % | −32.4 |
+|                    | tuned, Voice Protection | −86.2 |  9.4 | 38 % | −25.8 |
+| Song with vocals   | now                     | −67.8 | 15.0 | 57 % | −31.2 |
+|                    | AEC3 alone              | −65.9 | 17.0 | 66 % | −39.0 |
+|                    | tuned, alone            | −65.9 | 13.7 | 53 % | −33.5 |
+|                    | tuned, Voice Protection | −67.8 | 12.9 | 48 % | −28.7 |
+
+- Tuned AEC3 alone keeps more of the voice than the chain today on all four and lets less through
+  besides it (gaps 2–7 dB lower), the echo alone stays where it was: the tuning only acts while
+  AEC3 takes you for dominant. Voice Protection on top keeps a little more on the music, a little
+  less on the video, and raises the gaps by 5–10 dB again.
+- The single settings: `lf=3/4+hf=1/2` took 0.5–1.3 dB off the loss, `6/8` and `2/4` up to 2 dB,
+  `10/12` and `4/6` no more than that; `enr=1` alone 0.3–2.2 dB, together with `6/8`, `2/4` 1.2–5.3
+  dB. `snr=10` and `hold=100` hardly changed anything; `trigger=6` (6 bands instead of 12) let 5 dB
+  more of the louder video's echo alone through and was left out; the echo path's default gain
+  halved (`ep=0.5`) changed nothing.
+- The losses with AEC3's defaults are lower than those in the concept's first table (video 6.5
+  instead of 8.0 dB, music 16.1 instead of 10.7 dB with another section and level), measured with
+  sonora 0.2.0 on other sections; not compared on the same ones.
+- Not listened to yet; a double talk built from two takes, not a real one.
 
 ## Open
 

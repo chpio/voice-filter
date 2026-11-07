@@ -3,7 +3,7 @@ use ::std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ::anyhow::{Result, anyhow};
 use ::rtrb::{Consumer, Producer, RingBuffer};
-use ::sonora::config::{EchoCanceller, MaxProcessingRate, Pipeline};
+use ::sonora::config::{EchoCanceller, EchoCanceller3Config, MaxProcessingRate, Pipeline};
 use ::sonora::{AudioProcessing, Config, StreamConfig};
 
 use crate::atomic::AtomicF32;
@@ -174,6 +174,11 @@ const REFERENCE_CAPACITY: usize = 16384;
 impl Echo {
     /// The stage and the reference to feed it with.
     pub fn new() -> (Self, Reference) {
+        Self::with_aec3(None)
+    }
+
+    /// The same with AEC3 tuned (`None`: its defaults), for experiments.
+    pub fn with_aec3(aec3: Option<EchoCanceller3Config>) -> (Self, Reference) {
         let config = Config {
             pipeline: Pipeline {
                 // 32 kHz by default, which would cut what's above 16 kHz
@@ -184,11 +189,14 @@ impl Echo {
             ..Config::default()
         };
         let stream = StreamConfig::new(SAMPLE_RATE, 1);
-        let apm = AudioProcessing::builder()
+        let mut builder = AudioProcessing::builder()
             .config(config)
             .capture_config(stream)
-            .render_config(stream)
-            .build();
+            .render_config(stream);
+        if let Some(aec3) = aec3 {
+            builder = builder.echo_canceller3_config(aec3);
+        }
+        let apm = builder.build();
         let (producer, consumer) = RingBuffer::new(REFERENCE_CAPACITY);
         let status = Arc::new(EchoStatus::new());
         let sidechain = Arc::new(Sidechain {

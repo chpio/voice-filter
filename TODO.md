@@ -11,9 +11,10 @@ Work items that don't change the design; the open design questions and TODOs are
 - [ ] Over a longer call: the reference stream and the microphone run on different clocks, check
   that AEC3 keeps up with the drift.
 - [ ] Less choppy speech when talking into the playback: Voice Protection keeps part of the voice
-  while you talk (see the concept, "Double talk"). Still to try: AEC3's own configuration for it
-  (its suppressor while the near end dominates), which sonora's builder takes since 0.3.0
-  (`echo_canceller3_config`).
+  while you talk (see the concept, "Double talk"). AEC3's own configuration, measured offline
+  ("AEC3 tuning in double talk" in `docs/measurements.md`): tuned, AEC3 alone keeps more of the
+  voice than the chain today and lets less through besides it; still to decide whether it replaces
+  Voice Protection, and to listen to live.
 
 ## Audio path
 

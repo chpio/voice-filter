@@ -139,6 +139,8 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 
 **In the chain now:** the sidechain only while the speakers play (the reference above −70 dBFS within the last second) and you talk (DeepFilterNet3's SNR above 10 dB, held 200 ms), whatever they play; while you're silent the echo cancellation acts fully (the music alone at −62.5 dBFS again, as without the sidechain), with silent speakers it's as before. With that music and speech from the speakers got the same, so the detector of speech in the reference went, with its parameter; `DfTract::analyze` stays in deep-filter-rt. The parameter of the echo stage: `protect` (25 %; 0 % is the chain as before).
 
+**AEC3 tuned instead** (2026-11-07, sonora 0.3.0 takes its configuration): taking you for dominant sooner and suppressing less while you are, AEC3 alone kept more of the voice than the chain with Voice Protection on all four echoes and let 2–7 dB less through besides it, the echo alone as before ([measurements](measurements.md#aec3-tuning-in-double-talk)). Open: whether it replaces Voice Protection; not listened to yet.
+
 Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers) and listening live: whether the level of the music under the voice is heard to change with the phrases (about 11 dB between talking and pauses), and whether quiet word beginnings switch in time.
 
 - AGC2 against our AGC, compressor and limiter, on another recording: 6 dB quieter with its defaults, the same spread between quiet and loud speech, pauses 5 dB further below the speech, peaks up to 0 dBFS. Not better enough to give up our adjustable chain; the expander would bring the quieter pauses.

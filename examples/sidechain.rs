@@ -23,6 +23,9 @@
 //!   of how much quieter (the voice turned down), `leak` of how much louder (residual echo), `lost`
 //!   the share more than 6 dB quieter (choppy).
 //!
+//! With `--aec3` every variant runs once per tuning of AEC3 (see [`aec3`]), its name prefixed
+//! with the tuning's but for `default`.
+//!
 //! With `--out` it writes every variant's output over the whole recording (with its real double
 //! talk) as `<variant>.wav`, to listen to.
 
@@ -31,6 +34,7 @@ use ::std::path::PathBuf;
 
 use ::anyhow::{Context, Result, ensure};
 use ::clap::Parser;
+use ::sonora::config::EchoCanceller3Config;
 use ::voice_filter::denoise::Denoise;
 use ::voice_filter::dsp::{power_db, ramp};
 use ::voice_filter::echo::{Echo, Reference};
@@ -69,6 +73,9 @@ struct Args {
         allow_negative_numbers = true
     )]
     speech_db: Vec<f32>,
+    /// The tunings of AEC3 to try, see [`aec3`].
+    #[arg(long, value_delimiter = ',', default_value = "default")]
+    aec3: Vec<String>,
     /// Writes every variant's output over the whole recording into this directory.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -80,8 +87,69 @@ fn seconds(arg: &str) -> Result<Range<f32>, String> {
     Ok(parse(start)?..parse(end)?)
 }
 
+/// A tuning of AEC3, aimed at its suppressor while you talk into the playback (`None`: its
+/// defaults): `default`, a preset or settings joined by `+` (`snr=10+trigger=6`), changed from
+/// AEC3's defaults:
+///
+/// - `enr=`, `snr=`, `trigger=`, `hold=`: when it takes the near end (you) for dominant, an
+///   echo-to-near-end ratio below `enr` (0.25) in at least `trigger` bands (12) at an SNR above
+///   `snr` (30), held `hold` blocks of 4 ms (50),
+/// - `lf=T/S`, `hf=T/S`: while it's in that state, the echo-to-near-end ratio up to which it
+///   leaves the low and high bands alone and above which it suppresses fully (1.09/1.1 and
+///   0.1/0.3),
+/// - `ep=`: the echo path's default gain (1), which scales its estimate of the echo everywhere.
+///
+/// Presets: `detect` (`enr=1+snr=10+trigger=6+hold=100`), `transparent` (`lf=3/4+hf=1/2`),
+/// `nearend` (both).
+fn aec3(tuning: &str) -> Result<Option<EchoCanceller3Config>> {
+    let tuning = match tuning {
+        "default" => return Ok(None),
+        "detect" => "enr=1+snr=10+trigger=6+hold=100",
+        "transparent" => "lf=3/4+hf=1/2",
+        "nearend" => "enr=1+snr=10+trigger=6+hold=100+lf=3/4+hf=1/2",
+        other => other,
+    };
+    let mut config = EchoCanceller3Config::default();
+    for setting in tuning.split('+') {
+        let (key, value) = setting
+            .split_once('=')
+            .with_context(|| format!("expected KEY=VALUE: {setting}"))?;
+        let number = |s: &str| {
+            s.parse::<f32>()
+                .with_context(|| format!("not a number: {s}"))
+        };
+        let pair = |s: &str| -> Result<(f32, f32)> {
+            let (t, s) = s.split_once('/').context("expected T/S")?;
+            Ok((number(t)?, number(s)?))
+        };
+        let detection = &mut config.suppressor.dominant_nearend_detection;
+        let nearend = &mut config.suppressor.nearend_tuning;
+        match key {
+            "enr" => detection.enr_threshold = number(value)?,
+            "snr" => detection.snr_threshold = number(value)?,
+            "trigger" => detection.trigger_threshold = number(value)? as i32,
+            "hold" => detection.hold_duration = number(value)? as i32,
+            "lf" => {
+                (
+                    nearend.mask_lf.enr_transparent,
+                    nearend.mask_lf.enr_suppress,
+                ) = pair(value)?;
+            }
+            "hf" => {
+                (
+                    nearend.mask_hf.enr_transparent,
+                    nearend.mask_hf.enr_suppress,
+                ) = pair(value)?;
+            }
+            "ep" => config.ep_strength.default_gain = number(value)?,
+            _ => ::anyhow::bail!("unknown AEC3 setting: {key}"),
+        }
+    }
+    Ok(Some(config))
+}
+
 /// How a variant runs.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Variant {
     /// Without the echo cancellation: DeepFilterNet3 on the raw microphone.
     echo: bool,
@@ -95,6 +163,8 @@ struct Variant {
     /// deep filter.
     adaptive: bool,
     speech_db: f32,
+    /// The tuning of AEC3, by [`aec3`].
+    aec3: String,
 }
 
 /// How long [`Variant::adaptive`] stays with the voice after it, in frames (200 ms).
@@ -105,8 +175,13 @@ impl Variant {
         if !self.echo {
             return "no-echo".to_owned();
         }
+        let prefix = if self.aec3 == "default" {
+            String::new()
+        } else {
+            format!("{}:", self.aec3)
+        };
         format!(
-            "{}-{:.2}{}",
+            "{prefix}{}-{:.2}{}",
             if self.adaptive {
                 format!("adapt{:+.0}", self.speech_db)
             } else {
@@ -158,30 +233,36 @@ fn main() -> Result<()> {
         df: true,
         adaptive: false,
         speech_db: 0.,
+        aec3: "default".to_owned(),
     }];
-    for &mix in &args.mix {
-        for df in [true, false] {
-            variants.push(Variant {
-                echo: true,
-                mix,
-                df,
-                adaptive: false,
-                speech_db: 0.,
-            });
-        }
-    }
-    for &speech_db in &args.speech_db {
+    for tuning in &args.aec3 {
+        aec3(tuning)?;
         for &mix in &args.mix {
             for df in [true, false] {
-                // adaptive at 1 with the deep filter is the chain as now
-                if mix < 1. || !df {
-                    variants.push(Variant {
-                        echo: true,
-                        mix,
-                        df,
-                        adaptive: true,
-                        speech_db,
-                    });
+                variants.push(Variant {
+                    echo: true,
+                    mix,
+                    df,
+                    adaptive: false,
+                    speech_db: 0.,
+                    aec3: tuning.clone(),
+                });
+            }
+        }
+        for &speech_db in &args.speech_db {
+            for &mix in &args.mix {
+                for df in [true, false] {
+                    // adaptive at 1 with the deep filter is the chain as now
+                    if mix < 1. || !df {
+                        variants.push(Variant {
+                            echo: true,
+                            mix,
+                            df,
+                            adaptive: true,
+                            speech_db,
+                            aec3: tuning.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -206,8 +287,8 @@ fn main() -> Result<()> {
     // the lead from its second second on, the double talk from its first second on
     let second = SAMPLE_RATE as usize;
     for variant in &variants {
-        let out = run(*variant, &double_talk, &echo_played[..len])?;
-        let target = run(*variant, &voice_only, &silence)?;
+        let out = run(variant, &double_talk, &echo_played[..len])?;
+        let target = run(variant, &voice_only, &silence)?;
         let echo_db = level_db(&out[second.min(lead)..lead]);
         let talk_range = (lead + second).min(len)..len;
         let voice_db = level_db(&out[talk_range.clone()]) - level_db(&target[talk_range.clone()]);
@@ -228,7 +309,7 @@ fn main() -> Result<()> {
         );
         if let Some(dir) = &args.out {
             ::std::fs::create_dir_all(dir)?;
-            let out = run(*variant, &mic, &played)?;
+            let out = run(variant, &mic, &played)?;
             offline::write_wav(&dir.join(format!("{}.wav", variant.name())), &out)?;
         }
     }
@@ -236,8 +317,8 @@ fn main() -> Result<()> {
 }
 
 /// The output of a variant, shifted by its latency so it lines up with the input.
-fn run(variant: Variant, mic: &[f32], played: &[f32]) -> Result<Vec<f32>> {
-    let (mut echo, mut reference): (Echo, Reference) = Echo::new();
+fn run(variant: &Variant, mic: &[f32], played: &[f32]) -> Result<Vec<f32>> {
+    let (mut echo, mut reference): (Echo, Reference) = Echo::with_aec3(aec3(&variant.aec3)?);
     let mut denoise = Denoise::new()?;
     let echo_latency = if variant.echo { echo.latency() } else { 0 };
     let latency = echo_latency + denoise.latency();
