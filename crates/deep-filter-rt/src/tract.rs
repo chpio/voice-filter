@@ -522,7 +522,8 @@ impl DfTract {
         } else {
             self.skip_counter = 0;
         }
-        if self.skip_counter > 5 {
+        // not at a limit of 0 dB: the output is the input then, however quiet
+        if self.skip_counter > 5 && self.attenuates() {
             enh.fill(0.);
             return Ok(-15.);
         }

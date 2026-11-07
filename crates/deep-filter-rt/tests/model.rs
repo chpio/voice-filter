@@ -134,3 +134,25 @@ fn unit_norm_gives_zeros_for_a_state_of_zero() {
     band_unit_norm_t(&xs, &mut state, 0.99, &mut out);
     assert_eq!(out, [0.; 8]);
 }
+
+#[test]
+fn passes_quiet_input_at_a_limit_of_0_db() {
+    // below the level of the silence skip (-70 dBFS), but the model doesn't run at all: the output
+    // is the input, delayed
+    let mut df = DfTract::default();
+    df.set_atten_lim(0.);
+    let delay = df.delay();
+    let input: Vec<f32> = (0..30 * 480)
+        .map(|n| 1e-4 * (n as f32 * 0.05).sin())
+        .collect();
+    let mut output = Vec::<f32>::new();
+    let mut enh = Array2::<f32>::zeros((1, 480));
+    for frame in input.as_chunks::<480>().0 {
+        let noisy = Array2::from_shape_vec((1, 480), frame.to_vec()).unwrap();
+        df.process(noisy.view(), enh.view_mut()).unwrap();
+        output.extend(enh.iter());
+    }
+    for (x, y) in input.iter().zip(&output[delay..]).skip(960) {
+        assert!((x - y).abs() < 1e-7, "{x} against {y}");
+    }
+}
