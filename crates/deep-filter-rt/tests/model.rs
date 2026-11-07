@@ -1,6 +1,7 @@
 //! Runs the embedded DeepFilterNet3 model on a synthetic signal.
 
 use ::deep_filter_rt::tract::DfTract;
+use ::deep_filter_rt::{Complex32, band_unit_norm, band_unit_norm_t};
 use ::ndarray::Array2;
 
 /// White noise in `[-amplitude, amplitude)` from a fixed seed, so every run gets the same input.
@@ -103,4 +104,33 @@ fn applies_the_gains_to_the_other_signal() {
         }
         assert!(energy > 1., "{energy}");
     }
+}
+
+#[test]
+fn skips_the_model_in_digital_silence() {
+    // after 5 frames of silence it gives the skip estimate of -15 dB and zeros, also while the
+    // model would apply its zero gains (upstream issue #713: they reset the counter, so it never
+    // skipped)
+    let mut df = DfTract::default();
+    let mut enh = Array2::ones((1, 480));
+    let silence = Array2::zeros((1, 480));
+    let lsnr: Vec<f32> = (0..10)
+        .map(|_| df.process(silence.view(), enh.view_mut()).unwrap())
+        .collect();
+    assert!(lsnr[..5].iter().all(|&x| x != -15.), "{lsnr:?}");
+    assert!(lsnr[6..].iter().all(|&x| x == -15.), "{lsnr:?}");
+    assert!(enh.iter().all(|&x| x == 0.));
+}
+
+#[test]
+fn unit_norm_gives_zeros_for_a_state_of_zero() {
+    // the state of a bin decays to 0 in long silence where denormals are flushed to zero, which
+    // gave 0 / 0 (upstream issue #713)
+    let mut xs = [Complex32::new(0., 0.); 4];
+    let mut state = [0.; 4];
+    band_unit_norm(&mut xs, &mut state, 0.99);
+    assert_eq!(xs, [Complex32::new(0., 0.); 4]);
+    let mut out = [1.; 8];
+    band_unit_norm_t(&xs, &mut state, 0.99, &mut out);
+    assert_eq!(out, [0.; 8]);
 }

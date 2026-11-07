@@ -273,7 +273,13 @@ pub fn band_unit_norm(xs: &mut [Complex32], state: &mut [f32], alpha: f32) {
     debug_assert_eq!(xs.len(), state.len());
     for (x, s) in xs.iter_mut().zip(state.iter_mut()) {
         *s = x.norm() * (1. - alpha) + *s * alpha;
-        *x /= s.sqrt();
+        // after long silence the state flushes to 0 where denormals are flushed to zero, the
+        // bin is silent then
+        *x = if *s > 0. {
+            *x / s.sqrt()
+        } else {
+            Complex32::new(0., 0.)
+        };
     }
 }
 
@@ -291,8 +297,11 @@ pub fn band_unit_norm_t(xs: &[Complex32], state: &mut [f32], alpha: f32, out: &m
         o_im.iter_mut(),
     ) {
         *s = x.norm() * (1. - alpha) + *s * alpha;
-        *o_re = x.re / s.sqrt();
-        *o_im = x.im / s.sqrt();
+        (*o_re, *o_im) = if *s > 0. {
+            (x.re / s.sqrt(), x.im / s.sqrt())
+        } else {
+            (0., 0.)
+        };
     }
 }
 

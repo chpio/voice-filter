@@ -637,10 +637,6 @@ impl DfTract {
                     self.df_states[0].apply_mask(spec_ch.as_slice_mut().unwrap(), gain_slc);
                 }
             }
-            self.skip_counter = 0;
-        } else {
-            // gains are None => skipped due to LSNR
-            self.skip_counter += 1;
         }
 
         // This spectrum will only be used for the upper frequencies

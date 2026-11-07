@@ -239,6 +239,20 @@ CPUs take longer over a denormal than this Zen 4, so it may save more there. Hen
 `dsp::without_denormals` (flush to zero and denormals are zero, the `no_denormals` crate) around
 every frame of the chain.
 
+Flushing them broke DeepFilterNet3 in long digital silence (upstream issue #713): its unit norm
+divides each bin by the root of a running mean of its magnitude, which only decays (×0.99 per frame)
+while the input is exact zeros, from 1e-4 at the highest bins. Flushed, it reaches 0 after 7,774
+frames (77.7 s) and `0 / 0` gave NaN; the chain put out NaN from frame 7,773 on and kept doing so
+after sound came back (the filters after `denoise` hold it in their state). Upstream's guard, which
+should skip the model after 5 frames below −70 dBFS (mean square below 1e-7), never fired: a frame
+with zero gains reset its counter. Fixed both (a state of 0 gives a bin of 0, the counter goes by the
+level alone). On the recordings the outputs stayed bit for bit the same on the built-in microphone
+and with the speakers; on the USB microphone, whose pauses go below −70 dBFS after the high-pass,
+3,559 of 10,243 and 24,148 of 61,248 frames differ (the model's state now holds through such
+pauses), by −59 and −67 dBFS against the signal's −24 and −25 dBFS: the speech frames (above
+−40 dBFS) changed by −0.02 and −0.04 dB on average (1st percentile −1.1 and −0.7 dB), the pause
+frames above −60 dBFS went from 289 to 299 and from 3,522 to 3,346.
+
 ## Release profile
 
 On the same recording and machine. Fat LTO with one codegen unit: `cargo bench --bench stages`
