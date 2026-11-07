@@ -8,7 +8,9 @@ history at commit
 `LICENSE-MIT` and `LICENSE-APACHE`.
 
 The DeepFilterNet3 model in `models/DeepFilterNet3/` is the content of upstream's
-`models/DeepFilterNet3_onnx.tar.gz` at the same commit, unpacked and otherwise unchanged.
+`models/DeepFilterNet3_onnx.tar.gz` at the same commit, unpacked and otherwise unchanged. Its
+weights are licensed like the code, as upstream's README states since commit
+[`7b14b89`](https://github.com/Rikorose/DeepFilterNet/commit/7b14b89) (2026-11-06).
 
 ## Changes
 
