@@ -1,6 +1,6 @@
 use ::std::cell::{Cell, RefCell};
 use ::std::rc::Rc;
-use ::std::time::Duration;
+use ::std::time::{Duration, Instant};
 
 use ::adw::prelude::*;
 use ::gtk::{gio, glib};
@@ -27,6 +27,10 @@ fn stage_title(name: &str) -> String {
 
 /// How often the window reads the state; the status properties don't emit change signals.
 const POLL: Duration = Duration::from_secs(1);
+/// How long a poll leaves a slider alone after the user changed it: a poll that started before
+/// the change reads the value from before it, and its answer comes up to a round trip later. A
+/// poll and half of it more, generous, it only delays a change from elsewhere.
+const USER_HOLD: Duration = Duration::from_millis(1500);
 /// How often it reads the levels for the meters, while the filter runs.
 const POLL_LEVELS: Duration = Duration::from_millis(100);
 /// The range of the meters, in dBFS.
@@ -46,8 +50,8 @@ const NOISY_POLLS: u32 = 5;
 /// way (a `SwitchRow` among them would have its switch elsewhere).
 struct StageRow {
     row: adw::ExpanderRow,
-    /// Parameter name and its scale.
-    scales: Vec<(String, gtk::Scale)>,
+    /// Parameter name and its slider.
+    sliders: Vec<(String, Slider)>,
     /// Sets the parameters to their defaults.
     reset: gtk::Button,
 }
@@ -77,8 +81,8 @@ struct Widgets {
     enabled_row: adw::ActionRow,
     /// Its switch switches listening, it expands to its volume and whether it's kept.
     listen: adw::ExpanderRow,
-    /// The slider of the volume of Listen, with its value, and the scale in it.
-    listen_volume: (gtk::Box, gtk::Scale),
+    /// The slider of the volume of Listen.
+    listen_volume: Slider,
     keep_listen: adw::SwitchRow,
     /// The meters of the microphone (its noise floor in the subtitle) and of the output.
     input_level: (adw::ActionRow, gtk::LevelBar),
@@ -191,7 +195,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         group
     };
     let volume_row = adw::ActionRow::builder().title(tr("listen-volume")).build();
-    volume_row.add_suffix(&widgets.listen_volume.0);
+    volume_row.add_suffix(&widgets.listen_volume.widget);
     volume_row.add_suffix(&help::button(&tr(help::LISTEN_VOLUME)));
     widgets.listen.add_row(&volume_row);
     widgets.listen.add_row(&widgets.keep_listen);
@@ -411,7 +415,8 @@ fn connect_controls(widgets: &Rc<Widgets>) {
         );
     });
     let weak = Rc::downgrade(widgets);
-    widgets.listen_volume.1.connect_value_changed(move |scale| {
+    let volume = &widgets.listen_volume.scale;
+    volume.connect_value_changed(move |scale| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
@@ -485,6 +490,19 @@ fn reset(
     let Some(proxy) = sendable(widgets) else {
         return;
     };
+    // shown with the next poll, also on a slider the user just changed
+    if let Some(widgets) = widgets.upgrade() {
+        for (stage, StageRow { sliders, .. }, _) in widgets.stages.borrow().iter() {
+            for (name, slider) in sliders {
+                if defaults
+                    .iter()
+                    .any(|(of, param, _)| of == stage && param == name)
+                {
+                    slider.changed.set(None);
+                }
+            }
+        }
+    }
     glib::spawn_future_local(async move {
         for stage in stages {
             if let Err(err) = proxy.set_stage_enabled(&stage, true).await {
@@ -592,14 +610,39 @@ fn listen_volume() -> Parameter {
     }
 }
 
-/// The slider of a parameter, the default marked: its value and the scale, in a box for the row,
-/// and the scale.
+/// The slider of a parameter, see [`slider`].
+struct Slider {
+    /// Its value and the scale, for the row.
+    widget: gtk::Box,
+    scale: gtk::Scale,
+    step: f64,
+    /// When the user changed it last.
+    changed: Rc<Cell<Option<Instant>>>,
+}
+
+impl Slider {
+    /// Shows a value read from the filter, unless the user changed the slider within
+    /// [`USER_HOLD`]: the value read lags behind, the slider would jump back while dragged. Not by
+    /// its focus, the scale keeps it after the drag: a reset or a change from elsewhere didn't
+    /// show until the focus moved on.
+    fn show(&self, value: f64) {
+        let held = self
+            .changed
+            .get()
+            .is_some_and(|at| at.elapsed() < USER_HOLD);
+        if !held && (self.scale.value() - value).abs() >= self.step / 2. {
+            self.scale.set_value(value);
+        }
+    }
+}
+
+/// The slider of a parameter, the default marked: its value and the scale, in a box for the row.
 ///
 /// Both have a fixed width, the same in every row, so the sliders line up: expanding, the row
 /// shared its width between the title and the slider by their natural widths, a long title made
 /// the slider shorter, and the value drawn by the scale itself made it shorter by the width of
 /// the value's text.
-fn slider(param: &Parameter) -> (gtk::Box, gtk::Scale) {
+fn slider(param: &Parameter) -> Slider {
     let scale = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
         param.min,
@@ -607,7 +650,23 @@ fn slider(param: &Parameter) -> (gtk::Box, gtk::Scale) {
         param.step,
     );
     let digits = digits(param.step);
-    scale.set_digits(digits as i32);
+    let changed = Rc::new(Cell::new(None));
+    // what the user sets (dragging, clicking, keys, the wheel; not what the window sets) goes on
+    // the step: the scale rounds to its digits only while it draws the value itself and steps
+    // only for keys, a drag sent 83.71234 Hz for the 84 Hz shown, a call and a rewrite of the
+    // settings per pixel. A value the scale already has notifies nothing, so dragging within a
+    // step sends nothing.
+    let snap = param.clone();
+    scale.connect_change_value(glib::clone!(
+        #[strong]
+        changed,
+        move |scale, _, value| {
+            changed.set(Some(Instant::now()));
+            scale.set_value(snap.snap(value));
+            // the default handler would set it unsnapped
+            glib::Propagation::Stop
+        }
+    ));
     scale.add_mark(param.default, gtk::PositionType::Bottom, None);
     scale.set_width_request(SLIDER_WIDTH);
     scale.set_valign(gtk::Align::Center);
@@ -630,15 +689,20 @@ fn slider(param: &Parameter) -> (gtk::Box, gtk::Scale) {
     let slider = gtk::Box::builder().spacing(6).build();
     slider.append(&value);
     slider.append(&scale);
-    (slider, scale)
+    Slider {
+        widget: slider,
+        scale,
+        step: param.step,
+        changed,
+    }
 }
 
 /// The slider of a parameter of a stage, sending what the user sets.
-fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> (gtk::Box, gtk::Scale) {
-    let (slider, scale) = slider(param);
+fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> Slider {
+    let slider = slider(param);
     let (stage, name) = (param.stage.clone(), param.name.clone());
     let weak = widgets.clone();
-    scale.connect_value_changed(move |scale| {
+    slider.scale.connect_value_changed(move |scale| {
         let Some(proxy) = sendable(&weak) else {
             return;
         };
@@ -647,7 +711,7 @@ fn scale(widgets: &::std::rc::Weak<Widgets>, param: &Parameter) -> (gtk::Box, gt
             proxy.set_parameter(&stage, &name, value).await
         });
     });
-    (slider, scale)
+    slider
 }
 
 /// Builds the rows of the stages for the stages and parameters of `status`, unless they were
@@ -703,20 +767,20 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
             if let Some(text) = help::stage(name) {
                 row.add_row(&help::text_row(&text));
             }
-            let scales = params
+            let sliders = params
                 .iter()
                 .map(|param| {
-                    let (slider, scale) = scale(&weak, param);
+                    let slider = scale(&weak, param);
                     // the daemon's title is English, the window's in the user's language
                     let param_title = lookup(&format!("param-{name}-{}", param.name), &[])
                         .unwrap_or_else(|| param.title.clone());
                     let param_row = adw::ActionRow::builder().title(param_title).build();
-                    param_row.add_suffix(&slider);
+                    param_row.add_suffix(&slider.widget);
                     if let Some(text) = help::param(name, &param.name) {
                         param_row.add_suffix(&help::button(&text));
                     }
                     row.add_row(&param_row);
-                    (param.name.clone(), scale)
+                    (param.name.clone(), slider)
                 })
                 .collect();
             // the echo cancellation also holds its output device and how it does
@@ -752,7 +816,7 @@ fn build_stages(widgets: &Rc<Widgets>, status: &Status) {
             group.add(&row);
             let row = StageRow {
                 row,
-                scales,
+                sliders,
                 reset: reset_button,
             };
             stages.push((name.to_string(), row, group.clone()));
@@ -888,7 +952,12 @@ fn show_echo(widgets: &Widgets, status: &Status) {
 
 fn show(widgets: &Widgets, status: &Status) {
     widgets.updating.set(true);
-    for (name, StageRow { row, scales, reset }, _) in widgets.stages.borrow().iter() {
+    for (name, stage, _) in widgets.stages.borrow().iter() {
+        let StageRow {
+            row,
+            sliders,
+            reset,
+        } = stage;
         if let Some((_, enabled)) = status.stages.iter().find(|(stage, _)| stage == name) {
             row.set_enable_expansion(*enabled);
         }
@@ -896,7 +965,7 @@ fn show(widgets: &Widgets, status: &Status) {
             param.stage == *name && (param.value - param.default).abs() >= param.step / 2.
         });
         reset.set_sensitive(changed);
-        for (param_name, scale) in scales {
+        for (param_name, slider) in sliders {
             let Some(param) = status
                 .parameters
                 .iter()
@@ -904,10 +973,7 @@ fn show(widgets: &Widgets, status: &Status) {
             else {
                 continue;
             };
-            // not while the user drags it, the read value lags behind by up to a poll
-            if (scale.value() - param.value).abs() >= param.step / 2. && !scale.has_focus() {
-                scale.set_value(param.value);
-            }
+            slider.show(param.value);
         }
     }
     show_devices(widgets, Device::Input, status);
@@ -919,10 +985,7 @@ fn show(widgets: &Widgets, status: &Status) {
     dim_stages(widgets, widgets.enabled.is_active());
     widgets.listen.set_enable_expansion(status.listen);
     widgets.keep_listen.set_active(status.keep_listen);
-    let volume = &widgets.listen_volume.1;
-    if (volume.value() - status.listen_volume).abs() >= 0.5 && !volume.has_focus() {
-        volume.set_value(status.listen_volume);
-    }
+    widgets.listen_volume.show(status.listen_volume);
     widgets.updating.set(false);
 
     let ms = |part: &str| {

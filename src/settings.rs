@@ -196,8 +196,8 @@ fn save(dir: &Path, name: &str, value: &str) -> Result<()> {
 }
 
 /// Keeps what `value` gives in the file `name`, `None` removes it. Writes a file next to it and
-/// renames that over it, so a crash never leaves half a setting (a slider in the app saves many
-/// times while it's dragged).
+/// renames that over it, so a crash never leaves half a setting (a slider in the app saves once
+/// per step while it's dragged).
 fn save_with(dir: &Path, name: &str, value: impl FnOnce() -> Result<Option<String>>) -> Result<()> {
     // one at a time: the D-Bus service and the tray save from threads of their own, and would
     // write the same temporary file; `value` is read in turn, so the last save writes what's

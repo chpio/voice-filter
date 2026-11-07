@@ -99,6 +99,19 @@ impl From<ParameterTuple> for Parameter {
     }
 }
 
+impl Parameter {
+    /// `value` on a step from `min`, within the range.
+    pub fn snap(&self, value: f64) -> f64 {
+        let on_step = if self.step > 0. {
+            self.min + ((value - self.min) / self.step).round() * self.step
+        } else {
+            value
+        };
+        // not `clamp`, which panics on a range the daemon got wrong
+        on_step.max(self.min).min(self.max)
+    }
+}
+
 /// Everything the window shows, read in one go.
 pub struct Status {
     /// The whole filter.
