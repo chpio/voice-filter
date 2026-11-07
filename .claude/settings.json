@@ -3,7 +3,7 @@
         "enabled": true,
         "autoAllowBashIfSandboxed": false,
         "allowUnsandboxedCommands": false,
-        "excludedCommands": ["git commit *", "git tag *", "git rebase *"]
+        "excludedCommands": ["git commit-tree *"]
     },
     "permissions": {
         "deny": [
@@ -14,7 +14,10 @@
             "Edit(./.claude/settings.local.json)",
             "Write(./.claude/settings.local.json)",
             "Edit(~/.claude/settings.json)",
-            "Write(~/.claude/settings.json)"
+            "Write(~/.claude/settings.json)",
+            "Edit(./.git/config)",
+            "Edit(./.git/hooks/**)",
+            "Edit(./.git/worktrees/*/config)"
         ]
     }
 }
