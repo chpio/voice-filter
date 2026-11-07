@@ -9,7 +9,7 @@ repository = "https://gitlab.com/chpio/voice-filter"
 
 [package]
 name = "voice-filter"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 rust-version.workspace = true
 description = "Live voice filter for PipeWire: a virtual microphone that removes the echo of the speakers and background noise (DeepFilterNet3) and enhances the voice"

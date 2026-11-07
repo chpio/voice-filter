@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.4
+
+### Features
+
+* keep more of the voice while you talk into the playback, with the echo cancellation tuned for it and Voice Protection off by default
+
+### Dependencies
+
+* update dependencies
+
 ## 0.1.3
 
 ### Fixes
