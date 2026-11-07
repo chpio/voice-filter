@@ -85,7 +85,7 @@ cargo install --locked voice-filter
 # the same without the GNOME app, no GTK needed
 cargo install --locked voice-filter --no-default-features
 # from a clone of the repository
-git clone https://gitlab.com/chpio/voice-filter.git && cd voice-filter
+git clone https://github.com/chpio/voice-filter.git && cd voice-filter
 cargo install --locked --path .
 ```
 
