@@ -9,7 +9,9 @@
 # it counts only after a commit that changes the package; if there's none, release-plz adds a
 # commit `chore: update Cargo.lock dependencies` (or `Cargo.toml`) on its own.
 release_commits = '^(feat|fix|perf|chore\(deps\)|chore: update Cargo\.(toml|lock) dependencies)'
-pr_name = "chore: bump version (v{{ version }})"
+# `version` is only set while the packages released have one version (voice-filter alone, or both at
+# the same), release-plz fails on it otherwise; the versions per package are in the PR's body
+pr_name = "chore: bump version{% if version %} (v{{ version }}){% else %}s{% endif %}"
 pr_branch_prefix = "release/"
 
 [[package]]
