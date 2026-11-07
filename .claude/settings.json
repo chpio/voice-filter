@@ -1,0 +1,8 @@
+{
+    "sandbox": {
+        "enabled": true,
+        "autoAllowBashIfSandboxed": false,
+        "allowUnsandboxedCommands": false,
+        "excludedCommands": ["git commit *", "git tag *", "git rebase *"]
+    }
+}
