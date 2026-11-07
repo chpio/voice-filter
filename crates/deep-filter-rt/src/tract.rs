@@ -198,7 +198,7 @@ impl DfTract {
             model_cfg,
             df_cfg,
             ch,
-            Some(rp.reduce_mask.clone()),
+            rp.reduce_mask.clone(),
         )?;
         let df_dec =
             init_df_decoder_from_read(&mut Cursor::new(dfp.df_dec), model_cfg, df_cfg, ch)?;
@@ -838,7 +838,7 @@ fn init_erb_decoder_impl(
     net_cfg: &ini::Properties,
     df_cfg: &ini::Properties,
     n_ch: usize,
-    mask_reduction: Option<ReduceMask>,
+    mask_reduction: ReduceMask,
 ) -> Result<TypedModel> {
     log::debug!("Start init ERB decoder.");
     let s = m.symbols.sym("S");
@@ -885,40 +885,37 @@ fn init_erb_decoder_impl(
     let mut m = pulsed.into_typed()?;
     log::info!("Init ERB decoder");
 
-    if let Some(r) = mask_reduction {
-        let outlets = m.output_outlets()?;
-        let mask_outlet = outlets[0];
-        let ch_axis = 0;
-        match r {
-            ReduceMask::MAX => {
-                output_name = "reduce_mask_max".to_string();
-                m.wire_node(
-                    "reduce_mask_max",
-                    ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Max),
-                    &[mask_outlet],
-                )?;
-            }
-            ReduceMask::MEAN => {
-                let sum = m.wire_node(
-                    "reduce_mask_sum".to_string(),
-                    ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Sum),
-                    &[mask_outlet],
-                )?[0];
-                let ch_i = m
-                    .add_const(
-                        "ch".to_string(),
-                        Tensor::from_shape(&[1, 1, 1, 1], &[1. / n_ch as f32])?,
-                    )
-                    .unwrap();
-                output_name = "reduce_mask_div_ch".to_string();
-                m.wire_node(
-                    "reduce_mask_div_ch",
-                    tract_core::ops::math::mul(),
-                    &[sum, ch_i],
-                )?;
-            }
-            _ => (),
+    let mask_outlet = m.output_outlets()?[0];
+    let ch_axis = 0;
+    match mask_reduction {
+        ReduceMask::MAX => {
+            output_name = "reduce_mask_max".to_string();
+            m.wire_node(
+                "reduce_mask_max",
+                ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Max),
+                &[mask_outlet],
+            )?;
         }
+        ReduceMask::MEAN => {
+            let sum = m.wire_node(
+                "reduce_mask_sum".to_string(),
+                ops::nn::Reduce::new(tvec!(ch_axis), ops::nn::Reducer::Sum),
+                &[mask_outlet],
+            )?[0];
+            let ch_i = m
+                .add_const(
+                    "ch".to_string(),
+                    Tensor::from_shape(&[1, 1, 1, 1], &[1. / n_ch as f32])?,
+                )
+                .unwrap();
+            output_name = "reduce_mask_div_ch".to_string();
+            m.wire_node(
+                "reduce_mask_div_ch",
+                tract_core::ops::math::mul(),
+                &[sum, ch_i],
+            )?;
+        }
+        ReduceMask::NONE => (),
     }
     m = m.with_outputs_by_name(&[output_name])?;
 
@@ -931,7 +928,7 @@ fn init_erb_decoder_from_read(
     net_cfg: &ini::Properties,
     df_cfg: &ini::Properties,
     n_ch: usize,
-    mask_reduction: Option<ReduceMask>,
+    mask_reduction: ReduceMask,
 ) -> Result<TypedModel> {
     let m = tract_onnx::onnx()
         .with_ignore_output_shapes(true)
