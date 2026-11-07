@@ -160,31 +160,14 @@ impl DFState {
         }
     }
 
-    pub fn reset(&mut self) {
-        self.analysis_mem.fill(0.);
-        self.synthesis_mem.fill(0.);
-    }
-
-    pub fn process_frame(&mut self, input: &[f32], output: &mut [f32]) {
-        debug_assert_eq!(input.len(), self.frame_size);
-        debug_assert_eq!(output.len(), self.frame_size);
-        process_frame(input, output, self);
-    }
-
     pub fn analysis(&mut self, input: &[f32], output: &mut [Complex32]) {
         debug_assert_eq!(input.len(), self.frame_size);
         debug_assert_eq!(output.len(), self.freq_size);
         frame_analysis(input, output, self)
     }
 
-    pub fn synthesis(&mut self, input: &mut [Complex32], output: &mut [f32]) {
-        debug_assert_eq!(input.len(), self.freq_size);
-        debug_assert_eq!(output.len(), self.frame_size);
-        frame_synthesis(input, output, self)
-    }
-
-    /// [`Self::synthesis`] without changing `input`: it works on a copy, in a buffer of the
-    /// state.
+    /// The inverse of [`Self::analysis`], overlap-adding into the output; `input` stays as it
+    /// is: it works on a copy, in a buffer of the state.
     pub fn synthesis_from(&mut self, input: &[Complex32], output: &mut [f32]) {
         debug_assert_eq!(input.len(), self.freq_size);
         debug_assert_eq!(output.len(), self.frame_size);
@@ -241,22 +224,6 @@ impl DFState {
 
     pub fn apply_mask(&self, output: &mut [Complex32], gains: &[f32]) {
         apply_interp_band_gain(output, gains, &self.erb)
-    }
-}
-
-impl Default for DFState {
-    fn default() -> Self {
-        Self::new(48000, 960, 480, 32, 2)
-    }
-}
-
-pub fn band_mean_norm_freq(xs: &[Complex32], xout: &mut [f32], state: &mut [f32], alpha: f32) {
-    debug_assert_eq!(xs.len(), state.len());
-    debug_assert_eq!(xout.len(), state.len());
-    for (x, s, xo) in izip!(xs.iter(), state.iter_mut(), xout.iter_mut()) {
-        let xabs = x.norm();
-        *s = xabs * (1. - alpha) + *s * alpha;
-        *xo = xabs - *s;
     }
 }
 
@@ -322,23 +289,6 @@ pub fn compute_band_corr(out: &mut [f32], x: &[Complex32], p: &[Complex32], erb_
     }
 }
 
-pub fn band_compr(out: &mut [f32], x: &[f32], erb_fb: &[usize]) {
-    for y in out.iter_mut() {
-        *y = 0.0;
-    }
-    debug_assert_eq!(erb_fb.len(), out.len());
-
-    let mut bcsum = 0;
-    for (&band_size, out_b) in erb_fb.iter().zip(out.iter_mut()) {
-        let k = 1. / band_size as f32;
-        for j in 0..band_size {
-            let idx = bcsum + j;
-            *out_b += x[idx] * k;
-        }
-        bcsum += band_size;
-    }
-}
-
 pub fn apply_interp_band_gain<T>(out: &mut [T], band_e: &[f32], erb_fb: &[usize])
 where
     T: MulAssign<f32>,
@@ -351,13 +301,6 @@ where
         }
         bcsum += band_size;
     }
-}
-
-fn process_frame(input: &[f32], output: &mut [f32], state: &mut DFState) {
-    let mut freq_mem = ::std::mem::take(&mut state.synthesis_spec);
-    frame_analysis(input, &mut freq_mem, state);
-    frame_synthesis(&mut freq_mem, output, state);
-    state.synthesis_spec = freq_mem;
 }
 
 fn frame_analysis(input: &[f32], output: &mut [Complex32], state: &mut DFState) {
@@ -481,151 +424,4 @@ pub fn post_filter(noisy: &[Complex32], enh: &mut [Complex32], beta: f32) {
         e[2] *= pf[2];
         e[3] *= pf[3];
     }
-}
-
-pub(crate) struct NonNan(f32);
-
-impl NonNan {
-    fn new(val: f32) -> Option<NonNan> {
-        if val.is_nan() {
-            None
-        } else {
-            Some(NonNan(val))
-        }
-    }
-    fn get(&self) -> f32 {
-        self.0
-    }
-}
-
-pub fn find_max<'a, I>(vals: I) -> Option<f32>
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    vals.into_iter().try_fold(f32::MIN, |acc, v| {
-        let nonnan: NonNan = match NonNan::new(*v) {
-            None => return None,
-            Some(x) => x,
-        };
-        Some(nonnan.get().max(acc))
-    })
-}
-
-pub fn find_max_abs<'a, I>(vals: I) -> Option<f32>
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    vals.into_iter().try_fold(0., |acc, v| {
-        let nonnan: NonNan = match NonNan::new(v.abs()) {
-            None => return None,
-            Some(x) => x,
-        };
-        Some(nonnan.get().max(acc))
-    })
-}
-
-pub fn find_min<'a, I>(vals: I) -> Option<f32>
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    vals.into_iter().try_fold(f32::MAX, |acc, v| {
-        let nonnan: NonNan = match NonNan::new(*v) {
-            None => return None,
-            Some(x) => x,
-        };
-        Some(nonnan.get().min(acc))
-    })
-}
-
-pub fn find_min_abs<'a, I>(vals: I) -> Option<f32>
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    vals.into_iter().try_fold(0., |acc, v| {
-        let nonnan: NonNan = match NonNan::new(v.abs()) {
-            None => return None,
-            Some(x) => x,
-        };
-        Some(nonnan.get().min(acc))
-    })
-}
-
-pub fn argmax<'a, I>(vals: I) -> Option<usize>
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    let mut index = 0;
-    let mut high = f32::MIN;
-    vals.into_iter().enumerate().for_each(|(i, v)| {
-        if v > &high {
-            high = *v;
-            index = i;
-        }
-    });
-    Some(index)
-}
-
-pub fn argmax_abs<'a, I>(vals: I) -> Option<usize>
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    let mut index = 0;
-    let mut high = f32::MIN;
-    vals.into_iter().enumerate().for_each(|(i, v)| {
-        if v > &high {
-            high = v.abs();
-            index = i;
-        }
-    });
-    Some(index)
-}
-
-pub fn rms<'a, I>(vals: I) -> f32
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    let mut n = 0;
-    let pow_sum = vals.into_iter().fold(0., |acc, v| {
-        n += 1;
-        acc + v.powi(2)
-    });
-    (pow_sum / n as f32).sqrt()
-}
-pub fn rms_v<I>(vals: I) -> f32
-where
-    I: IntoIterator<Item = f32>,
-{
-    let mut n = 0;
-    let pow_sum = vals.into_iter().fold(0., |acc, v| {
-        n += 1;
-        acc + v.powi(2)
-    });
-    (pow_sum / n as f32).sqrt()
-}
-
-pub fn mean<'a, I>(vals: I) -> f32
-where
-    I: IntoIterator<Item = &'a f32>,
-{
-    let mut n = 0;
-    let sum = vals.into_iter().fold(0., |acc, v| {
-        n += 1;
-        acc + v
-    });
-    sum / n as f32
-}
-
-pub fn median<T>(x: &mut [T]) -> T
-where
-    T: PartialOrd<T> + Copy,
-{
-    if x.len() == 1 {
-        return x[0];
-    }
-    if x.is_empty() {
-        panic!("Empty input slice");
-    }
-    x.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = x.len() / 2;
-    x[mid]
 }

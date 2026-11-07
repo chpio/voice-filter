@@ -76,18 +76,6 @@ pub enum ReduceMask {
     MAX = 1,
     MEAN = 2,
 }
-impl TryFrom<i32> for ReduceMask {
-    type Error = ();
-
-    fn try_from(v: i32) -> Result<Self, Self::Error> {
-        match v {
-            x if x == ReduceMask::NONE as i32 => Ok(ReduceMask::NONE),
-            x if x == ReduceMask::MAX as i32 => Ok(ReduceMask::MAX),
-            x if x == ReduceMask::MEAN as i32 => Ok(ReduceMask::MEAN),
-            _ => Err(()),
-        }
-    }
-}
 pub struct RuntimeParams {
     pub n_ch: usize,
     pub post_filter: bool,
@@ -99,27 +87,6 @@ pub struct RuntimeParams {
     pub reduce_mask: ReduceMask,
 }
 impl RuntimeParams {
-    pub fn new(
-        n_ch: usize,
-        post_filter_beta: f32,
-        atten_lim_db: f32,
-        min_db_thresh: f32,
-        max_db_erb_thresh: f32,
-        max_db_df_thresh: f32,
-        reduce_mask: ReduceMask,
-    ) -> Self {
-        let post_filter = post_filter_beta > 0.;
-        Self {
-            n_ch,
-            post_filter,
-            post_filter_beta,
-            atten_lim_db,
-            min_db_thresh,
-            max_db_erb_thresh,
-            max_db_df_thresh,
-            reduce_mask,
-        }
-    }
     pub fn with_post_filter(mut self, beta: f32) -> Self {
         assert!(beta >= 0.); // Cannot be negative
         if beta > 0. {
@@ -710,35 +677,6 @@ impl DfTract {
             (true, false, true)
         }
     }
-
-    pub fn set_spec_buffer(&mut self, spec: ArrayView2<f32>) -> Result<()> {
-        debug_assert_eq!(self.spec_buf.shape(), spec.shape());
-        let mut buf = self
-            .spec_buf
-            .to_plain_array_view_mut()?
-            .into_shape_with_order([self.ch, self.n_freqs])?;
-        for (i_ch, mut b_ch) in spec.outer_iter().zip(buf.outer_iter_mut()) {
-            for (&i, b) in i_ch.iter().zip(b_ch.iter_mut()) {
-                *b = i
-            }
-        }
-        Ok(())
-    }
-
-    pub fn get_spec_noisy(&self) -> ArrayView2<'_, Complex32> {
-        spec_view(
-            &self.rolling_spec_buf_x[self.noisy_index()],
-            self.ch,
-            self.n_freqs,
-        )
-        .unwrap()
-    }
-    pub fn get_spec_enh(&self) -> ArrayView2<'_, Complex32> {
-        spec_view(&self.spec_buf, self.ch, self.n_freqs).unwrap()
-    }
-    pub fn get_mut_spec_enh(&mut self) -> ArrayViewMut2<'_, Complex32> {
-        spec_view_mut(&mut self.spec_buf, self.ch, self.n_freqs).unwrap()
-    }
 }
 
 /// The values of an f32 tensor as a flat slice. Unlike a view of ndarray it doesn't allocate:
@@ -1082,35 +1020,6 @@ pub fn as_slice_mut_complex(buffer: &mut [f32]) -> &mut [Complex32] {
     }
 }
 
-#[allow(clippy::needless_pass_by_ref_mut)]
-pub fn as_slice_mut_real(buffer: &mut [Complex32]) -> &mut [f32] {
-    unsafe {
-        let ptr = buffer.as_ptr() as *mut f32;
-        let len = buffer.len();
-        std::slice::from_raw_parts_mut(ptr, len * 2)
-    }
-}
-
-pub fn slice_as_arrayview<'a>(
-    buffer: &[f32],
-    shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
-) -> ArrayViewD<'a, f32> {
-    debug_assert_eq!(buffer.len(), shape.iter().product::<usize>());
-    unsafe {
-        let ptr = buffer.as_ptr(); // as *mut Complex32;
-        ArrayViewD::from_shape_ptr(shape, ptr)
-    }
-}
-pub fn mut_slice_as_arrayviewmut<'a>(
-    buffer: &mut [f32],
-    shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
-) -> ArrayViewMutD<'a, f32> {
-    debug_assert_eq!(buffer.len(), shape.iter().product::<usize>());
-    unsafe {
-        let ptr = buffer.as_mut_ptr(); // as *mut Complex32;
-        ArrayViewMutD::from_shape_ptr(shape, ptr)
-    }
-}
 pub fn as_arrayview_complex<'a>(
     buffer: ArrayViewD<'a, f32>,
     shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
@@ -1120,17 +1029,6 @@ pub fn as_arrayview_complex<'a>(
     unsafe {
         let ptr = buffer.as_ptr() as *mut Complex32;
         ArrayViewD::from_shape_ptr(shape, ptr)
-    }
-}
-pub fn as_arrayview_mut_complex<'a>(
-    buffer: ArrayViewMutD<'a, f32>,
-    shape: &[usize], // having an explicit shape parameter allows to also squeeze axes.
-) -> ArrayViewMutD<'a, Complex32> {
-    debug_assert_eq!(buffer.shape().last().unwrap(), &2);
-    debug_assert_eq!(buffer.len(), 2 * shape.iter().product::<usize>());
-    unsafe {
-        let ptr = buffer.as_ptr() as *mut Complex32;
-        ArrayViewMutD::from_shape_ptr(shape, ptr)
     }
 }
 pub fn tvalue_to_array_view_mut(x: &mut TValue) -> ArrayViewMutD<'_, f32> {
