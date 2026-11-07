@@ -14,13 +14,12 @@
 use ::std::path::PathBuf;
 use ::std::time::{Duration, Instant};
 
-use ::anyhow::{Context, Result, ensure};
+use ::anyhow::{Context, Result};
 use ::clap::Parser;
-use ::voice_filter::denoise::Denoise;
 use ::voice_filter::dsp::without_denormals;
-use ::voice_filter::param::Param;
-use ::voice_filter::stage::{Frame, Stage};
-use ::voice_filter::{FRAME_LEN, chain, offline};
+use ::voice_filter::{FRAME_LEN, offline};
+
+mod common;
 
 #[derive(Parser)]
 struct Args {
@@ -33,7 +32,7 @@ struct Args {
     #[arg(long)]
     reference_dir: Option<PathBuf>,
     /// A parameter, as `stage.name=value` (e.g. `denoise.level=-30`); can be repeated.
-    #[arg(long = "set", value_name = "STAGE.NAME=VALUE", value_parser = setting)]
+    #[arg(long = "set", value_name = "STAGE.NAME=VALUE", value_parser = common::setting)]
     settings: Vec<(String, String, f32)>,
     /// A stage to leave out; can be repeated.
     #[arg(long, value_name = "STAGE")]
@@ -43,28 +42,8 @@ struct Args {
     only: Vec<String>,
     /// The thresholds of the noise suppression's skipping, in dB, as `zeros,unchanged,no-df` (see
     /// `Denoise::with_thresholds`; upstream's defaults are `-10,30,20`).
-    #[arg(long, value_name = "DB,DB,DB", value_parser = thresholds, allow_hyphen_values = true)]
+    #[arg(long, value_name = "DB,DB,DB", value_parser = common::thresholds, allow_hyphen_values = true)]
     thresholds: Option<(f32, f32, f32)>,
-}
-
-fn setting(arg: &str) -> Result<(String, String, f32), String> {
-    let (key, value) = arg.split_once('=').ok_or("expected STAGE.NAME=VALUE")?;
-    let (stage, name) = key.split_once('.').ok_or("expected STAGE.NAME=VALUE")?;
-    let value = value
-        .parse()
-        .map_err(|_| format!("not a number: {value}"))?;
-    Ok((stage.to_owned(), name.to_owned(), value))
-}
-
-fn thresholds(arg: &str) -> Result<(f32, f32, f32), String> {
-    let values: Vec<f32> = arg
-        .split(',')
-        .map(|value| value.parse().map_err(|_| format!("not a number: {value}")))
-        .collect::<Result<_, _>>()?;
-    match values[..] {
-        [zeros, unchanged, no_df] => Ok((zeros, unchanged, no_df)),
-        _ => Err("expected three numbers, ZEROS,UNCHANGED,NO-DF".to_owned()),
-    }
 }
 
 fn main() -> Result<()> {
@@ -79,34 +58,8 @@ fn main() -> Result<()> {
 
     let (mut frames, mut total, mut max) = (0u64, Duration::ZERO, Duration::ZERO);
     for path in &files {
-        let mut denoise = Denoise::new()?;
-        if let Some((zeros, unchanged, no_df)) = args.thresholds {
-            denoise = denoise.with_thresholds(zeros, unchanged, no_df);
-        }
-        let (mut chain, mut reference) = chain::build_with(denoise)?;
-        let params = chain.params();
-        for (stage, name, value) in &args.settings {
-            Param::find(&params, stage, name)
-                .with_context(|| format!("no parameter {name} of {stage}"))?
-                .set(*value)?;
-        }
-        let names: Vec<&'static str> = chain.stages().map(Stage::name).collect();
-        for name in args.off.iter().chain(&args.only) {
-            ensure!(names.contains(&name.as_str()), "no stage {name}");
-        }
-        let on: Vec<bool> = names
-            .iter()
-            .map(|name| {
-                !args.off.iter().any(|off| off == name)
-                    && (args.only.is_empty() || args.only.iter().any(|only| only == name))
-            })
-            .collect();
-        let latency: usize = chain
-            .stages()
-            .zip(&on)
-            .filter(|(_, on)| **on)
-            .map(|(stage, _)| stage.latency())
-            .sum();
+        let mut setup = common::Setup::new(args.thresholds, &args.settings, &args.off, &args.only)?;
+        let latency = setup.latency();
 
         let input = offline::read_wav(path)?;
         let played = match &args.reference_dir {
@@ -122,20 +75,13 @@ fn main() -> Result<()> {
         let count = (input.len() + latency).div_ceil(FRAME_LEN);
         let mut output = Vec::with_capacity(count * FRAME_LEN);
         for i in 0..count {
-            let at = |samples: &[f32]| {
-                let mut frame: Frame = [0.; FRAME_LEN];
-                let start = (i * FRAME_LEN).min(samples.len());
-                let end = ((i + 1) * FRAME_LEN).min(samples.len());
-                frame[..end - start].copy_from_slice(&samples[start..end]);
-                frame
-            };
             if let Some(played) = &played {
-                reference.push(&at(played));
+                setup.reference.push(&common::frame_at(played, i));
             }
-            let mut frame = at(&input);
+            let mut frame = common::frame_at(&input, i);
             let started = Instant::now();
             without_denormals(|| {
-                for (stage, on) in chain.stages_mut().zip(&on) {
+                for (stage, on) in setup.chain.stages_mut().zip(&setup.on) {
                     if *on {
                         stage.process(&mut frame)?;
                     }

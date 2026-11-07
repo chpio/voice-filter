@@ -37,6 +37,8 @@ use ::voice_filter::echo::{Echo, Reference};
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE, offline};
 
+mod common;
+
 #[derive(Parser)]
 struct Args {
     /// The microphone, a WAV file at 48 kHz.
@@ -255,11 +257,7 @@ fn run(variant: Variant, mic: &[f32], played: &[f32]) -> Result<Vec<f32>> {
             out.extend_from_slice(&frame);
             continue;
         }
-        let start = (i * FRAME_LEN).min(played.len());
-        let end = ((i + 1) * FRAME_LEN).min(played.len());
-        let mut reference_frame = [0.; FRAME_LEN];
-        reference_frame[..end - start].copy_from_slice(&played[start..end]);
-        reference.push(&reference_frame);
+        reference.push(&common::frame_at(played, i));
 
         // the raw frame as far back as the echo cancellation's output
         delayed.extend_from_slice(&frame);
