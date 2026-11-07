@@ -395,33 +395,11 @@ where
 }
 
 pub fn post_filter(noisy: &[Complex32], enh: &mut [Complex32], beta: f32) {
-    let beta_p1 = beta + 1.;
     let eps = 1e-12;
-    let pi = std::f32::consts::PI;
-    let mut g = [0.0; 4];
-    let mut g_sin = [0.0; 4];
-    let mut pf = [0.0; 4];
-    for (n, e) in noisy
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(enh.as_chunks_mut::<4>().0)
-    {
-        g[0] = (e[0].norm() / (n[0].norm() + eps)).min(1.).max(eps);
-        g[1] = (e[1].norm() / (n[1].norm() + eps)).min(1.).max(eps);
-        g[2] = (e[2].norm() / (n[2].norm() + eps)).min(1.).max(eps);
-        g[3] = (e[3].norm() / (n[3].norm() + eps)).min(1.).max(eps);
-        g_sin[0] = g[0] * (g[0] * pi / 2.0).sin();
-        g_sin[1] = g[1] * (g[1] * pi / 2.0).sin();
-        g_sin[2] = g[2] * (g[2] * pi / 2.0).sin();
-        g_sin[3] = g[3] * (g[3] * pi / 2.0).sin();
-        pf[0] = (beta_p1 * g[0] / (1. + beta * (g[0] / g_sin[0]).powi(2))) / g[0];
-        pf[1] = (beta_p1 * g[1] / (1. + beta * (g[1] / g_sin[1]).powi(2))) / g[1];
-        pf[2] = (beta_p1 * g[2] / (1. + beta * (g[2] / g_sin[2]).powi(2))) / g[2];
-        pf[3] = (beta_p1 * g[3] / (1. + beta * (g[3] / g_sin[3]).powi(2))) / g[3];
-        e[0] *= pf[0];
-        e[1] *= pf[1];
-        e[2] *= pf[2];
-        e[3] *= pf[3];
+    let pi = ::std::f32::consts::PI;
+    for (n, e) in noisy.iter().zip(enh.iter_mut()) {
+        let g = (e.norm() / (n.norm() + eps)).min(1.).max(eps);
+        let g_sin = g * (g * pi / 2.0).sin();
+        *e *= ((beta + 1.) * g / (1. + beta * (g / g_sin).powi(2))) / g;
     }
 }
