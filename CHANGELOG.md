@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5
+
+### Features
+
+* add a Lithuanian translation
+
+### Fixes
+
+* stop writing into freed memory when Listen is switched off or the daemon stops while listening
+* keep the saved settings in step when the app and the tray change them at once, and start with the defaults when a saved setting can't be read
+* move the sliders in the app in their steps, and show a reset or a change from elsewhere on them at once, even while one has the focus
+
 ## 0.1.4
 
 ### Features
