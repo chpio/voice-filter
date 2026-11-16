@@ -278,6 +278,11 @@ The design, the choice of models, the latency measurements and the roadmap are i
 [docs/concept.md](docs/concept.md). The DeepFilterNet3 inference is vendored as its own crate,
 [deep-filter-rt](crates/deep-filter-rt), because upstream's crate on crates.io is outdated.
 
+## Repository
+
+The source lives on [GitHub](https://github.com/chpio/voice-filter), with a mirror on
+[GitLab](https://gitlab.com/chpio/voice-filter).
+
 ## License
 
 Licensed under either of
