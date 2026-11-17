@@ -46,6 +46,11 @@ nothing; it stays finite with denormals flushed to zero, as real-time hosts run 
 Debug builds run the model about 10 times slower than release builds. The feature `timings` logs
 the processing time per frame.
 
+## Repository
+
+The source lives in the voice-filter repository on [GitHub](https://github.com/chpio/voice-filter),
+with a mirror on [GitLab](https://gitlab.com/chpio/voice-filter).
+
 ## License
 
 Licensed under either of
