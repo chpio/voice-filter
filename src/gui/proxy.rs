@@ -123,6 +123,18 @@ impl Parameter {
     }
 }
 
+/// The microphone the entry "Default Input" of the list stands for, to name it there: the one the
+/// filter reads from (`active`) while it follows the default input, which is another one than the
+/// `default` if that's "Voice Filter" itself, or else the default input. With a microphone
+/// `chosen` the filter reads from that one, so only the default input counts. `None` if it's
+/// unknown or only "Voice Filter".
+pub fn default_input_shown<'a>(chosen: &str, active: &'a str, default: &'a str) -> Option<&'a str> {
+    let active = if chosen.is_empty() { active } else { "" };
+    [active, default]
+        .into_iter()
+        .find(|name| !name.is_empty() && *name != "voice-filter")
+}
+
 /// Everything the window shows, read in one go.
 pub struct Status {
     /// The whole filter.

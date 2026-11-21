@@ -7,7 +7,7 @@ use ::gtk::{gio, glib};
 use ::zbus::proxy::CacheProperties;
 
 use super::help;
-use super::proxy::{Parameter, Status, VoiceFilterProxy};
+use super::proxy::{Parameter, Status, VoiceFilterProxy, default_input_shown};
 use crate::i18n::{FluentValue, lookup, tr, tr_args};
 use crate::samples_ms;
 
@@ -931,9 +931,8 @@ fn show_devices(widgets: &Widgets, device: Device, status: &Status) {
         Device::Input => {
             // the one it reads from, or else the one it will: the default input, unless that's
             // "Voice Filter", whose stand-in only shows once something records
-            let current = [&status.active_input, &status.default_input]
-                .into_iter()
-                .find(|name| !name.is_empty() && *name != "voice-filter");
+            let current =
+                default_input_shown(&status.input, &status.active_input, &status.default_input);
             match current {
                 Some(name) => tr_args(
                     "default-input-current",

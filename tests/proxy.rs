@@ -1,6 +1,6 @@
 #![cfg(feature = "gui")]
 
-use ::voice_filter::gui::proxy::Parameter;
+use ::voice_filter::gui::proxy::{Parameter, default_input_shown};
 
 fn parameter(min: f64, max: f64, step: f64) -> Parameter {
     Parameter {
@@ -51,4 +51,34 @@ fn a_step_of_zero_only_clamps() {
     let free = parameter(0., 1., 0.);
     assert_eq!(free.snap(0.123), 0.123);
     assert_eq!(free.snap(2.), 1.);
+}
+
+/// "Default Input" names the system's default input, also while an app records.
+#[test]
+fn default_input_names_the_default() {
+    assert_eq!(default_input_shown("", "", "usb"), Some("usb"));
+    assert_eq!(default_input_shown("", "usb", "usb"), Some("usb"));
+    assert_eq!(default_input_shown("", "", ""), None);
+}
+
+/// With "Voice Filter" as the default input the filter reads from a stand-in, which only shows
+/// while something records.
+#[test]
+fn default_input_names_the_stand_in_of_the_filter() {
+    assert_eq!(default_input_shown("", "", "voice-filter"), None);
+    assert_eq!(
+        default_input_shown("", "webcam", "voice-filter"),
+        Some("webcam")
+    );
+}
+
+/// With a microphone chosen the filter reads from that one: it isn't the default input.
+#[test]
+fn default_input_is_not_the_chosen_microphone() {
+    assert_eq!(default_input_shown("webcam", "webcam", "usb"), Some("usb"));
+    assert_eq!(default_input_shown("webcam", "", "usb"), Some("usb"));
+    assert_eq!(
+        default_input_shown("webcam", "webcam", "voice-filter"),
+        None
+    );
 }
