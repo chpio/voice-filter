@@ -264,8 +264,8 @@ impl Service {
     }
 
     /// Which apps get the filtered microphone: `auto` (the default) all apps that record from the
-    /// default input, the filter follows the input chosen in the system's settings; `manual` only
-    /// those that record from "Voice Filter", from the microphone of [`Self::input`]. Without
+    /// microphone of [`Self::input`], the default input unless one is chosen (a smart filter);
+    /// `manual` only those that record from "Voice Filter". Without
     /// [`Self::auto_available`] the filter runs in the manual mode, whatever this says. Switching
     /// sets up the streams again, which drops the sound for a moment. Kept for the next runs.
     #[zbus(property)]
@@ -290,9 +290,10 @@ impl Service {
         self.auto_available.load(Ordering::Relaxed)
     }
 
-    /// The `node.name` of the microphone in the manual [`Self::mode`], empty for the default
-    /// input. Setting it switches the filter to that microphone and keeps it for the next runs;
-    /// the automatic mode reads from the default input.
+    /// The `node.name` of the microphone, empty for the default input. Setting it switches the
+    /// filter to that microphone and keeps it for the next runs. In the automatic [`Self::mode`]
+    /// the apps that record from that microphone get it filtered, those on others don't; while
+    /// it's unplugged, none.
     #[zbus(property)]
     pub fn input(&self) -> String {
         self.input.clone()

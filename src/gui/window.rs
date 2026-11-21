@@ -65,20 +65,15 @@ struct Widgets {
     stages: RefCell<Vec<(String, StageRow, adw::PreferencesGroup)>>,
     /// The stages with their parameter names that `stages` were built for.
     layout: RefCell<Vec<(String, Vec<String>)>>,
-    /// The group of the switch, the modes and the microphone, its description by the mode.
+    /// The group of the switch and the microphone, its description by how apps get the filter.
     input_group: adw::PreferencesGroup,
-    /// The modes, a row with a radio button each: all apps (`auto`) and only those that record
-    /// from "Voice Filter" (`manual`); hidden for a daemon from before them.
-    mode_auto: (adw::ActionRow, gtk::CheckButton),
-    mode_manual: (adw::ActionRow, gtk::CheckButton),
-    /// Only in the manual mode, the automatic one reads from the default input.
     input: adw::ComboRow,
-    /// The `node.name` per entry of `input`, the first is the default input (empty).
-    input_names: RefCell<Vec<String>>,
+    /// The `node.name` and label per entry of `input`, the first is the default input (empty).
+    input_names: RefCell<Vec<(String, String)>>,
     /// The output device whose echo gets removed, in the row of the echo cancellation.
     output: adw::ComboRow,
     /// Like `input_names`.
-    output_names: RefCell<Vec<String>>,
+    output_names: RefCell<Vec<(String, String)>>,
     /// How the echo cancellation does, under `output`.
     echo_status: adw::ActionRow,
     /// The frame counters of the echo cancellation at the last poll, to see whether they move.
@@ -130,21 +125,6 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         row.add_suffix(&help::button(&tr(text)));
         row
     };
-    // a mode with its radio button, hidden until the daemon says it has modes
-    let mode_row = |title: &str, subtitle: &str, text: &str| {
-        let check = gtk::CheckButton::builder()
-            .valign(gtk::Align::Center)
-            .build();
-        let row = adw::ActionRow::builder()
-            .title(title)
-            .subtitle(subtitle)
-            .visible(false)
-            .build();
-        row.add_prefix(&check);
-        row.set_activatable_widget(Some(&check));
-        row.add_suffix(&help::button(&tr(text)));
-        (row, check)
-    };
     let widgets = Rc::new(Widgets {
         stack: gtk::Stack::new(),
         missing: adw::StatusPage::builder()
@@ -167,12 +147,6 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .title(tr("group-input"))
             .description(tr("group-input-description"))
             .build(),
-        mode_auto: mode_row(&tr("mode-auto"), &tr("mode-auto-subtitle"), help::MODE_AUTO),
-        mode_manual: mode_row(
-            &tr("mode-manual"),
-            &tr("mode-manual-subtitle"),
-            help::MODE_MANUAL,
-        ),
         // the chosen microphone as the subtitle, over the width of the row, instead of squeezed
         // next to the title
         input: adw::ComboRow::builder()
@@ -239,12 +213,9 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     widgets
         .enabled_row
         .set_activatable_widget(Some(&widgets.enabled));
-    widgets.mode_manual.1.set_group(Some(&widgets.mode_auto.1));
     let page = adw::PreferencesPage::new();
     for row in [
         widgets.enabled_row.upcast_ref::<gtk::Widget>(),
-        widgets.mode_auto.0.upcast_ref(),
-        widgets.mode_manual.0.upcast_ref(),
         widgets.input.upcast_ref(),
         widgets.listen.upcast_ref(),
     ] {
@@ -469,59 +440,29 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             proxy.set_keep_listen(keep).await
         });
     });
-    for (mode, check) in [
-        ("auto", &widgets.mode_auto.1),
-        ("manual", &widgets.mode_manual.1),
-    ] {
-        let weak = Rc::downgrade(widgets);
-        // the other one's goes off, it sends nothing
-        check.connect_active_notify(move |check| {
-            if !check.is_active() {
-                return;
-            }
-            let Some(proxy) = sendable(&weak) else {
-                return;
-            };
-            send(format!("switch to the mode {mode}"), async move {
-                proxy.set_mode(mode).await
-            });
-        });
-    }
     connect_device(widgets, Device::Input);
     connect_device(widgets, Device::Output);
 }
 
-/// The mode, with the automatic one greyed out if the session manager can't run it; the
-/// microphone to choose only in the manual one.
-fn show_mode(widgets: &Widgets, status: &Status) {
-    let (auto_row, auto_check) = &widgets.mode_auto;
-    let (manual_row, manual_check) = &widgets.mode_manual;
-    let Some(mode) = &status.mode else {
-        auto_row.set_visible(false);
-        manual_row.set_visible(false);
-        widgets.input.set_visible(true);
-        return;
-    };
-    // the daemon runs the manual one without smart filters, whichever is chosen
-    let auto = mode == "auto" && status.auto_available;
-    auto_row.set_visible(true);
-    manual_row.set_visible(true);
-    auto_row.set_sensitive(status.auto_available);
-    auto_row.set_subtitle(&tr(if status.auto_available {
-        "mode-auto-subtitle"
-    } else {
-        "mode-auto-unavailable"
-    }));
-    let check = if auto { auto_check } else { manual_check };
-    if !check.is_active() {
-        check.set_active(true);
-    }
-    widgets.input.set_visible(!auto);
-    widgets.input_group.set_description(Some(&tr(if auto {
+/// How apps get the filter, in the description of the group of the microphone: all apps that
+/// record from it (a smart filter), or only those that record from "Voice Filter" (the manual
+/// mode, also without smart filters); and a warning while "Voice Filter" is the default input.
+fn show_input_group(widgets: &Widgets, status: &Status) {
+    let available = status.auto_available;
+    // a daemon from before the modes only had the manual one
+    let manual = status.mode.as_deref() != Some("auto") || !available;
+    // only matters while it follows the default input
+    let follows = status.input.is_empty();
+    let description = if !manual && follows && status.default_input == "voice-filter" {
+        "input-default-is-filter"
+    } else if !manual {
         "group-input-description-auto"
+    } else if status.mode.as_deref() == Some("auto") {
+        "group-input-description-unavailable"
     } else {
         "group-input-description"
-    })));
+    };
+    widgets.input_group.set_description(Some(&tr(description)));
 }
 
 /// The microphone or the output device.
@@ -533,7 +474,7 @@ enum Device {
 
 impl Device {
     /// Its row and the `node.name` per entry.
-    fn picker(self, widgets: &Widgets) -> (&adw::ComboRow, &RefCell<Vec<String>>) {
+    fn picker(self, widgets: &Widgets) -> (&adw::ComboRow, &RefCell<Vec<(String, String)>>) {
         match self {
             Self::Input => (&widgets.input, &widgets.input_names),
             Self::Output => (&widgets.output, &widgets.output_names),
@@ -553,7 +494,7 @@ fn connect_device(widgets: &Rc<Widgets>, device: Device) {
             return;
         };
         let (_, names) = device.picker(&widgets);
-        let Some(name) = names.borrow().get(row.selected() as usize).cloned() else {
+        let Some((name, _)) = names.borrow().get(row.selected() as usize).cloned() else {
             return;
         };
         send(format!("switch to {name}"), async move {
@@ -973,29 +914,53 @@ async fn poll(widgets: Rc<Widgets>) {
 /// The devices to choose from, the chosen one selected; one that's unplugged stays in the list,
 /// so the row shows what the filter waits for.
 fn show_devices(widgets: &Widgets, device: Device, status: &Status) {
-    let (devices, chosen, default) = match device {
-        Device::Input => (&status.inputs, &status.input, tr("default-input")),
-        Device::Output => (&status.outputs, &status.output, tr("default-output")),
+    let (devices, chosen) = match device {
+        Device::Input => (&status.inputs, &status.input),
+        Device::Output => (&status.outputs, &status.output),
+    };
+    let description = |name: &str| {
+        devices
+            .iter()
+            .find(|(device, ..)| device == name)
+            .map_or_else(
+                || name.to_owned(),
+                |(_, description, _)| description.clone(),
+            )
+    };
+    let default = match device {
+        Device::Input => {
+            // the one it reads from, or else the one it will: the default input, unless that's
+            // "Voice Filter", whose stand-in only shows once something records
+            let current = [&status.active_input, &status.default_input]
+                .into_iter()
+                .find(|name| !name.is_empty() && *name != "voice-filter");
+            match current {
+                Some(name) => tr_args(
+                    "default-input-current",
+                    &[("device", description(name).into())],
+                ),
+                None => tr("default-input"),
+            }
+        }
+        Device::Output => tr("default-output"),
     };
     let (row, known) = device.picker(widgets);
-    let mut names = vec![String::new()];
-    let mut labels = vec![default];
+    let mut entries = vec![(String::new(), default)];
     for (name, description, _) in devices {
-        names.push(name.clone());
-        labels.push(description.clone());
+        entries.push((name.clone(), description.clone()));
     }
-    if !names.contains(chosen) {
-        names.push(chosen.clone());
-        labels.push(tr_args("unplugged", &[("device", chosen.clone().into())]));
+    if !entries.iter().any(|(name, _)| name == chosen) {
+        let label = tr_args("unplugged", &[("device", chosen.clone().into())]);
+        entries.push((chosen.clone(), label));
     }
-    if *known.borrow() != names {
-        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    if *known.borrow() != entries {
+        let labels: Vec<&str> = entries.iter().map(|(_, label)| label.as_str()).collect();
         row.set_model(Some(&gtk::StringList::new(&labels)));
-        known.replace(names.clone());
+        known.replace(entries.clone());
     }
-    let selected = names
+    let selected = entries
         .iter()
-        .position(|name| name == chosen)
+        .position(|(name, _)| name == chosen)
         .unwrap_or_default() as u32;
     if row.selected() != selected {
         row.set_selected(selected);
@@ -1061,7 +1026,7 @@ fn show(widgets: &Widgets, status: &Status) {
             slider.show(param.value);
         }
     }
-    show_mode(widgets, status);
+    show_input_group(widgets, status);
     show_devices(widgets, Device::Input, status);
     show_devices(widgets, Device::Output, status);
     show_echo(widgets, status);

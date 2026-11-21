@@ -178,21 +178,6 @@ help-filter =
     37 ms, iš jų 30 ms – triukšmo slopinimas; visą delsą rodo žemiau esanti eilutė „Delsa“).
     Atsisakius vėlinimo, išjungiant būtų iškirpta garso dalis, o įjungiant įterptas tarpas,
     skambutyje girdimas kaip spragtelėjimas ar strigimas; taip perjungimas tik sklandžiai pereina.
-help-mode-auto =
-    Kiekviena programa, įrašanti iš numatytosios įvesties, gauna filtruotą mikrofoną, programoje
-    nieko nustatyti nereikia. Filtras skaito iš mikrofono, pasirinkto sistemos garso nustatymuose,
-    ir seka, kai pasirenki kitą ar prijungi naują. Programa, įrašanti iš konkretaus mikrofono, gauna
-    jį nefiltruotą.
-
-    WirePlumber (0.5 ar naujesnis) įterpia filtrą tarp jų kaip išmanųjį filtrą. Kol filtras
-    neveikia, programos gauna mikrofoną tiesiogiai. Perjungiant režimą garsas trumpam dingsta.
-help-mode-manual =
-    Tik programos, įrašančios iš „Voice Filter“, gauna filtruotą mikrofoną: pasirink jį kaip
-    mikrofoną programoje arba kaip numatytąją įvestį sistemos garso nustatymuose. Filtras skaito iš
-    mikrofono, kurį pasirenki žemiau.
-
-    „Voice Filter“ lieka, kol filtras sustabdytas, programos įrašo tylą, kol jis vėl veikia.
-    Perjungiant režimą garsas trumpam dingsta.
 help-listen-volume =
     Kaip garsiai girdi save. Tik klausymuisi: programos gauna balsą tokiu lygiu, iki kurio jį suveda
     filtras.
@@ -248,18 +233,19 @@ copied = Nukopijuota
 group-input = Įvestis
 group-input-description = Filtras skaito iš šio mikrofono, programos skaito iš „Voice Filter“.
 group-input-description-auto =
-    Filtras skaito iš numatytosios įvesties, pasirinktos sistemos garso nustatymuose, kiekviena
-    programa, įrašanti iš jos, gauna filtruotą mikrofoną.
+    Filtras skaito iš šio mikrofono, kiekviena programa, įrašanti iš jo, gauna jį filtruotą.
+group-input-description-unavailable =
+    Filtruotą mikrofoną gauna tik programos, įrašančios iš „Voice Filter“: visoms reikia WirePlumber
+    0.5 ar naujesnio.
+input-default-is-filter =
+    „Voice Filter“ yra numatytoji įvestis, todėl filtras skaito iš kito mikrofono. Pasirink savo
+    kaip numatytąją įvestį sistemos garso nustatymuose.
 filter = Filtras
 filter-subtitle = Išjungus programos gauna mikrofoną tokį, koks jis yra
-mode-auto = Visos programos
-mode-auto-subtitle = Seka mikrofoną, pasirinktą sistemos garso nustatymuose
-mode-auto-unavailable = Reikia WirePlumber 0.5 ar naujesnio
-mode-manual = Pasirinktos programos
-mode-manual-subtitle = Tik programos, įrašančios iš „Voice Filter“, iš čia pasirinkto mikrofono
 microphone = Mikrofonas
 speakers = Garsiakalbiai
 default-input = Numatytoji įvestis
+default-input-current = Numatytoji įvestis ({ $device })
 default-output = Numatytoji išvestis
 unplugged = { $device } (atjungtas)
 listen = Klausytis

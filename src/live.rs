@@ -46,6 +46,8 @@ const FILTERS_METADATA: &str = "filters";
 /// The metadata of the default devices, and the key of the default input in it.
 const DEFAULT_METADATA: &str = "default";
 const DEFAULT_SOURCE_KEY: &str = "default.audio.source";
+/// The key of the smart filter's target in the metadata of the smart filters.
+const SMART_TARGET_KEY: &str = "filter.smart.target";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
 const REFERENCE_NODE_NAME: &str = "voice-filter-reference";
 /// The capture stream, the output stream and the virtual microphone are in this group, so they
@@ -770,8 +772,11 @@ struct Graph {
     synced: bool,
     /// The mode the streams are set up for.
     running: Option<Mode>,
-    /// The id of the metadata of the smart filters.
+    /// The id of the metadata of the smart filters, and a proxy to write the target into it.
     filters: Option<u32>,
+    filters_metadata: Option<pw::metadata::Metadata>,
+    /// The output stream's node and the microphone its `filter.smart.target` was set to.
+    target: Option<(u32, String)>,
     /// The proxy of the null sink "Voice Filter" while it's being created.
     creating: Option<pw::node::Node>,
     /// The id of the null sink "Voice Filter".
@@ -815,6 +820,8 @@ impl Graph {
             synced: false,
             running: None,
             filters: None,
+            filters_metadata: None,
+            target: None,
             creating: None,
             source: None,
             output: None,
@@ -876,6 +883,13 @@ impl Graph {
                         ObjectType::Metadata => match props.get("metadata.name") {
                             Some(FILTERS_METADATA) => {
                                 graph.filters = Some(global.id);
+                                let registry = graph.registry.clone();
+                                match registry.bind::<pw::metadata::Metadata, _>(global) {
+                                    Ok(metadata) => graph.filters_metadata = Some(metadata),
+                                    Err(err) => {
+                                        eprintln!("Could not bind the smart filters: {err}")
+                                    }
+                                }
                                 graph.apply_mode();
                             }
                             Some(DEFAULT_METADATA) => {
@@ -944,6 +958,8 @@ impl Graph {
         self.sources.remove(&id);
         if Some(id) == self.filters {
             self.filters = None;
+            self.filters_metadata = None;
+            self.target = None;
             self.apply_mode();
         }
         if Some(id) == self.source {
@@ -1005,6 +1021,41 @@ impl Graph {
             eprintln!("Could not switch to {name}: {err}");
         }
         self.setup.input = name;
+        self.apply_target();
+    }
+
+    /// Points the smart filter to the microphone chosen, through the metadata of the smart
+    /// filters (WirePlumber rescans when it changes, not when the node's properties do), or
+    /// removes its target for the default input. With a target, WirePlumber links the apps that
+    /// record from that microphone to the filter, and the capture stream to the microphone; while
+    /// it's unplugged, no app.
+    fn apply_target(&mut self) {
+        if self.running != Some(Mode::Auto) {
+            return;
+        }
+        let (Some(output), Some(metadata)) = (self.output, &self.filters_metadata) else {
+            return;
+        };
+        let wanted = (output, self.setup.input.clone());
+        if self.target.as_ref() == Some(&wanted) {
+            return;
+        }
+        // also clears what a crashed run left on a node of the same id
+        let value = (!wanted.1.is_empty()).then(|| smart_target(&wanted.1));
+        metadata.set_property(
+            output,
+            SMART_TARGET_KEY,
+            value.as_ref().map(|_| "Spa:String:JSON"),
+            value.as_deref(),
+        );
+        self.target = Some(wanted);
+    }
+
+    /// Removes the target of the smart filter, before its node goes.
+    fn clear_target(&mut self) {
+        if let (Some((node, _)), Some(metadata)) = (self.target.take(), &self.filters_metadata) {
+            metadata.set_property(node, SMART_TARGET_KEY, None, None);
+        }
     }
 
     /// Sets the streams up for the mode chosen, or the manual one if the automatic one isn't
@@ -1040,7 +1091,13 @@ impl Graph {
             eprintln!("Could not set up the streams: {err:#}");
         }
         match mode {
-            Mode::Auto => eprintln!("Filtering the default input for all apps"),
+            Mode::Auto if self.setup.input.is_empty() => {
+                eprintln!("Filtering the default input for all apps that record from it")
+            }
+            Mode::Auto => eprintln!(
+                "Filtering {} for all apps that record from it",
+                self.setup.input
+            ),
             Mode::Manual if self.setup.input.is_empty() => eprintln!(
                 "Filtering the default input for the apps that record from \"Voice Filter\""
             ),
@@ -1057,6 +1114,7 @@ impl Graph {
     /// Connects the output stream for `mode`, points the capture stream to its microphone and
     /// creates or destroys the null sink.
     fn set_up(&mut self, mode: Mode) -> Result<()> {
+        self.clear_target();
         let Streams { output, captures } = &self.streams;
         let output = output.clone();
         // connected again when something records from the new "Voice Filter"
@@ -1140,6 +1198,7 @@ impl Graph {
                 *input = active;
             }
         }
+        self.apply_target();
         let recording = self
             .recorded()
             .is_some_and(|source| self.links.values().any(|&(from, _)| from == source));
@@ -1209,6 +1268,22 @@ pub fn metadata_node_name(value: &str) -> Option<String> {
             c => name.push(c),
         }
     }
+}
+
+/// The value of `filter.smart.target` for the microphone `name`: match rules for its `node.name`,
+/// as JSON.
+pub fn smart_target(name: &str) -> String {
+    let mut escaped = String::new();
+    for c in name.chars() {
+        match c {
+            '"' | '\\' => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            c => escaped.push(c),
+        }
+    }
+    format!("{{\"node.name\":\"{escaped}\"}}")
 }
 
 /// An audio device: a source the filter can read from, or an output device whose monitor is the

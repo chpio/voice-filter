@@ -40,13 +40,13 @@ enum Command {
     /// Provides the virtual microphone "Voice Filter": the microphone through the chain. Runs
     /// until Ctrl+C.
     Run {
-        /// Which apps get the filter: `auto` all that record from the default input (a smart
-        /// filter, needs WirePlumber 0.5 or later), `manual` only those that record from "Voice
-        /// Filter"; kept for the next runs. Without one so far, `auto`.
+        /// Which apps get the filter: `auto` all that record from the microphone (a smart filter,
+        /// needs WirePlumber 0.5 or later), `manual` only those that record from "Voice Filter";
+        /// kept for the next runs. Without one so far, `auto`.
         #[arg(long)]
         mode: Option<Mode>,
-        /// The microphone of the manual mode, a name from `voice-filter inputs`; kept for the
-        /// next runs. Without one so far, the default input.
+        /// The microphone, a name from `voice-filter inputs`; kept for the next runs. Without one
+        /// so far, the default input, which the filter then follows.
         #[arg(long)]
         input: Option<String>,
         /// The output device (speakers) whose echo gets removed, a name from `voice-filter

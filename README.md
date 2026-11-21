@@ -107,8 +107,10 @@ voice-filter inputs
 voice-filter outputs
 # filters the default input for all apps, until Ctrl+C
 voice-filter run --output <name>
-# only for the apps that record from "Voice Filter", from the microphone <name>
-voice-filter run --mode manual --input <name>
+# filters the microphone <name> for all apps that record from it
+voice-filter run --input <name>
+# only for the apps that record from "Voice Filter"
+voice-filter run --mode manual
 # the same, printing the latency and the dropouts every 10 s
 voice-filter run --verbose
 # opens the GNOME app for a running `voice-filter run`
@@ -117,32 +119,32 @@ voice-filter ui
 
 1. Start `voice-filter run`. `--output` names the speakers whose echo gets removed, kept for the
    next runs; without one it's the default output.
-2. Choose the mode, with `--mode` or in the app, kept for the next runs:
-   - **All apps** (`auto`, the default): every app that records from the default input gets the
-     filtered microphone, nothing to set up in the apps. The filter reads from the microphone
-     chosen in the system's sound settings and follows when you choose another one or plug one
-     in. An app that records from a particular microphone gets that one unfiltered. WirePlumber
-     links the filter in between as a [smart filter][smart-filters]; while `voice-filter run`
-     isn't running, the apps get the microphone directly.
-   - **Chosen apps** (`manual`): only the apps that record from **Voice Filter** get it; select it
-     as the microphone in the app (or as the default input of the system). The filter reads from
-     the microphone given with `--input` or chosen in the app, kept for the next runs; without
-     one the default input.
-3. Open `voice-filter ui` to choose the mode, the microphone and the speakers, switch stages on
-   and off or adjust their settings. All of it is kept for the next runs, in
-   `~/.local/state/voice-filter/` (`$XDG_STATE_HOME`); `chain` there lists what differs from the
-   defaults, one setting per line (`denoise off`, `denoise.limit 30`), delete it to go back to
-   them.
+2. Choose the microphone, with `--input` or in the app, kept for the next runs. Every app that
+   records from it gets it filtered, nothing to set up in the apps:
+   - **Default Input** (the default): the filter reads from the microphone chosen in the system's
+     sound settings and follows when you choose another one there or plug one in.
+   - **A particular microphone**: the apps that record from it get it filtered, also through the
+     default input when it's chosen there; apps on another microphone get theirs unfiltered, and
+     while it's unplugged all of them do.
 
-Switching the mode sets up the streams again, the sound drops for a moment. Without WirePlumber
-0.5 or later it runs in the manual mode, whichever is chosen.
+   WirePlumber links the filter in between as a [smart filter][smart-filters]; while
+   `voice-filter run` isn't running, the apps get the microphone directly.
+3. Open `voice-filter ui` to choose the microphone and the speakers, switch stages on and off or
+   adjust their settings. All of it is kept for the next runs, in `~/.local/state/voice-filter/`
+   (`$XDG_STATE_HOME`); `chain` there lists what differs from the defaults, one setting per line
+   (`denoise off`, `denoise.limit 30`), delete it to go back to them.
+
+Without WirePlumber 0.5 or later, and with `--mode manual`, only the apps that record from **Voice
+Filter** get the filtered microphone: select it as the microphone in the app (or as the default
+input of the system). `--mode auto` goes back; switching sets up the streams again, the sound
+drops for a moment.
 
 [smart-filters]: https://pipewire.pages.freedesktop.org/wireplumber/policies/smart_filters.html
 
 The microphone is only in use while an app records from Voice Filter, and only then the chain
-runs: while no app records, `voice-filter run` takes no CPU. If Voice Filter is the
-default input, the filter reads from the source with the highest priority; in the manual mode set
-the microphone with `--input` or in the app instead.
+runs: while no app records, `voice-filter run` takes no CPU. If Voice Filter is chosen as the
+default input in the system's sound settings, the filter reads from the source with the highest
+priority and the app says so; choose your microphone there instead.
 
 Only one `voice-filter run` can be active at a time. A second one stops with "Voice Filter is
 already running".
@@ -185,9 +187,8 @@ in `~/.local/share/icons/hicolor/symbolic/apps/`; delete them to remove it). In 
 - switch the whole **filter** off and on: off, apps get the microphone as it is, still at the
   same latency (so switching doesn't click or stutter), and every stage keeps its own switch and
   settings
-- choose the **mode**: all apps, following the microphone of the system's sound settings, or only
-  the apps that record from Voice Filter
-- choose the **microphone** in the manual mode, switched while the filter keeps running
+- choose the **microphone**: the default input (it shows which one that is) or a particular one,
+  switched while the filter keeps running
 - choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
   there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the
   delay of their echo
@@ -245,9 +246,9 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 
 | Member            | Type                 | Description                                                                                                         |
 | ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `Mode`            | `s`, read/write      | `auto` (all apps, the default input) or `manual` (only apps on Voice Filter), kept for the next runs                |
+| `Mode`            | `s`, read/write      | `auto` (all apps on the microphone) or `manual` (only apps on Voice Filter), kept for the next runs                 |
 | `AutoAvailable`   | `b`, read            | whether the session manager has smart filters (WirePlumber 0.5 or later), which `auto` needs                        |
-| `Input`           | `s`, read/write      | the microphone's `node.name` in the manual mode, empty for the default input                                        |
+| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                                                           |
 | `ActiveInput`     | `s`, read            | the `node.name` of the source the filter reads from, empty while no app records                                     |
 | `DefaultInput`    | `s`, read            | the `node.name` of the system's default input                                                                       |
 | `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output                                              |

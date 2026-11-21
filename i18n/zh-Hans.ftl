@@ -97,14 +97,6 @@ help-filter =
     开关整个过滤器。关闭时，应用得到的是原样的麦克风，而每个环节都保留自己的开关和设置，等再次开启时使用。托盘中的图标也可以开关它。
 
     关闭时延迟保持不变：麦克风会被延迟过滤器所需的时间（约 37 ms，其中 30 ms 来自降噪；下方的“延迟”一行显示全部）。如果去掉这个延迟，关闭时会丢掉一段声音，开启时会插入一段空白，在通话中听起来像咔嗒声或卡顿；这样切换时只是交叉淡化。
-help-mode-auto =
-    从默认输入录音的每个应用都会得到过滤后的麦克风，无需在应用中设置。过滤器从系统声音设置中选择的麦克风读取，你选择或插入另一个麦克风时会跟随。从某个特定麦克风录音的应用会得到未经过滤的该麦克风。
-
-    WirePlumber（0.5 或更高版本）把过滤器作为智能过滤器接在中间。过滤器没有运行时，应用直接得到麦克风。切换模式时声音会中断片刻。
-help-mode-manual =
-    只有从“Voice Filter”录音的应用才会得到过滤后的麦克风：在应用中把它选为麦克风，或在系统声音设置中把它选为默认输入。过滤器从下面选择的麦克风读取。
-
-    过滤器停止时“Voice Filter”仍然存在，应用会录到静音，直到它再次运行。切换模式时声音会中断片刻。
 help-listen-volume = 你听到自己的音量。只用于监听：应用得到的声音是过滤器带到的电平。
 help-input-level =
     麦克风在过滤器之前有多响；音量条从 −60 到 0 dBFS。
@@ -142,17 +134,15 @@ copy = 复制
 copied = 已复制
 group-input = 输入
 group-input-description = 过滤器从这个麦克风读取，应用从“Voice Filter”读取。
-group-input-description-auto = 过滤器从系统声音设置中的默认输入读取，从它录音的每个应用都会得到过滤后的麦克风。
+group-input-description-auto = 过滤器从这个麦克风读取，从它录音的每个应用都会得到过滤后的声音。
+group-input-description-unavailable = 只有从“Voice Filter”录音的应用才会得到过滤后的麦克风：要过滤所有应用，需要 WirePlumber 0.5 或更高版本。
+input-default-is-filter = “Voice Filter”是默认输入，所以过滤器从另一个麦克风读取。请在系统声音设置中把你的麦克风选为默认输入。
 filter = 过滤器
 filter-subtitle = 关闭时，应用得到原样的麦克风
-mode-auto = 所有应用
-mode-auto-subtitle = 跟随系统声音设置中选择的麦克风
-mode-auto-unavailable = 需要 WirePlumber 0.5 或更高版本
-mode-manual = 选定的应用
-mode-manual-subtitle = 只有从“Voice Filter”录音的应用，使用这里选择的麦克风
 microphone = 麦克风
 speakers = 扬声器
 default-input = 默认输入
+default-input-current = 默认输入（{ $device }）
 default-output = 默认输出
 unplugged = { $device }（已拔出）
 listen = 监听

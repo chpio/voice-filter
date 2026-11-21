@@ -41,6 +41,10 @@ pub trait VoiceFilter {
     fn set_mode(&self, mode: &str) -> ::zbus::Result<()>;
     #[zbus(property)]
     fn auto_available(&self) -> ::zbus::Result<bool>;
+    #[zbus(property)]
+    fn active_input(&self) -> ::zbus::Result<String>;
+    #[zbus(property)]
+    fn default_input(&self) -> ::zbus::Result<String>;
 
     #[zbus(property)]
     fn stages(&self) -> ::zbus::Result<Vec<(String, bool)>>;
@@ -136,6 +140,10 @@ pub struct Status {
     /// In the order of the chain.
     pub parameters: Vec<Parameter>,
     pub input: String,
+    /// The `node.name` of the source the filter reads from, empty while no app records.
+    pub active_input: String,
+    /// The `node.name` of the system's default input, `voice-filter` if it's "Voice Filter".
+    pub default_input: String,
     /// `node.name`, description and priority.
     pub inputs: Vec<(String, String, i32)>,
     /// The output device whose echo gets removed, like `input`.
@@ -168,6 +176,9 @@ struct Properties {
     stages: Vec<(String, bool)>,
     parameters: Vec<ParameterTuple>,
     input: String,
+    /// Missing on a daemon from before them, like `default_input`.
+    active_input: Option<String>,
+    default_input: Option<String>,
     inputs: Vec<(String, String, i32)>,
     output: String,
     outputs: Vec<(String, String, i32)>,
@@ -209,6 +220,8 @@ impl VoiceFilterProxy<'_> {
                 .map(Parameter::from)
                 .collect(),
             input: properties.input,
+            active_input: properties.active_input.unwrap_or_default(),
+            default_input: properties.default_input.unwrap_or_default(),
             inputs: properties.inputs,
             output: properties.output,
             outputs: properties.outputs,
