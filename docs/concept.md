@@ -11,7 +11,7 @@ Started as the German document [Konzept: Live-Sprachfilter für Linux](https://c
 A live voice filter for Linux that sits in PipeWire between the microphone and the apps. Any app (Discord, browser, OBS) gets the filtered voice from the default input without being set up for it, or, in a manual mode, by choosing the virtual microphone "Voice Filter".
 
 - **Live:** total latency below 40 ms if possible, so conversations stay natural.
-- **Features:** remove echo, remove noise, enhance the voice; optionally suppress other voices (postponed, see [Suppressing other voices](#suppressing-other-voices)).
+- **Features:** remove echo, remove noise, enhance the voice. Suppressing other voices with Hush was planned and dropped (see [Suppressing other voices](#suppressing-other-voices)).
 - **Hardware:** runs entirely on the CPU, with little load (the whole chain about 7 % of a core live while you talk, see `docs/measurements.md`, "Live CPU load"); no GPU.
 - **Platform:** Arch Linux, GNOME on Wayland, PipeWire.
 - **Operation:** stages and modes can be switched at runtime, without clicks.
@@ -24,20 +24,19 @@ The signal passes through all stages in a fixed order. Echo comes first after th
 2. **Remove rumble** – the high-pass of the voice enhancement (80 Hz), first: below it there's only noise, and DeepFilterNet3 took the rumble for speech (see [Model choice](#model-choice))
 3. **Remove echo** – WebRTC AEC3 in our own process, with the speakers' monitor as the reference (see [Echo cancellation](#echo-cancellation))
 4. **Remove noise** – DeepFilterNet3, 48 kHz, 30 ms latency (main filter), hearing a quiet voice raised to −35 dBFS
-5. **Suppress other voices** (optional, postponed) – Hush, modes Off · Full · Gate, about 11 ms more
-6. **Enhance the voice** – EQ, de-esser, AGC, compressor, expander, limiter
-7. **"Voice Filter"** – a smart filter in front of the default input, or a virtual microphone selected in Discord, the browser or OBS (see [Architecture](#architecture))
+5. **Enhance the voice** – EQ, de-esser, AGC, compressor, expander, limiter
+6. **"Voice Filter"** – a smart filter in front of the default input, or a virtual microphone selected in Discord, the browser or OBS (see [Architecture](#architecture))
 
 Voice enhancement comes after denoising, so the compressor doesn't bring up the noise.
 
 ## Model choice
 
-DeepFilterNet3 is the main filter. It's the strongest open live option with the full frequency range. Hush was meant to complement it for other voices, but is postponed after a first test (see [Suppressing other voices](#suppressing-other-voices)). There's no independent comparison of all models for 2026; Hush's placement on the Hugging Face leaderboard comes from its maker.
+DeepFilterNet3 is the main filter. It's the strongest open live option with the full frequency range. Hush was meant to complement it for other voices, but was dropped after a first test (see [Suppressing other voices](#suppressing-other-voices)). There's no independent comparison of all models for 2026; Hush's placement on the Hugging Face leaderboard comes from its maker.
 
 | Model                                                       | Sample rate | Strength                                                 | Weakness                           | Role                       |
 | ----------------------------------------------------------- | ----------- | -------------------------------------------------------- | ---------------------------------- | -------------------------- |
 | [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet) | 48 kHz      | Best live quality, core in Rust, LADSPA plugin available | 30 ms latency, somewhat more CPU   | Main filter                |
-| [Hush](https://huggingface.co/Aliados/hush)                 | 16 kHz      | Also suppresses other voices, 8 MB, under 1 ms per frame | Sounds like a phone, young project | Postponed                  |
+| [Hush](https://huggingface.co/Aliados/hush)                 | 16 kHz      | Also suppresses other voices, 8 MB, under 1 ms per frame | Sounds like a phone, young project | Dropped                    |
 | [GTCRN](https://github.com/sherryyu33/gtcrn)                | 16 kHz      | Extremely small, 23.7 K parameters                       | Narrowband                         | Fallback for weak hardware |
 | RNNoise                                                     | 48 kHz      | Minimal CPU usage                                        | Clearly worse quality              | Not planned                |
 
@@ -147,7 +146,7 @@ Still to do: more recordings (rap, a podcast with a music bed, a real call over 
 
 ## Suppressing other voices
 
-**Postponed** (2026-10-31): in a first test Hush didn't separate the voices, DeepFilterNet3 alone did better (see [Test](#test) below). The plan as it was:
+**Dropped** (2026-11-21, postponed since 2026-10-31): in a first test Hush didn't separate the voices, DeepFilterNet3 alone did better (see [Test](#test) below); it won't be implemented. The plan as it was:
 
 The feature can be enabled at runtime and offers two modes. Hush costs no license fees (Apache 2.0); the costs are latency, sound and maintenance.
 
@@ -172,7 +171,7 @@ A recording from the USB microphone (speech at about −36 dBFS RMS, rather quie
 
 - DeepFilterNet3 alone keeps the speaker (−2 to −8 dB) and lets the video through while it plays alone; while the speaker talks, it suppresses the video by itself, and sounds good.
 - Hush after DeepFilterNet3 swallowed the speaker alone (−27 to −65 dB). Hush depends on the level: 10 dB more before it keeps the speaker (still 5–10 dB below DeepFilterNet3 alone), but then attenuates speaker and video alike. With AGC and limiter before it (Hush last) it attenuates everything by 12–15 dB, again without separating: the AGC evens out the level difference Hush seems to rely on.
-- Before trying again: a recording with the microphone close (speech peaks around −10 dBFS), which also helps every other stage. Hush alone at the original level separated as little.
+- Not tried again. Another try would have needed a recording with the microphone close (speech peaks around −10 dBFS), which also helps every other stage. Hush alone at the original level separated as little.
 
 Separating by the speaker's own voice (target speaker extraction or personalized speech enhancement, conditioned on an enrollment of a few seconds of the voice) would be the actual solution. Open options as of 2026-10:
 
@@ -217,14 +216,14 @@ None: the chain runs on the CPU only. Live audio comes in 10 ms frames, and for 
 
 A single Rust process as a PipeWire node. All stages run inside it, so the latency stays under control.
 
-- **Language:** Rust. DeepFilterNet3 (as `deep-filter-rt`) and hush-vani are already Rust, PipeWire via `pipewire-rs`.
+- **Language:** Rust. DeepFilterNet3 (as `deep-filter-rt`) is already Rust, PipeWire via `pipewire-rs`.
 - **Modes:** the usability goal is to choose the microphone in GNOME's Settings → Sound → Input, leave the apps on the default and have all of it filtered. Two modes, a choice of the user, `auto` the default:
   - **All apps** (`auto`): the output stream is the source "Voice Filter" itself (`media.class = Audio/Source`, `filter.smart = true`, `filter.smart.name`), in one `node.link-group` with the capture stream, which has no `target.object`: a [smart filter](https://pipewire.pages.freedesktop.org/wireplumber/policies/smart_filters.html) of WirePlumber. Without `filter.smart.target` WirePlumber links every app that records from the default input to the filter instead, and the capture stream to the default input, so it follows the input chosen in the system's settings and hotplugging; apps that record from another microphone by name pass it by, and it never picks a smart filter as the default input. No null sink and no link of our own; the reference stream stays out of the link group. When the process goes, so does the filter, and WirePlumber links the apps to the microphone directly. Needs WirePlumber 0.5 (March 2024; Ubuntu 24.04 still has 0.4, 24.10 has 0.5) and PipeWire 1.0 or later; it's detected by the metadata `filters` in the registry, which WirePlumber 0.5 provides. Without it, the filter runs in the manual mode. The microphone chosen in the app is the filter's fixed target (`filter.smart.target`, match rules on its `node.name`, written into that metadata for the filter's node, as WirePlumber rescans on changes of the metadata, not of node properties): then the apps that record from that microphone get the filter, also through the default input when it's chosen there, those on another microphone don't, and while it's unplugged none (WirePlumber finds no target and links the apps to their microphone). "Default Input" removes the target. So the app has one choice of the microphone, like the speakers, and no choice of the mode; an earlier version had two radio rows ("All apps"/"Chosen apps") with the microphone only in the manual mode, and mapping "Default Input" to the automatic mode and a microphone to the manual one would have needed the apps switched without the user noticing. The bypass `filter.smart.disabled` isn't used: the switch of the whole filter stays the crossfaded bypass of the chain at the same latency.
   - **Chosen apps** (`manual`): only apps that record from the virtual microphone "Voice Filter" get it, from the microphone chosen in the app (below). Only with `run --mode manual` and without smart filters, the app shows it in the description of the microphone's group.
 
   Both share the chain, the bridge, D-Bus and the tray; the switch lies in `live.rs`, the streams stay and are connected again with the properties of the other mode, so switching drops the sound for a moment. Both are needed anyway, for session managers without smart filters. Rejected: a plugin for PipeWire's `filter-chain` (a step back for choosing the speakers, the idle state while nothing records and the D-Bus interface), an ALSA plugin and `snd-aloop` (no use under PipeWire). Another way of plugging in saves at most parts of the bridge (5–15 ms) of the latency, 30 ms are DeepFilterNet3's; latency isn't the reason for the modes.
 - **PipeWire (manual mode):** reads from the microphone (or from the echo-cancel source) and provides "Voice Filter" as a virtual microphone. It's a node of PipeWire's own that voice-filter creates on its first start (`object.linger`) and only writes into, so it stays until PipeWire restarts: apps stay linked to it while voice-filter restarts or after it crashed, and record silence meanwhile instead of switching to the unfiltered microphone. (At first the device was a stream of the process and went with it; declaring it in `~/.config/pipewire/pipewire.conf.d/` would have kept it across PipeWire restarts too, but needs an installed config file.) It adds no latency: it runs in the microphone's cycle like the streams.
-- **Frames:** internally 48 kHz, 10 ms per frame (480 samples). Fits DeepFilterNet3 (hop 480) and Hush (hop 160 at 16 kHz) exactly.
+- **Frames:** internally 48 kHz, 10 ms per frame (480 samples). Fits DeepFilterNet3 (hop 480) exactly.
 - **PipeWire details** (from a spike with PipeWire 1.6.10, WirePlumber 0.5.18 and `pipewire` 0.10):
   - A stream as the virtual microphone needs `media.class = Audio/Source`, not `Audio/Source/Virtual`: WirePlumber never sets a format for the latter, so it gets no ports and no app can record from it (the same happens to `pw-loopback`'s virtual sources). For a null sink in an adapter (`support.null-audio-sink`, created through the core, as now) it's the other way round: `Audio/Source/Virtual` gets an input and an output port, `Audio/Source` none.
   - WirePlumber links a playback stream only to sinks: with `target.object` on the virtual microphone it played to the default output. voice-filter links its output stream itself (link factory, `node.autoconnect = false`), and the stream is `node.passive`, so the link doesn't keep the virtual microphone running while no app records (`link.passive` on the link had no effect).
@@ -232,7 +231,6 @@ A single Rust process as a PipeWire node. All stages run inside it, so the laten
   - The capture stream, the output stream and the virtual microphone go into one `node.group`, like `module-loopback` does, so they run in the microphone's cycle; the virtual microphone's own timer only drives it while voice-filter isn't running.
 - **Stages:** a common trait with name, latency and processing of one frame. Stages are interchangeable and optional. Each can be switched off at runtime: its input, delayed by its latency, plays instead, crossfaded over one frame, so the total latency never changes; a switched off stage doesn't process and saves its CPU. The whole filter switches off the same way, all stages at once, each keeping its own switch for when it's on again.
 - **Memory in the audio path:** the stages allocate nothing per frame, except DeepFilterNet3: tract allocates the output of every node and the packed operands of its matrix products, about 820 times per frame, and has no way to run on preallocated tensors. Patching tract for that would touch most of its ops and its tensor storage, an inference of our own would take days and risk the model's output; instead the binary's allocator (`rt_alloc`) serves what the chain allocates in the live mode from a pool of 4 MiB, reserved and touched at the start (TLSF, constant time, no system calls; a spin lock only other threads freeing into it contend for), everything else from the system allocator. The chain takes about 300 KB of it; neither faster nor slower than glibc (see `docs/measurements.md`).
-- **Resampling 48 ↔ 16 kHz:** fixed filter with factor 3. Known, constant latency, no allocation in the audio path.
 - **Control:** a GNOME app (GTK4 with libadwaita via `gtk4-rs`/`libadwaita-rs`, `voice-filter ui`) as a separate process; the audio process keeps running when the window is closed. They talk over the D-Bus session bus (`zbus`, name `net.b128.VoiceFilter.Daemon`), which also allows a command line (`busctl` or our own `voice-filter ctl`). Inside the audio process the settings are shared lock-free with the audio path.
 - **Test mode:** the same chain processes WAV files offline. This allows comparing models and settings and measuring real-time capability.
 
@@ -242,14 +240,12 @@ The biggest risk is latency: all stages together must stay live.
 
 | Risk                                                                          | Consequence                         | Countermeasure                                                  |
 | ----------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------- |
-| Latency adds up (DFN3 30 ms, FIFO up to 10 ms, Hush +11 ms, PipeWire buffers) | Conversations feel delayed          | Measure and show latency per stage; stages can be left out      |
-| Gate mode cuts off quiet speech of your own                                   | Syllables go missing                | Open fast, close slowly; adjustable floor                       |
-| hush-vani is a third-party project                                            | Maintenance uncertain               | Encapsulate behind an interchangeable interface; ONNX as plan B |
+| Latency adds up (DFN3 30 ms, FIFO up to 10 ms, PipeWire buffers)              | Conversations feel delayed          | Measure and show latency per stage; stages can be left out      |
 | DeepFilterNet3 outdated on crates.io, upstream dormant since 2024             | Real-time part only usable from git | Vendored as `deep-filter-rt`, published ourselves               |
 
 **Decided:**
 
-- Latency budget: no fixed number up front. The latency is measured per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that (the de-esser added 1 ms to the chain since); at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms; a quantum of 480 saves nothing, what the bridge gains the microphone loses (see PipeWire details).
+- Latency budget: no fixed number up front. The latency is measured per stage, the budget follows from it and decides whether the low-latency variant of DeepFilterNet3 is needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that (the de-esser added 1 ms to the chain since); at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms; a quantum of 480 saves nothing, what the bridge gains the microphone loses (see PipeWire details).
 - Echo cancellation: in our own process, not PipeWire's module (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
 - No ML restoration: it would cost a GPU or a whole CPU core, the chain stays slim (see [Voice enhancement](#voice-enhancement)).
