@@ -133,9 +133,11 @@ A call over headphones (USB microphone, the echo cancellation off as there's no 
 
 ## Zero mask
 
-Whether the zeros below −10 dB stay is open. Through the whole chain (`voice-filter process`, so
-with the echo cancellation on, before the high-pass moved first), noise in pauses with the zeros
-and without:
+The zeros below −10 dB stay (decided 2026-11-21): the pauses are exact silence and the model's
+decoders don't run for them, at the price of the scores and of some quiet speech (see [Skipping
+frames by the estimated SNR](#skipping-frames-by-the-estimated-snr)). Through the whole chain
+(`voice-filter process`, so with the echo cancellation on, before the high-pass moved first), noise
+in pauses with the zeros and without:
 
 | Recording                                | median, with | noise, with | median, without | noise, without |
 | ---------------------------------------- | -----------: | ----------: | --------------: | -------------: |
@@ -481,8 +483,5 @@ against it), all as in the concept's [Double talk](concept.md#double-talk-the-ec
 
 ## Open
 
-- The zero mask: measured again (above), still to be listened to; the expander's level follows the
-  noise left in the pauses now, which did what `level` at −40 dBFS did there
-  ([above](#expander-level-by-the-noise-floor)).
 - A high-pass between 40 and 80 Hz in front, which may cost less on VoiceBank-DEMAND and still keep
   the rumble from the model.
