@@ -47,6 +47,8 @@ fn service_with(
         chain_latency: 1488,
         mode: Mode::Auto,
         auto_available: Arc::new(AtomicBool::new(true)),
+        active_input: Arc::default(),
+        default_input: Arc::default(),
         input: String::new(),
         inputs: Arc::new(Mutex::new(vec![
             device(40, "usb-mic", 2100),
@@ -187,6 +189,18 @@ fn switches_the_mode_and_keeps_it() {
     // the PipeWire loop says whether smart filters are there
     service.auto_available.store(false, Ordering::Relaxed);
     assert!(!service.auto_available());
+}
+
+#[test]
+fn reports_the_microphone_it_reads_from() {
+    let service = service();
+    assert_eq!(service.active_input(), "");
+    assert_eq!(service.default_input(), "");
+    // what the PipeWire loop sees
+    *service.active_input.lock().unwrap() = "usb-mic".to_owned();
+    *service.default_input.lock().unwrap() = "voice-filter".to_owned();
+    assert_eq!(service.active_input(), "usb-mic");
+    assert_eq!(service.default_input(), "voice-filter");
 }
 
 #[test]

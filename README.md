@@ -248,6 +248,8 @@ interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
 | `Mode`            | `s`, read/write      | `auto` (all apps, the default input) or `manual` (only apps on Voice Filter), kept for the next runs                |
 | `AutoAvailable`   | `b`, read            | whether the session manager has smart filters (WirePlumber 0.5 or later), which `auto` needs                        |
 | `Input`           | `s`, read/write      | the microphone's `node.name` in the manual mode, empty for the default input                                        |
+| `ActiveInput`     | `s`, read            | the `node.name` of the source the filter reads from, empty while no app records                                     |
+| `DefaultInput`    | `s`, read            | the `node.name` of the system's default input                                                                       |
 | `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output                                              |
 | `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                                                            |
 | `KeepListen`      | `b`, read/write      | keeps `Listen` for the next runs (off by default)                                                                   |

@@ -56,6 +56,12 @@ pub struct Service {
     /// Whether the session manager has smart filters, which the automatic mode needs; set by the
     /// PipeWire loop.
     pub auto_available: Arc<AtomicBool>,
+    /// The `node.name` of the source the filter reads from, empty while it reads from none; kept
+    /// up to date by the PipeWire loop.
+    pub active_input: Arc<Mutex<String>>,
+    /// The `node.name` of the default input of the system, empty without one; kept up to date by
+    /// the PipeWire loop.
+    pub default_input: Arc<Mutex<String>>,
     /// The `node.name` of the microphone, empty for the default input.
     pub input: String,
     /// The microphones to choose from, kept up to date by the PipeWire loop.
@@ -299,6 +305,22 @@ impl Service {
         // it reads from it now, even if keeping it fails
         self.input = name;
         self.save(|dir| settings::save_input(dir, &self.input))
+    }
+
+    /// The `node.name` of the source the filter reads from now, empty while no app records (the
+    /// capture stream is connected only then). In the automatic [`Self::mode`] that's the default
+    /// input, or, while that's "Voice Filter" itself, the source the session manager falls back
+    /// to.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn active_input(&self) -> String {
+        self.active_input.lock().unwrap().clone()
+    }
+
+    /// The `node.name` of the default input chosen in the system's settings (or by the session
+    /// manager), empty without one; `voice-filter` when "Voice Filter" is.
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn default_input(&self) -> String {
+        self.default_input.lock().unwrap().clone()
     }
 
     /// The microphones to choose from: `node.name`, description and priority (the session

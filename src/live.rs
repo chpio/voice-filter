@@ -8,7 +8,7 @@
 use ::std::cell::{Cell, RefCell};
 use ::std::collections::HashMap;
 use ::std::path::PathBuf;
-use ::std::rc::Rc;
+use ::std::rc::{Rc, Weak};
 use ::std::sync::atomic::{AtomicBool, Ordering};
 use ::std::sync::{Arc, Mutex, OnceLock};
 use ::std::time::Duration;
@@ -43,6 +43,9 @@ const NODE_NAME: &str = "voice-filter";
 const OUTPUT_NODE_NAME: &str = "voice-filter-output";
 /// The metadata of WirePlumber's smart filters, there from version 0.5 on.
 const FILTERS_METADATA: &str = "filters";
+/// The metadata of the default devices, and the key of the default input in it.
+const DEFAULT_METADATA: &str = "default";
+const DEFAULT_SOURCE_KEY: &str = "default.audio.source";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
 const REFERENCE_NODE_NAME: &str = "voice-filter-reference";
 /// The capture stream, the output stream and the virtual microphone are in this group, so they
@@ -142,6 +145,8 @@ pub fn run(
         output: output_device,
     } = devices;
     let auto_available = Arc::new(AtomicBool::new(false));
+    let active_input = Arc::new(Mutex::new(String::new()));
+    let default_input = Arc::new(Mutex::new(String::new()));
     let (commands, command_receiver) = pw::channel::channel();
     let listen_volume = volume::param();
     let mut keep_listen = None;
@@ -196,6 +201,8 @@ pub fn run(
         chain_latency,
         mode,
         auto_available: auto_available.clone(),
+        active_input: active_input.clone(),
+        default_input: default_input.clone(),
         input: input_name.unwrap_or_default().to_owned(),
         inputs: inputs.clone(),
         output: output_device.unwrap_or_default().to_owned(),
@@ -345,6 +352,8 @@ pub fn run(
             input: input_name.unwrap_or_default().to_owned(),
             auto_available,
             switched: Box::new(restart_listening),
+            active_input,
+            default_input,
         },
     )?;
 
@@ -724,6 +733,11 @@ struct Setup {
     auto_available: Arc<AtomicBool>,
     /// Called after the streams were set up for another mode.
     switched: Box<dyn Fn()>,
+    /// The `node.name` of the source the capture stream reads from, empty while it reads from
+    /// none; kept up to date for the control interface.
+    active_input: Arc<Mutex<String>>,
+    /// The `node.name` of the default input, from the metadata `default`, empty without one.
+    default_input: Arc<Mutex<String>>,
 }
 
 /// The output stream in the mode it can run in, the virtual microphone of the manual mode, the
@@ -764,6 +778,12 @@ struct Graph {
     source: Option<u32>,
     /// The id of the output stream's node.
     output: Option<u32>,
+    /// The id of the capture stream's node, while it's connected.
+    capture: Option<u32>,
+    /// The `node.name` of every audio source.
+    sources: HashMap<u32, String>,
+    /// The metadata `default` with the listener that reads the default input from it.
+    defaults: Option<(pw::metadata::Metadata, pw::metadata::MetadataListener)>,
     /// The node of every port and whether it's an input.
     ports: HashMap<u32, (u32, bool)>,
     /// The output and input node of every link.
@@ -798,6 +818,9 @@ impl Graph {
             creating: None,
             source: None,
             output: None,
+            capture: None,
+            sources: HashMap::new(),
+            defaults: None,
             ports: HashMap::new(),
             links: HashMap::new(),
             link: None,
@@ -810,11 +833,18 @@ impl Graph {
                 move |global| {
                     let Some(props) = global.props else { return };
                     let id = |key| props.get(key).and_then(|id| id.parse::<u32>().ok());
+                    let weak = Rc::downgrade(&graph);
                     let mut graph = graph.borrow_mut();
                     match global.type_ {
                         ObjectType::Node => {
                             let class = props.get(*pw::keys::MEDIA_CLASS);
-                            match props.get(*pw::keys::NODE_NAME) {
+                            let name = props.get(*pw::keys::NODE_NAME);
+                            if let (Some(class), Some(name)) = (class, name)
+                                && class.starts_with("Audio/Source")
+                            {
+                                graph.sources.insert(global.id, name.to_owned());
+                            }
+                            match name {
                                 // the null sink, not the output stream of the automatic mode
                                 Some(NODE_NAME) if class == Some("Audio/Source/Virtual") => {
                                     graph.source = Some(global.id);
@@ -823,6 +853,7 @@ impl Graph {
                                 Some(NODE_NAME | OUTPUT_NODE_NAME) => {
                                     graph.output = Some(global.id);
                                 }
+                                Some(CAPTURE_NODE_NAME) => graph.capture = Some(global.id),
                                 _ => return,
                             }
                         }
@@ -842,13 +873,23 @@ impl Graph {
                             };
                             graph.links.insert(global.id, (from, to));
                         }
-                        ObjectType::Metadata => {
-                            if props.get("metadata.name") != Some(FILTERS_METADATA) {
+                        ObjectType::Metadata => match props.get("metadata.name") {
+                            Some(FILTERS_METADATA) => {
+                                graph.filters = Some(global.id);
+                                graph.apply_mode();
+                            }
+                            Some(DEFAULT_METADATA) => {
+                                let registry = graph.registry.clone();
+                                match registry.bind::<pw::metadata::Metadata, _>(global) {
+                                    Ok(metadata) => graph.watch_defaults(metadata, weak),
+                                    Err(err) => {
+                                        eprintln!("Could not read the default input: {err}")
+                                    }
+                                }
                                 return;
                             }
-                            graph.filters = Some(global.id);
-                            graph.apply_mode();
-                        }
+                            _ => return,
+                        },
                         _ => return,
                     }
                     graph.update();
@@ -897,6 +938,10 @@ impl Graph {
         if Some(id) == self.output {
             self.output = None;
         }
+        if Some(id) == self.capture {
+            self.capture = None;
+        }
+        self.sources.remove(&id);
         if Some(id) == self.filters {
             self.filters = None;
             self.apply_mode();
@@ -908,6 +953,41 @@ impl Graph {
             }
         }
         self.update();
+    }
+
+    /// Keeps [`Setup::default_input`] up to date from the metadata `default`.
+    fn watch_defaults(&mut self, metadata: pw::metadata::Metadata, graph: Weak<RefCell<Self>>) {
+        let listener = metadata
+            .add_listener_local()
+            .property(move |subject, key, _, value| {
+                // `None` as the key clears everything
+                if subject != pw::core::PW_ID_CORE
+                    || key.is_some_and(|key| key != DEFAULT_SOURCE_KEY)
+                {
+                    return 0;
+                }
+                if let Some(graph) = graph.upgrade() {
+                    let name = value.and_then(metadata_node_name).unwrap_or_default();
+                    graph.borrow_mut().set_default_input(name);
+                }
+                0
+            })
+            .register();
+        self.defaults = Some((metadata, listener));
+    }
+
+    fn set_default_input(&mut self, name: String) {
+        let mut default = self.setup.default_input.lock().unwrap();
+        if *default == name {
+            return;
+        }
+        if name == NODE_NAME && self.running == Some(Mode::Auto) {
+            eprintln!(
+                "\"Voice Filter\" is the default input, so the filter reads from another \
+                 source; choose the microphone in the system's sound settings"
+            );
+        }
+        *default = name;
     }
 
     /// Switches to `mode`, if it can run in it.
@@ -1048,6 +1128,18 @@ impl Graph {
     /// Switches the capture streams when the recording starts or stops, and in the manual mode
     /// links the output stream into "Voice Filter" once both have their ports.
     fn update(&mut self) {
+        let active = self
+            .capture
+            .and_then(|capture| self.links.values().find(|&&(_, to)| to == capture))
+            .and_then(|(from, _)| self.sources.get(from))
+            .cloned()
+            .unwrap_or_default();
+        {
+            let mut input = self.setup.active_input.lock().unwrap();
+            if *input != active {
+                *input = active;
+            }
+        }
         let recording = self
             .recorded()
             .is_some_and(|source| self.links.values().any(|&(from, _)| from == source));
@@ -1099,6 +1191,22 @@ impl Graph {
             // replaces one to a node that's gone
             Ok(link) => self.link = Some((link, (output, source))),
             Err(err) => eprintln!("Could not link the filter to \"Voice Filter\": {err}"),
+        }
+    }
+}
+
+/// The `node.name` in a value of the metadata `default`, a JSON object such as
+/// `{ "name": "alsa_input.usb-mic" }`; `None` if it has none.
+pub fn metadata_node_name(value: &str) -> Option<String> {
+    let start = value.find("\"name\"")? + "\"name\"".len();
+    let rest = value[start..].trim_start().strip_prefix(':')?.trim_start();
+    let mut chars = rest.strip_prefix('"')?.chars();
+    let mut name = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(name),
+            '\\' => name.push(chars.next()?),
+            c => name.push(c),
         }
     }
 }
