@@ -319,25 +319,28 @@ pub fn run(
             })
             .register()
     })?;
+    // Listen while it's wanted, its streams once "Voice Filter" is there
+    let listen_wanted = Rc::new(Cell::new(listen_on));
     let listening = Rc::new(RefCell::new(None));
     let start_listening = {
         let (core, listening) = (core.clone(), listening.clone());
         move || {
-            if listening.borrow().is_some() {
-                return;
-            }
+            // the old streams first, the new ones have their names
+            drop(listening.take());
             match Listen::start(&core, listen_volume.clone()) {
                 Ok(listen) => drop(listening.replace(Some(listen))),
                 Err(err) => eprintln!("Could not start listening: {err}"),
             }
         }
     };
-    // "Voice Filter" is another node after switching the mode, Listen's capture stream doesn't
-    // follow (it doesn't reconnect)
-    let restart_listening = {
-        let (listening, start_listening) = (listening.clone(), start_listening.clone());
+    // Listen's capture stream needs "Voice Filter" when it connects, the session manager
+    // destroys it otherwise (it never falls back to another source), and doesn't follow to
+    // another node (it doesn't reconnect): so it starts when `Graph` sees the node, at the start,
+    // after every switch of the mode and when the node was created again.
+    let listen_when_ready = {
+        let (wanted, start_listening) = (listen_wanted.clone(), start_listening.clone());
         move || {
-            if listening.take().is_some() {
+            if wanted.get() {
                 start_listening();
             }
         }
@@ -353,7 +356,7 @@ pub fn run(
             mode,
             input: input_name.unwrap_or_default().to_owned(),
             auto_available,
-            switched: Box::new(restart_listening),
+            ready: Box::new(listen_when_ready),
             active_input,
             default_input,
         },
@@ -372,15 +375,19 @@ pub fn run(
                     eprintln!("Could not take the reference from {name}: {err}");
                 }
             }
-            Control::SetListen(false) => drop(listening.take()),
-            Control::SetListen(true) => start_listening(),
+            Control::SetListen(false) => {
+                listen_wanted.set(false);
+                drop(listening.take());
+            }
+            Control::SetListen(true) => {
+                listen_wanted.set(true);
+                // otherwise once "Voice Filter" is there
+                if listening.borrow().is_none() && graph.borrow().is_ready() {
+                    start_listening();
+                }
+            }
         }
     });
-
-    // "Voice Filter" may not exist yet, Listen waits for it (it never falls back to another source)
-    if listen_on {
-        start_listening();
-    }
 
     let quit = |mainloop: &pw::main_loop::MainLoopRc| {
         let mainloop = mainloop.clone();
@@ -432,6 +439,9 @@ const LISTEN_NODE_NAME: &str = "voice-filter-listen";
 /// it and a playback stream, with a bridge between them whose only stage is the [`Volume`]. As it
 /// records from "Voice Filter" like an app, the filter runs while listening even if no app
 /// records.
+///
+/// Started once "Voice Filter" is there (`Setup::ready`): the session manager destroys the capture
+/// stream if it doesn't find its target, and Listen would stay silent.
 ///
 /// The two streams are in no group: PipeWire puts the nodes of a group (or link group) on one
 /// driver, so the output device would run under the microphone's clock. A Bluetooth headset woken
@@ -733,8 +743,9 @@ struct Setup {
     input: String,
     /// Set once the registry shows whether the session manager has smart filters.
     auto_available: Arc<AtomicBool>,
-    /// Called after the streams were set up for another mode.
-    switched: Box<dyn Fn()>,
+    /// Called once the node apps record from is there with its port: at the start, after the
+    /// streams were set up for another mode, and when it was created again.
+    ready: Box<dyn Fn()>,
     /// The `node.name` of the source the capture stream reads from, empty while it reads from
     /// none; kept up to date for the control interface.
     active_input: Arc<Mutex<String>>,
@@ -783,6 +794,8 @@ struct Graph {
     source: Option<u32>,
     /// The id of the output stream's node.
     output: Option<u32>,
+    /// The node apps record from that [`Setup::ready`] was called for.
+    ready: Option<u32>,
     /// The id of the capture stream's node, while it's connected.
     capture: Option<u32>,
     /// The `node.name` of every audio source.
@@ -836,6 +849,7 @@ impl Graph {
             creating: None,
             source: None,
             output: None,
+            ready: None,
             capture: None,
             sources: HashMap::new(),
             defaults: None,
@@ -1116,7 +1130,6 @@ impl Graph {
         if self.running == Some(mode) {
             return;
         }
-        let switched = self.running.is_some();
         self.running = Some(mode);
         if let Err(err) = self.set_up(mode) {
             eprintln!("Could not set up the streams: {err:#}");
@@ -1136,9 +1149,6 @@ impl Graph {
                 "Filtering {} for the apps that record from \"Voice Filter\"",
                 self.setup.input
             ),
-        }
-        if switched {
-            (self.setup.switched)();
         }
     }
 
@@ -1220,6 +1230,11 @@ impl Graph {
         }
     }
 
+    /// Whether the node apps record from is there with its port.
+    fn is_ready(&self) -> bool {
+        self.ready.is_some()
+    }
+
     /// Switches the capture streams when the recording starts or stops, and in the manual mode
     /// links the output stream into "Voice Filter" once both have their ports.
     fn update(&mut self) {
@@ -1236,6 +1251,18 @@ impl Graph {
             }
         }
         self.apply_target();
+        // With its port the session manager has it as a target (it configures the ports of a
+        // source itself, before anything links). Not before: it destroys a stream whose target
+        // it doesn't find, as Listen's.
+        let ready = self
+            .recorded()
+            .filter(|&node| self.ports.values().any(|&port| port == (node, false)));
+        if ready != self.ready {
+            self.ready = ready;
+            if ready.is_some() {
+                (self.setup.ready)();
+            }
+        }
         let recording = self
             .recorded()
             .is_some_and(|source| self.links.values().any(|&(from, _)| from == source));
