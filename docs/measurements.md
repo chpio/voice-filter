@@ -245,10 +245,9 @@ in the pauses 12 dB down:
 
 The pauses of the USB microphone close. The fans of the built-in one go down by the expander's
 20 dB and stay above −60 dBFS; its noise on the call lies at −32 dBFS, above the cap: as loud as
-quiet speech, a level can't tell them apart, it stays open. Listened to through Listen with
-the limit on the USB microphone (2026-11-21): the pauses close and no word ends were heard missing,
-as far as one can judge while hearing oneself with the delay. Still to do: a recording through the
-filter listened to afterwards, and the built-in microphone.
+quiet speech, a level can't tell them apart, it stays open. Listened to with the limit on
+the USB microphone (2026-11-21, through Listen and on a recording through the filter afterwards):
+the pauses close and no word ends were heard missing. The built-in microphone is still to do.
 
 ## Steady tones
 
