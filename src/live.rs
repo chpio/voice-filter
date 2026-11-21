@@ -1047,7 +1047,8 @@ impl Graph {
         if *default == name {
             return;
         }
-        if name == NODE_NAME && self.running == Some(Mode::Auto) {
+        // with a microphone chosen it reads from that one, whatever the default is
+        if name == NODE_NAME && self.running == Some(Mode::Auto) && self.setup.input.is_empty() {
             eprintln!(
                 "\"Voice Filter\" is the default input, so the filter reads from another \
                  source; choose the microphone in the system's sound settings"
