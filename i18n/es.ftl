@@ -163,7 +163,8 @@ help-param-expander-hold =
 help-param-expander-level =
     También abre cuando el sonido supera este nivel, para una voz baja de la que la supresión de
     ruido no está segura. Más bajo abre más a menudo, también con ruido; las pausas suelen estar
-    entre −55 y −65 dBFS.
+    entre −55 y −65 dBFS. Si en las pausas queda un ruido más fuerte, sube por sí solo, como máximo
+    hasta −35 dBFS.
 help-param-limiter-ceiling =
     Lo más alto que pueden llegar los picos. −1 dBFS deja margen para lo que añaden los códecs al
     comprimir el sonido para la llamada.

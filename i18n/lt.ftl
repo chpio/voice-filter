@@ -161,7 +161,8 @@ help-param-expander-hold =
 help-param-expander-level =
     Jis taip pat atsidaro, kai garsas tampa garsesnis už šį lygį, – tyliai kalbai, dėl kurios
     triukšmo slopinimas nėra tikras. Žemesnis atsidaro dažniau, ir triukšmui; pauzės paprastai būna
-    nuo −55 iki −65 dBFS.
+    nuo −55 iki −65 dBFS. Jei pauzėse lieka garsesnis triukšmas, jis pats pakyla, daugiausia iki
+    −35 dBFS.
 help-param-limiter-ceiling =
     Kiek daugiausia gali pakilti pikai. −1 dBFS palieka vietos tam, ką prideda kodekai, kai
     suspaudžia garsą skambučiui.

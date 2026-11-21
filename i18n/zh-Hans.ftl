@@ -88,7 +88,7 @@ help-param-compressor-ratio = 超过阈值后压低多少：在 3:1 时，输入
 help-param-expander-range = 把间隙压低多少。越多间隙越安静，但语音和间隙之间的切换越明显；0 dB 关闭它。
 help-param-expander-threshold = 降噪需要多确定自己听到的是语音（它的信噪比），它才会打开。越低越容易打开，噪声也会让它打开；越高只对清晰的语音打开。关闭降噪时只看电平。
 help-param-expander-hold = 最后一段语音之后保持打开多久。越长越能保留词尾和短暂停顿，越短越快让间隙安静下来。
-help-param-expander-level = 当声音比这个电平更响时它也会打开，用于降噪拿不准的小声说话。越低越容易打开，噪声也会让它打开；间隙通常在 −55 到 −65 dBFS。
+help-param-expander-level = 当声音比这个电平更响时它也会打开，用于降噪拿不准的小声说话。越低越容易打开，噪声也会让它打开；间隙通常在 −55 到 −65 dBFS。如果间隙里残留的噪声更响，它会自动随之升高，最高到 −35 dBFS。
 help-param-limiter-ceiling = 峰值最高可以到多少。−1 dBFS 为编解码器在为通话压缩声音时增加的部分留出余量。
 help-param-limiter-release = 峰值之后多快放开。越短听起来越响，但更早失真。
 

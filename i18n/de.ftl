@@ -163,7 +163,8 @@ help-param-expander-hold =
 help-param-expander-level =
     Er öffnet auch, wenn der Klang lauter als dieser Pegel wird, für leise Sprache, bei der sich die
     Rauschunterdrückung nicht sicher ist. Niedriger öffnet öfter, auch bei Rauschen; Pausen liegen
-    meist bei −55 bis −65 dBFS.
+    meist bei −55 bis −65 dBFS. Bleibt in den Pausen lauteres Rauschen übrig, steigt er von selbst
+    mit, höchstens bis −35 dBFS.
 help-param-limiter-ceiling =
     Wie hoch die Spitzen höchstens gehen dürfen. −1 dBFS lässt Raum für das, was Codecs hinzufügen,
     wenn sie den Klang für den Anruf komprimieren.

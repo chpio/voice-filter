@@ -188,6 +188,63 @@ instead of 2.7 % of a core. The noise suppression also allocates less (618–627
 times per frame, from the pool); the de-esser takes 1–3 µs more without the zeros, the other stages
 the same.
 
+## Expander: level by the noise floor
+
+The expander opened for every frame above its `level` (−50 dBFS). Where the noise suppression
+leaves noise in the pauses that's louder, it stayed open: without the zeros on the built-in
+microphone ([above](#zero-mask)), and with a limit on the noise suppression. A level high enough
+for that (−40 dBFS) would have to be set per microphone. Now the level rises to 18 dB above the
+noise floor of the expander's input (`level::NoiseFloor`, the quietest frame of the last 2 s), at
+most to −35 dBFS; pauses of exact silence leave it at `level`.
+
+Chosen on traces of six recordings (2026-11-21: three takes, each with the built-in and the USB
+microphone; the chain as it is, echo on without a reference, `trace --interval 0.01`), the
+expander simulated on the level after the compressor and the estimate, which reproduced the traced
+gain within 0.04 dB. Without the zeros, of the pause frames of the call on the built-in microphone
+14 dB above the floor left 20.7 % above −60 dBFS, 18 dB 13.1 %, 22 dB 12.2 %; a cap of −30 or
+−35 dBFS made no difference. The floor is a minimum, the noise often lies more than 10 dB above
+it (with 10 dB, 48.7 % of those frames stayed above −60 dBFS), hence the wide margin. A level
+smoothed over the frames the noise suppression takes for
+pauses did as well with 10 dB above it (13.0 %), but needs the noise suppression to run.
+
+With the stage itself, before → after: noise in pauses and their median as in the
+[method](#method), *speech quiet* the speech frames that come out below −45 dBFS (speech: more
+than 12 dB above the floor on the built-in microphone, 20 dB on the USB one). No speech frame the
+chain before kept above −30 dBFS came out below −45 dBFS on any of them.
+
+With the zeros, the default: nothing changed on the six, to the tenth of a percent (the pauses
+are exact silence in 88–98 % of their frames, the floor with them).
+
+Without the zeros (`--thresholds -100,1000,1000`):
+
+| Recording                              | noise in pauses | median, dBFS  | speech quiet  |
+| -------------------------------------- | --------------: | ------------: | ------------: |
+| fans, a minute of silence, built-in    |   74.4 → 9.3 %  | −44.9 → −64.7 | 9.6 → 18.0 %  |
+| the call (20 min), built-in            |  72.1 → 13.4 %  | −50.1 → −69.1 |  4.3 → 4.8 %  |
+| a video over the speakers, built-in    |    6.4 → 6.4 %  | −95.9 → −95.9 | 50.2 → 50.2 % |
+| fans, the USB microphone along         |    5.2 → 4.6 %  | −93.4 → −93.4 |  7.9 → 8.0 %  |
+| the call, USB microphone               |    4.9 → 3.9 %  | −85.2 → −85.2 | 22.2 → 22.3 % |
+| a video over the speakers, USB         |  18.8 → 17.3 %  | −76.9 → −77.0 | 14.4 → 14.5 % |
+
+On the built-in microphone that's what `level` at −40 dBFS did by hand (8.9 % and 18.7 % of the
+pause frames, 18.0 % and 4.8 % of the speech quiet), while the USB microphone keeps its −50 dBFS.
+
+With a limit of 12 dB on the noise suppression (`--set denoise.limit=12`), which leaves the noise
+in the pauses 12 dB down:
+
+| Recording                              | noise in pauses | median, dBFS  | speech quiet  |
+| -------------------------------------- | --------------: | ------------: | ------------: |
+| fans, a minute of silence, built-in    |  98.3 → 97.3 %  | −37.5 → −57.1 | 4.1 → 12.9 %  |
+| the call (20 min), built-in            | 100.0 → 92.1 %  | −31.9 → −31.9 |  0.6 → 1.1 %  |
+| a video over the speakers, built-in    |  34.1 → 24.8 %  | −86.9 → −86.9 | 11.1 → 11.8 % |
+| fans, the USB microphone along         |   19.2 → 5.0 %  | −73.3 → −73.6 |  7.2 → 7.5 %  |
+| the call, USB microphone               |   30.5 → 8.4 %  | −73.9 → −74.6 | 10.2 → 11.1 % |
+| a video over the speakers, USB         |  96.1 → 31.0 %  | −48.6 → −68.4 |  0.8 → 1.1 %  |
+
+The pauses of the USB microphone close. The fans of the built-in one go down by the expander's
+20 dB and stay above −60 dBFS; its noise on the call lies at −32 dBFS, above the cap: as loud as
+quiet speech, a level can't tell them apart, it stays open. Not listened to yet.
+
 ## Steady tones
 
 Whether a filter for steady tones before the noise suppression is needed: the built-in microphone
@@ -424,7 +481,8 @@ against it), all as in the concept's [Double talk](concept.md#double-talk-the-ec
 
 ## Open
 
-- The zero mask: measured again (above), still to be listened to, with the expander's `level` at
-  −40 dBFS too.
+- The zero mask: measured again (above), still to be listened to; the expander's level follows the
+  noise left in the pauses now, which did what `level` at −40 dBFS did there
+  ([above](#expander-level-by-the-noise-floor)).
 - A high-pass between 40 and 80 Hz in front, which may cost less on VoiceBank-DEMAND and still keep
   the rumble from the model.

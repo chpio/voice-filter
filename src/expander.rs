@@ -4,7 +4,7 @@ use ::anyhow::Result;
 
 use crate::denoise::{Speech, SpeechReader};
 use crate::dsp::{db_to_gain, ramp};
-use crate::level;
+use crate::level::{self, NoiseFloor};
 use crate::param::Param;
 use crate::stage::{Frame, Stage};
 use crate::{FRAME_LEN, FRAME_S, SAMPLE_RATE};
@@ -14,7 +14,8 @@ use crate::{FRAME_LEN, FRAME_S, SAMPLE_RATE};
 /// speaks and opens for speech, so it doesn't touch the voice.
 ///
 /// It opens for a level above its `level` (what's that loud is speech, or noise loud enough to be
-/// heard anyway) and for what DeepFilterNet3 hears as speech ([`Speech`], its local SNR above the
+/// heard anyway), which rises with the noise left in the pauses (see [`ABOVE_FLOOR_DB`]), and for
+/// what DeepFilterNet3 hears as speech ([`Speech`], its local SNR above the
 /// threshold), which catches quieter speech: it estimates the frame it analyzes, whose output
 /// comes [`crate::denoise::Denoise`]'s latency (30 ms) later, so the expander knows ahead and opens
 /// before a word starts. While the noise suppression doesn't run (switched off), only the level
@@ -27,6 +28,8 @@ pub struct Expander {
     /// In ms.
     hold: Param,
     level: Param,
+    /// The noise floor of its input: what's left in the pauses.
+    floor: NoiseFloor,
     /// The current gain in dB, from minus the range up to 0.
     gain_db: f32,
     /// The samples it still stays open.
@@ -46,6 +49,17 @@ pub const HOLD_MS: f32 = 200.;
 pub const LEVEL_DB: f32 = -50.;
 /// How long it takes to close over its whole range, in seconds; it opens within a frame.
 pub const RELEASE_S: f32 = 0.15;
+/// A level opens it only this far above the noise floor of its input (the quietest frame of the
+/// last 2 s, [`NoiseFloor`]), in dB: the level it opens above rises from `level` to this much
+/// above the floor, but not beyond [`MAX_LEVEL_DB`], so speech at the AGC's target always opens
+/// it. Where noise is left in the pauses louder than `level` (a noisy microphone with a limit
+/// on the noise suppression, or without its zeros), a fixed level kept it open all the time;
+/// one high enough for that microphone turned down speech on a quiet one. Pauses of exact
+/// silence leave it at `level`. The floor is the quietest frame, the noise often lies more than
+/// 10 dB above it, hence the 18 dB (measured on six recordings, see `docs/measurements.md`).
+pub const ABOVE_FLOOR_DB: f32 = 18.;
+/// The highest level the noise floor raises `level` to, in dBFS, 17 dB below the AGC's target.
+pub const MAX_LEVEL_DB: f32 = -35.;
 
 impl Expander {
     /// Goes by the level only, until [`Self::listening`] gives it what the noise suppression
@@ -63,6 +77,7 @@ impl Expander {
             ),
             hold: Param::new("hold", "Hold", "ms", (50., 1000., 10.), HOLD_MS),
             level: Param::new("level", "Opens Above", "dBFS", (-70., -20., 1.), LEVEL_DB),
+            floor: NoiseFloor::new(),
             gain_db: 0.,
             holding: 0,
         }
@@ -85,8 +100,14 @@ impl Expander {
     fn speaks(&mut self, frame: &Frame) -> bool {
         // read every frame, so it sees whether the noise suppression still runs
         let snr_db = self.speech.read();
-        level::frame_db(frame) > self.level.get()
-            || snr_db.is_some_and(|snr_db| snr_db > self.threshold.get())
+        let frame_db = level::frame_db(frame);
+        let floor_db = self.floor.push(frame_db);
+        // above the noise left in the pauses, if that's louder than `level` allows for
+        let level_db = self
+            .level
+            .get()
+            .max((floor_db + ABOVE_FLOOR_DB).min(MAX_LEVEL_DB));
+        frame_db > level_db || snr_db.is_some_and(|snr_db| snr_db > self.threshold.get())
     }
 }
 

@@ -2,7 +2,7 @@ use ::std::f32::consts::PI;
 use ::std::sync::Arc;
 
 use ::voice_filter::denoise::Speech;
-use ::voice_filter::expander::{Expander, HOLD_MS, RANGE_DB, RELEASE_S};
+use ::voice_filter::expander::{Expander, HOLD_MS, MAX_LEVEL_DB, RANGE_DB, RELEASE_S};
 use ::voice_filter::stage::{Frame, Stage};
 use ::voice_filter::{FRAME_LEN, SAMPLE_RATE};
 
@@ -98,13 +98,66 @@ fn follows_its_parameters() {
     assert_eq!(expander.gain_db(), -30.);
 }
 
+/// Speech as its level goes: syllables of 300 ms at `speech_db` with 100 ms at `pause_db` between
+/// them, a pause first.
+fn syllables(index: usize, speech_db: f32, pause_db: f32) -> Frame {
+    tone(index, if index % 40 < 10 { pause_db } else { speech_db })
+}
+
 #[test]
 fn opens_for_a_level_above_its_threshold_whatever_the_noise_suppression_hears() {
     // quiet speech the noise suppression doesn't hear as such stays open while it's above -50
     let (mut expander, speech) = listening();
+    for i in 0..500 {
+        speech.update(-12.);
+        let input = syllables(i, -40., -80.);
+        let mut output = input;
+        expander.process(&mut output).unwrap();
+        // it opens within the first frame of the first syllable
+        if i > 10 {
+            assert_eq!(output, input, "frame {i}");
+        }
+    }
+}
+
+#[test]
+fn stays_closed_for_steady_noise_above_its_level() {
+    // what a noisy microphone leaves in the pauses, above -50: a fixed level kept it open
+    let (mut expander, speech) = listening();
     for i in 0..HOLD_FRAMES + RELEASE_FRAMES + 2 {
         speech.update(-12.);
-        let input = tone(i, -40.);
+        expander.process(&mut tone(i, -42.)).unwrap();
+    }
+    assert_eq!(expander.gain_db(), -RANGE_DB);
+    // noise that varies by 10 dB doesn't open it either
+    for i in 0..300 {
+        speech.update(-12.);
+        let level_db = -47. + 10. * ((i * 7) % 11) as f32 / 10.;
+        expander.process(&mut tone(i, level_db)).unwrap();
+        assert_eq!(expander.gain_db(), -RANGE_DB, "frame {i}");
+    }
+}
+
+#[test]
+fn opens_for_speech_over_the_noise() {
+    // the same noise with speech at the AGC's target on it, which the noise suppression misses
+    let (mut expander, speech) = listening();
+    for i in 0..500 {
+        speech.update(-12.);
+        expander.process(&mut syllables(i, -18., -42.)).unwrap();
+        if i >= 10 {
+            assert_eq!(expander.gain_db(), 0., "frame {i}");
+        }
+    }
+}
+
+#[test]
+fn the_noise_raises_its_level_only_so_far() {
+    // steady and as loud as quiet speech: heard anyway, and speech has to open it
+    let (mut expander, speech) = listening();
+    for i in 0..300 {
+        speech.update(-12.);
+        let input = tone(i, MAX_LEVEL_DB + 3.);
         let mut output = input;
         expander.process(&mut output).unwrap();
         assert_eq!(output, input, "frame {i}");

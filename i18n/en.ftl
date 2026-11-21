@@ -161,7 +161,8 @@ help-param-expander-hold =
     shorter quiets the pauses sooner.
 help-param-expander-level =
     It also opens when the sound gets louder than this, for quiet speech the noise suppression isn't
-    sure about. Lower opens for more, noise too; pauses usually lie at −55 to −65 dBFS.
+    sure about. Lower opens for more, noise too; pauses usually lie at −55 to −65 dBFS. With louder
+    noise left in the pauses it rises by itself, to at most −35 dBFS.
 help-param-limiter-ceiling =
     The highest the peaks may go. −1 dBFS leaves room for what codecs add when they compress the
     sound for the call.

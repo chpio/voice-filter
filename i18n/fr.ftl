@@ -164,7 +164,8 @@ help-param-expander-hold =
 help-param-expander-level =
     Il s’ouvre aussi quand le son dépasse ce niveau, pour une parole faible dont la suppression du
     bruit n’est pas sûre. Plus bas s’ouvre plus souvent, aussi pour du bruit ; les pauses se situent
-    en général entre −55 et −65 dBFS.
+    en général entre −55 et −65 dBFS. S’il reste un bruit plus fort dans les pauses, il monte de
+    lui-même, jusqu’à −35 dBFS au plus.
 help-param-limiter-ceiling =
     Le plus haut que peuvent monter les crêtes. −1 dBFS laisse de la place à ce qu’ajoutent les
     codecs quand ils compressent le son pour l’appel.
