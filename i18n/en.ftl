@@ -177,6 +177,22 @@ help-filter =
     would take (about 37 ms, 30 ms of it the noise suppression; the Latency row below shows all of
     it). Dropping the delay would cut a piece out of the sound when switching off and insert a gap
     when switching on, heard as a click or a stutter in a call; this way switching just crossfades.
+help-mode-auto =
+    Every app that records from the default input gets the filtered microphone, with nothing to set
+    up in the app. The filter reads from the microphone chosen in the system's sound settings and
+    follows when you choose another one or plug one in. An app that records from a particular
+    microphone gets that one unfiltered.
+
+    WirePlumber (0.5 or later) links the filter in between, as a smart filter. While the filter
+    isn't running, apps get the microphone directly. Switching the mode drops the sound for a
+    moment.
+help-mode-manual =
+    Only apps that record from “Voice Filter” get the filtered microphone: choose it as the
+    microphone in the app, or as the default input in the system's sound settings. The filter reads
+    from the microphone chosen below.
+
+    “Voice Filter” stays while the filter is stopped, apps record silence until it runs again.
+    Switching the mode drops the sound for a moment.
 help-listen-volume =
     How loud you hear yourself. Only for listening: apps get the voice at the level the filter
     brings it to.
@@ -232,8 +248,16 @@ copy = Copy
 copied = Copied
 group-input = Input
 group-input-description = The filter reads from this microphone, apps read from “Voice Filter”.
+group-input-description-auto =
+    The filter reads from the default input of the system's sound settings, every app that records
+    from it gets the filtered microphone.
 filter = Filter
 filter-subtitle = Off, apps get the microphone as it is
+mode-auto = All Apps
+mode-auto-subtitle = Follows the microphone chosen in the system's sound settings
+mode-auto-unavailable = Needs WirePlumber 0.5 or later
+mode-manual = Chosen Apps
+mode-manual-subtitle = Only apps that record from “Voice Filter”, from the microphone chosen here
 microphone = Microphone
 speakers = Speakers
 default-input = Default Input

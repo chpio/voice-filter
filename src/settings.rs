@@ -1,6 +1,6 @@
 //! Settings kept between runs, in `$XDG_STATE_HOME/voice-filter/` (`~/.local/state/voice-filter/`
 //! by default): the devices one file each, the stages and their parameters in `chain`, the whole
-//! filter switched off in `enabled`.
+//! filter switched off in `enabled`, the manual mode in `mode`.
 
 use ::std::fmt::Write as _;
 use ::std::fs;
@@ -28,6 +28,56 @@ const CHAIN: &str = "chain";
 const LISTEN: &str = "listen";
 const LISTEN_VOLUME: &str = "listen-volume";
 const ENABLED: &str = "enabled";
+const MODE: &str = "mode";
+
+/// Which apps get the filtered microphone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// All apps that record from the default input: the filter is a smart filter of WirePlumber
+    /// (0.5 and later), which links it between the default input and every app recording from
+    /// it, and follows the input chosen in the system's settings.
+    #[default]
+    Auto,
+    /// Only the apps that record from the virtual microphone "Voice Filter", from the microphone
+    /// chosen for the filter.
+    Manual,
+}
+
+impl Mode {
+    /// Its name on the command line, on D-Bus and in the settings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+impl ::std::str::FromStr for Mode {
+    type Err = ::anyhow::Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        match name {
+            "auto" => Ok(Self::Auto),
+            "manual" => Ok(Self::Manual),
+            _ => Err(::anyhow::anyhow!("{name} isn't auto or manual")),
+        }
+    }
+}
+
+/// The mode chosen last, automatic unless the manual one was chosen.
+pub fn load_mode(dir: &Path) -> Result<Mode> {
+    load(dir, MODE)?.map_or(Ok(Mode::Auto), |mode| mode.parse())
+}
+
+/// Keeps the mode for the next runs; only the manual one is written, as for the stages in
+/// `chain`.
+pub fn save_mode(dir: &Path, mode: Mode) -> Result<()> {
+    match mode {
+        Mode::Auto => remove(dir, MODE),
+        Mode::Manual => save(dir, MODE, Mode::Manual.as_str()),
+    }
+}
 
 /// Whether the whole filter was on (see [`crate::chain::Chain::enabled`]); on unless it was
 /// switched off.

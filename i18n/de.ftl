@@ -181,6 +181,21 @@ help-filter =
     unten zeigt alles). Fiele die Verzögerung weg, ginge beim Ausschalten ein Stück Ton verloren und
     beim Einschalten entstünde eine Lücke, im Anruf als Knacken oder Stocken zu hören; so wird beim
     Umschalten nur überblendet.
+help-mode-auto =
+    Jede App, die vom Standardeingang aufnimmt, bekommt das gefilterte Mikrofon, ohne Einstellung in
+    der App. Der Filter liest vom Mikrofon aus den Audio-Einstellungen des Systems und folgt, wenn
+    du ein anderes wählst oder einsteckst. Eine App, die von einem bestimmten Mikrofon aufnimmt,
+    bekommt dieses ungefiltert.
+
+    WirePlumber (ab 0.5) hängt den Filter als Smart Filter dazwischen. Solange der Filter nicht
+    läuft, bekommen Apps das Mikrofon direkt. Beim Umschalten des Modus setzt der Ton kurz aus.
+help-mode-manual =
+    Nur Apps, die von „Voice Filter“ aufnehmen, bekommen das gefilterte Mikrofon: Wähle es in der
+    App als Mikrofon oder in den Audio-Einstellungen des Systems als Standardeingang. Der Filter
+    liest vom Mikrofon, das du unten wählst.
+
+    „Voice Filter“ bleibt, während der Filter gestoppt ist, Apps nehmen Stille auf, bis er wieder
+    läuft. Beim Umschalten des Modus setzt der Ton kurz aus.
 help-listen-volume =
     Wie laut du dich selbst hörst. Nur fürs Mithören: Apps bekommen die Stimme mit dem Pegel, auf
     den der Filter sie bringt.
@@ -241,8 +256,16 @@ copy = Kopieren
 copied = Kopiert
 group-input = Eingang
 group-input-description = Der Filter liest von diesem Mikrofon, Apps lesen von „Voice Filter“.
+group-input-description-auto =
+    Der Filter liest vom Standardeingang aus den Audio-Einstellungen des Systems, jede App, die
+    davon aufnimmt, bekommt das gefilterte Mikrofon.
 filter = Filter
 filter-subtitle = Ausgeschaltet bekommen Apps das Mikrofon, wie es ist
+mode-auto = Alle Apps
+mode-auto-subtitle = Folgt dem Mikrofon aus den Audio-Einstellungen des Systems
+mode-auto-unavailable = Braucht WirePlumber 0.5 oder neuer
+mode-manual = Ausgewählte Apps
+mode-manual-subtitle = Nur Apps, die von „Voice Filter“ aufnehmen, vom hier gewählten Mikrofon
 microphone = Mikrofon
 speakers = Lautsprecher
 default-input = Standardeingang

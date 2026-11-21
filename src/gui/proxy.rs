@@ -36,6 +36,13 @@ pub trait VoiceFilter {
     fn set_listen_volume(&self, db: f64) -> ::zbus::Result<()>;
 
     #[zbus(property)]
+    fn mode(&self) -> ::zbus::Result<String>;
+    #[zbus(property)]
+    fn set_mode(&self, mode: &str) -> ::zbus::Result<()>;
+    #[zbus(property)]
+    fn auto_available(&self) -> ::zbus::Result<bool>;
+
+    #[zbus(property)]
     fn stages(&self) -> ::zbus::Result<Vec<(String, bool)>>;
     #[zbus(property)]
     fn input(&self) -> ::zbus::Result<String>;
@@ -120,6 +127,11 @@ pub struct Status {
     pub keep_listen: bool,
     /// In dB.
     pub listen_volume: f64,
+    /// `auto` or `manual`, `None` from a daemon from before the modes, which only had the manual
+    /// one.
+    pub mode: Option<String>,
+    /// Whether the automatic mode is possible.
+    pub auto_available: bool,
     pub stages: Vec<(String, bool)>,
     /// In the order of the chain.
     pub parameters: Vec<Parameter>,
@@ -150,6 +162,9 @@ struct Properties {
     listen: bool,
     keep_listen: bool,
     listen_volume: f64,
+    /// Missing on a daemon from before the modes, like `auto_available`.
+    mode: Option<String>,
+    auto_available: Option<bool>,
     stages: Vec<(String, bool)>,
     parameters: Vec<ParameterTuple>,
     input: String,
@@ -185,6 +200,8 @@ impl VoiceFilterProxy<'_> {
             listen: properties.listen,
             keep_listen: properties.keep_listen,
             listen_volume: properties.listen_volume,
+            mode: properties.mode,
+            auto_available: properties.auto_available.unwrap_or(false),
             stages: properties.stages,
             parameters: properties
                 .parameters

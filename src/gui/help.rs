@@ -17,6 +17,8 @@ pub fn param(stage: &str, name: &str) -> Option<String> {
 
 /// The ids of the texts of the other rows.
 pub const FILTER: &str = "help-filter";
+pub const MODE_AUTO: &str = "help-mode-auto";
+pub const MODE_MANUAL: &str = "help-mode-manual";
 pub const LISTEN_VOLUME: &str = "help-listen-volume";
 pub const INPUT_LEVEL: &str = "help-input-level";
 pub const OUTPUT_LEVEL: &str = "help-output-level";

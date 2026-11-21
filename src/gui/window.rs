@@ -65,6 +65,13 @@ struct Widgets {
     stages: RefCell<Vec<(String, StageRow, adw::PreferencesGroup)>>,
     /// The stages with their parameter names that `stages` were built for.
     layout: RefCell<Vec<(String, Vec<String>)>>,
+    /// The group of the switch, the modes and the microphone, its description by the mode.
+    input_group: adw::PreferencesGroup,
+    /// The modes, a row with a radio button each: all apps (`auto`) and only those that record
+    /// from "Voice Filter" (`manual`); hidden for a daemon from before them.
+    mode_auto: (adw::ActionRow, gtk::CheckButton),
+    mode_manual: (adw::ActionRow, gtk::CheckButton),
+    /// Only in the manual mode, the automatic one reads from the default input.
     input: adw::ComboRow,
     /// The `node.name` per entry of `input`, the first is the default input (empty).
     input_names: RefCell<Vec<String>>,
@@ -123,6 +130,21 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         row.add_suffix(&help::button(&tr(text)));
         row
     };
+    // a mode with its radio button, hidden until the daemon says it has modes
+    let mode_row = |title: &str, subtitle: &str, text: &str| {
+        let check = gtk::CheckButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        let row = adw::ActionRow::builder()
+            .title(title)
+            .subtitle(subtitle)
+            .visible(false)
+            .build();
+        row.add_prefix(&check);
+        row.set_activatable_widget(Some(&check));
+        row.add_suffix(&help::button(&tr(text)));
+        (row, check)
+    };
     let widgets = Rc::new(Widgets {
         stack: gtk::Stack::new(),
         missing: adw::StatusPage::builder()
@@ -141,6 +163,16 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
             .collect(),
         stages: RefCell::new(Vec::new()),
         layout: RefCell::new(Vec::new()),
+        input_group: adw::PreferencesGroup::builder()
+            .title(tr("group-input"))
+            .description(tr("group-input-description"))
+            .build(),
+        mode_auto: mode_row(&tr("mode-auto"), &tr("mode-auto-subtitle"), help::MODE_AUTO),
+        mode_manual: mode_row(
+            &tr("mode-manual"),
+            &tr("mode-manual-subtitle"),
+            help::MODE_MANUAL,
+        ),
         // the chosen microphone as the subtitle, over the width of the row, instead of squeezed
         // next to the title
         input: adw::ComboRow::builder()
@@ -207,16 +239,18 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     widgets
         .enabled_row
         .set_activatable_widget(Some(&widgets.enabled));
+    widgets.mode_manual.1.set_group(Some(&widgets.mode_auto.1));
     let page = adw::PreferencesPage::new();
-    page.add(&group(
-        &tr("group-input"),
-        Some(&tr("group-input-description")),
-        &[
-            widgets.enabled_row.upcast_ref(),
-            widgets.input.upcast_ref(),
-            widgets.listen.upcast_ref(),
-        ],
-    ));
+    for row in [
+        widgets.enabled_row.upcast_ref::<gtk::Widget>(),
+        widgets.mode_auto.0.upcast_ref(),
+        widgets.mode_manual.0.upcast_ref(),
+        widgets.input.upcast_ref(),
+        widgets.listen.upcast_ref(),
+    ] {
+        widgets.input_group.add(row);
+    }
+    page.add(&widgets.input_group);
     page.add(&group(
         &tr("group-levels"),
         None,
@@ -435,8 +469,59 @@ fn connect_controls(widgets: &Rc<Widgets>) {
             proxy.set_keep_listen(keep).await
         });
     });
+    for (mode, check) in [
+        ("auto", &widgets.mode_auto.1),
+        ("manual", &widgets.mode_manual.1),
+    ] {
+        let weak = Rc::downgrade(widgets);
+        // the other one's goes off, it sends nothing
+        check.connect_active_notify(move |check| {
+            if !check.is_active() {
+                return;
+            }
+            let Some(proxy) = sendable(&weak) else {
+                return;
+            };
+            send(format!("switch to the mode {mode}"), async move {
+                proxy.set_mode(mode).await
+            });
+        });
+    }
     connect_device(widgets, Device::Input);
     connect_device(widgets, Device::Output);
+}
+
+/// The mode, with the automatic one greyed out if the session manager can't run it; the
+/// microphone to choose only in the manual one.
+fn show_mode(widgets: &Widgets, status: &Status) {
+    let (auto_row, auto_check) = &widgets.mode_auto;
+    let (manual_row, manual_check) = &widgets.mode_manual;
+    let Some(mode) = &status.mode else {
+        auto_row.set_visible(false);
+        manual_row.set_visible(false);
+        widgets.input.set_visible(true);
+        return;
+    };
+    // the daemon runs the manual one without smart filters, whichever is chosen
+    let auto = mode == "auto" && status.auto_available;
+    auto_row.set_visible(true);
+    manual_row.set_visible(true);
+    auto_row.set_sensitive(status.auto_available);
+    auto_row.set_subtitle(&tr(if status.auto_available {
+        "mode-auto-subtitle"
+    } else {
+        "mode-auto-unavailable"
+    }));
+    let check = if auto { auto_check } else { manual_check };
+    if !check.is_active() {
+        check.set_active(true);
+    }
+    widgets.input.set_visible(!auto);
+    widgets.input_group.set_description(Some(&tr(if auto {
+        "group-input-description-auto"
+    } else {
+        "group-input-description"
+    })));
 }
 
 /// The microphone or the output device.
@@ -976,6 +1061,7 @@ fn show(widgets: &Widgets, status: &Status) {
             slider.show(param.value);
         }
     }
+    show_mode(widgets, status);
     show_devices(widgets, Device::Input, status);
     show_devices(widgets, Device::Output, status);
     show_echo(widgets, status);

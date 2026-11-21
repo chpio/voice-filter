@@ -2,7 +2,7 @@ use ::std::sync::Arc;
 use ::std::sync::atomic::{AtomicBool, Ordering};
 
 use ::voice_filter::param::Param;
-use ::voice_filter::settings;
+use ::voice_filter::settings::{self, Mode};
 
 type Switches = Vec<(&'static str, Arc<AtomicBool>)>;
 type Params = Vec<(&'static str, Param)>;
@@ -19,6 +19,30 @@ fn keeps_the_input() {
         settings::load_input(&dir).unwrap().as_deref(),
         Some("alsa_input.usb-mic")
     );
+}
+
+#[test]
+fn keeps_the_manual_mode() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let path = dir.path().join("mode");
+    assert_eq!(settings::load_mode(dir.path()).unwrap(), Mode::Auto);
+    settings::save_mode(dir.path(), Mode::Manual).unwrap();
+    assert_eq!(::std::fs::read_to_string(&path).unwrap(), "manual\n");
+    assert_eq!(settings::load_mode(dir.path()).unwrap(), Mode::Manual);
+    // automatic is the default, nothing to keep
+    settings::save_mode(dir.path(), Mode::Auto).unwrap();
+    assert!(!path.exists());
+    assert_eq!(settings::load_mode(dir.path()).unwrap(), Mode::Auto);
+    ::std::fs::write(&path, "sometimes\n").unwrap();
+    assert!(settings::load_mode(dir.path()).is_err());
+}
+
+#[test]
+fn names_the_modes() {
+    for mode in [Mode::Auto, Mode::Manual] {
+        assert_eq!(mode.as_str().parse::<Mode>().unwrap(), mode);
+    }
+    assert!("Auto".parse::<Mode>().is_err());
 }
 
 #[test]

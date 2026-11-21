@@ -6,6 +6,7 @@ use ::clap::{Parser, Subcommand};
 use ::voice_filter::denoise;
 use ::voice_filter::param::Param;
 use ::voice_filter::rt_alloc::RtAlloc;
+use ::voice_filter::settings::Mode;
 use ::voice_filter::{chain, live, offline, settings};
 
 /// What the chain allocates in the live mode comes from a pool reserved up front, see
@@ -39,8 +40,13 @@ enum Command {
     /// Provides the virtual microphone "Voice Filter": the microphone through the chain. Runs
     /// until Ctrl+C.
     Run {
-        /// The microphone, a name from `voice-filter inputs`; kept for the next runs. Without
-        /// one so far, the default input.
+        /// Which apps get the filter: `auto` all that record from the default input (a smart
+        /// filter, needs WirePlumber 0.5 or later), `manual` only those that record from "Voice
+        /// Filter"; kept for the next runs. Without one so far, `auto`.
+        #[arg(long)]
+        mode: Option<Mode>,
+        /// The microphone of the manual mode, a name from `voice-filter inputs`; kept for the
+        /// next runs. Without one so far, the default input.
         #[arg(long)]
         input: Option<String>,
         /// The output device (speakers) whose echo gets removed, a name from `voice-filter
@@ -130,10 +136,23 @@ fn main() -> Result<ExitCode> {
     let settings_dir = settings_dir.as_deref();
     match args.command {
         Command::Run {
+            mode,
             input,
             output,
             verbose,
         } => {
+            let mode = match (mode, settings_dir) {
+                (Some(mode), Some(dir)) => {
+                    settings::save_mode(dir, mode)?;
+                    mode
+                }
+                (Some(mode), None) => mode,
+                (None, Some(dir)) => settings::load_mode(dir).unwrap_or_else(|err| {
+                    eprintln!("Skipped the saved mode: {err:#}");
+                    Mode::default()
+                }),
+                (None, None) => Mode::default(),
+            };
             let input = device(
                 input,
                 settings_dir,
@@ -146,10 +165,6 @@ fn main() -> Result<ExitCode> {
                 settings::load_output,
                 settings::save_output,
             )?;
-            match &input {
-                Some(input) => eprintln!("Reading from {input}"),
-                None => eprintln!("Reading from the default input"),
-            }
             match &output {
                 Some(output) => eprintln!("Removing the echo of {output}"),
                 None => eprintln!("Removing the echo of the default output"),
@@ -171,6 +186,7 @@ fn main() -> Result<ExitCode> {
             // maps the pool before the first frame
             ALLOCATOR.init();
             let devices = live::Devices {
+                mode,
                 input: input.as_deref(),
                 output: output.as_deref(),
             };

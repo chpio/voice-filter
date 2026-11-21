@@ -8,7 +8,7 @@ use ::voice_filter::dbus::{Control, Service};
 use ::voice_filter::frame_time::Window;
 use ::voice_filter::live::Device;
 use ::voice_filter::param::Param;
-use ::voice_filter::settings;
+use ::voice_filter::settings::{self, Mode};
 
 fn service() -> Service {
     service_with(Arc::default(), None)
@@ -45,6 +45,8 @@ fn service_with(
         stats: Arc::new(Stats::default()),
         echo: None,
         chain_latency: 1488,
+        mode: Mode::Auto,
+        auto_available: Arc::new(AtomicBool::new(true)),
         input: String::new(),
         inputs: Arc::new(Mutex::new(vec![
             device(40, "usb-mic", 2100),
@@ -157,6 +159,34 @@ fn switches_to_known_inputs_and_keeps_them() {
             Control::SetInput(String::new())
         ]
     );
+}
+
+#[test]
+fn switches_the_mode_and_keeps_it() {
+    let dir = ::tempfile::tempdir().unwrap();
+    let sent = Arc::<Mutex<Vec<Control>>>::default();
+    let mut service = service_with(sent.clone(), Some(dir.path().to_owned()));
+    assert_eq!(service.mode(), "auto");
+    assert!(service.auto_available());
+
+    service.set_mode("manual".to_owned()).unwrap();
+    assert_eq!(service.mode(), "manual");
+    assert_eq!(settings::load_mode(dir.path()).unwrap(), Mode::Manual);
+
+    // unknown modes are refused and change nothing
+    assert!(service.set_mode("all".to_owned()).is_err());
+    assert_eq!(service.mode(), "manual");
+
+    service.set_mode("auto".to_owned()).unwrap();
+    assert_eq!(settings::load_mode(dir.path()).unwrap(), Mode::Auto);
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [Control::SetMode(Mode::Manual), Control::SetMode(Mode::Auto)]
+    );
+
+    // the PipeWire loop says whether smart filters are there
+    service.auto_available.store(false, Ordering::Relaxed);
+    assert!(!service.auto_available());
 }
 
 #[test]
@@ -435,6 +465,8 @@ fn the_app_reads_the_status_over_d_bus() {
         ("agc", "target")
     );
     assert_eq!(status.parameters[1].value, -18.);
+    assert_eq!(status.mode.as_deref(), Some("auto"));
+    assert!(status.auto_available);
     assert_eq!(status.input, "");
     assert_eq!(status.inputs[0].0, "usb-mic");
     assert_eq!(status.outputs[1].0, "hdmi");

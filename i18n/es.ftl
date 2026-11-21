@@ -181,6 +181,22 @@ help-filter =
     todo). Quitar el retraso cortaría un trozo del sonido al desactivar e insertaría un hueco al
     activar, algo que en una llamada se oye como un chasquido o un corte; así el cambio es solo un
     fundido.
+help-mode-auto =
+    Toda aplicación que graba de la entrada predeterminada recibe el micrófono filtrado, sin
+    configurar nada en ella. El filtro lee del micrófono elegido en la configuración de sonido del
+    sistema y lo sigue cuando eliges otro o conectas uno. Una aplicación que graba de un micrófono
+    concreto lo recibe sin filtrar.
+
+    WirePlumber (0.5 o posterior) intercala el filtro como filtro inteligente. Mientras el filtro no
+    funciona, las aplicaciones reciben el micrófono directamente. Al cambiar el modo, el sonido se
+    corta un momento.
+help-mode-manual =
+    Solo las aplicaciones que graban de «Voice Filter» reciben el micrófono filtrado: elígelo como
+    micrófono en la aplicación, o como entrada predeterminada en la configuración de sonido del
+    sistema. El filtro lee del micrófono que elijas abajo.
+
+    «Voice Filter» se queda mientras el filtro está detenido, las aplicaciones graban silencio hasta
+    que vuelve a funcionar. Al cambiar el modo, el sonido se corta un momento.
 help-listen-volume =
     Con qué volumen te oyes a ti mismo. Solo para la escucha: las aplicaciones reciben la voz al
     nivel al que la lleva el filtro.
@@ -240,8 +256,17 @@ copy = Copiar
 copied = Copiado
 group-input = Entrada
 group-input-description = El filtro lee de este micrófono, las aplicaciones leen de «Voice Filter».
+group-input-description-auto =
+    El filtro lee de la entrada predeterminada de la configuración de sonido del sistema, toda
+    aplicación que graba de ella recibe el micrófono filtrado.
 filter = Filtro
 filter-subtitle = Desactivado, las aplicaciones reciben el micrófono tal cual
+mode-auto = Todas las aplicaciones
+mode-auto-subtitle = Sigue el micrófono elegido en la configuración de sonido del sistema
+mode-auto-unavailable = Necesita WirePlumber 0.5 o posterior
+mode-manual = Aplicaciones elegidas
+mode-manual-subtitle =
+    Solo las aplicaciones que graban de «Voice Filter», del micrófono elegido aquí
 microphone = Micrófono
 speakers = Altavoces
 default-input = Entrada predeterminada

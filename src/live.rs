@@ -1,7 +1,9 @@
-//! The live filter: a capture stream from the default microphone and a playback stream into the
-//! virtual microphone "Voice Filter", with the chain between them (see [`crate::bridge`]), and a
-//! capture stream from the monitor of an output device as the reference of the echo canceller.
-//! "Voice Filter" is a node of PipeWire's own that outlives the process (see `Graph`).
+//! The live filter: a capture stream from the microphone and an output stream, with the chain
+//! between them (see [`crate::bridge`]), and a capture stream from the monitor of an output device
+//! as the reference of the echo canceller. In the automatic [`Mode`] the output stream is the
+//! source "Voice Filter" itself, a smart filter WirePlumber links between the default input and
+//! the apps that record from it; in the manual one it plays into "Voice Filter", a node of
+//! PipeWire's own that outlives the process (see `Graph`).
 
 use ::std::cell::{Cell, RefCell};
 use ::std::collections::HashMap;
@@ -29,29 +31,37 @@ use crate::echo::Reference;
 use crate::frame_time::{WINDOW_SECONDS, Window};
 use crate::param::Param;
 use crate::rt_alloc;
-use crate::settings;
+use crate::settings::{self, Mode};
 use crate::tray::{self, Toggle, Tray};
 use crate::volume::{self, Volume};
 use crate::{FRAME_LEN, SAMPLE_RATE, samples_ms};
 
-/// The virtual microphone apps record from.
+/// The virtual microphone apps record from: the null sink of the manual mode, or the output stream
+/// itself in the automatic one.
 const NODE_NAME: &str = "voice-filter";
-/// The stream that plays the filtered microphone into it.
+/// The output stream in the manual mode, which plays the filtered microphone into the null sink.
 const OUTPUT_NODE_NAME: &str = "voice-filter-output";
+/// The metadata of WirePlumber's smart filters, there from version 0.5 on.
+const FILTERS_METADATA: &str = "filters";
 const CAPTURE_NODE_NAME: &str = "voice-filter-capture";
 const REFERENCE_NODE_NAME: &str = "voice-filter-reference";
 /// The capture stream, the output stream and the virtual microphone are in this group, so they
 /// run in the same cycle of the microphone's driver (rather than the virtual microphone's timer),
 /// and in this link group, so the session manager never links the capture stream to the virtual
-/// microphone. (PipeWire schedules both, group and link group, on one driver.)
+/// microphone. (PipeWire schedules both, group and link group, on one driver.) In the automatic
+/// mode the link group makes the capture stream the input of the smart filter, and it's the
+/// filter's name.
 const GROUP: &str = "voice-filter";
 /// The largest quantum the callbacks are prepared for without allocating.
 const MAX_QUANTUM: usize = 8192;
 const SAMPLE_SIZE: usize = size_of::<f32>();
 
-/// The devices to read from and to take the reference from.
+/// The devices to read from and to take the reference from, and which apps get the filter.
 pub struct Devices<'a> {
-    /// The `node.name` of the microphone, without it the session manager links the default input.
+    /// The mode chosen; without smart filters in the session manager it's the manual one.
+    pub mode: Mode,
+    /// The `node.name` of the microphone in the manual mode, without it the session manager links
+    /// the default input.
     pub input: Option<&'a str>,
     /// The `node.name` of the output device whose monitor is the reference of the echo canceller,
     /// without it the default output.
@@ -127,9 +137,11 @@ pub fn run(
     let inputs = Arc::new(Mutex::new(Vec::new()));
     let outputs = Arc::new(Mutex::new(Vec::new()));
     let Devices {
-        input,
+        mode,
+        input: input_name,
         output: output_device,
     } = devices;
+    let auto_available = Arc::new(AtomicBool::new(false));
     let (commands, command_receiver) = pw::channel::channel();
     let listen_volume = volume::param();
     let mut keep_listen = None;
@@ -182,7 +194,9 @@ pub fn run(
         stats: stats.clone(),
         echo: Some(reference.status()),
         chain_latency,
-        input: input.unwrap_or_default().to_owned(),
+        mode,
+        auto_available: auto_available.clone(),
+        input: input_name.unwrap_or_default().to_owned(),
         inputs: inputs.clone(),
         output: output_device.unwrap_or_default().to_owned(),
         outputs: outputs.clone(),
@@ -205,9 +219,8 @@ pub fn run(
     let _inputs_listener = watch_devices(&registry, Direction::Input, inputs);
     let _outputs_listener = watch_devices(&registry, Direction::Output, outputs);
 
-    // What the chain outputs, into the virtual microphone. The session manager links playback
-    // streams only to sinks, so `Graph` links it. Passive, so its link doesn't keep "Voice Filter"
-    // running while nothing records from it (`link.passive` on the link has no effect).
+    // What the chain outputs, the source "Voice Filter" or into it, see `output_properties`; set
+    // up by `Graph` once it knows which mode it can run in
     let output = stream(
         &core,
         OUTPUT_NODE_NAME,
@@ -217,18 +230,16 @@ pub fn run(
             (*pw::keys::MEDIA_CATEGORY, "Playback"),
             (*pw::keys::NODE_GROUP, GROUP),
             (*pw::keys::NODE_LINK_GROUP, GROUP),
-            (*pw::keys::NODE_AUTOCONNECT, "false"),
-            (*pw::keys::NODE_PASSIVE, "true"),
         ],
     )?;
     // Without a target, the session manager links the default input; if that's "Voice Filter"
     // itself, the link group rules it out and it falls back to the source with the highest
-    // priority, whichever that is.
+    // priority, whichever that is (smart filters aside). `Graph` sets the target.
     let input = stream(
         &core,
         CAPTURE_NODE_NAME,
         "Voice Filter (microphone)",
-        input,
+        None,
         &[
             (*pw::keys::MEDIA_CATEGORY, "Capture"),
             (*pw::keys::MEDIA_ROLE, "Communication"),
@@ -299,9 +310,6 @@ pub fn run(
             })
             .register()
     })?;
-    let captures = [input.stream.clone(), reference_stream.stream.clone()];
-    let _graph = Graph::watch(&core, &registry, captures)?;
-
     let listening = Rc::new(RefCell::new(None));
     let start_listening = {
         let (core, listening) = (core.clone(), listening.clone());
@@ -315,17 +323,39 @@ pub fn run(
             }
         }
     };
+    // "Voice Filter" is another node after switching the mode, Listen's capture stream doesn't
+    // follow (it doesn't reconnect)
+    let restart_listening = {
+        let (listening, start_listening) = (listening.clone(), start_listening.clone());
+        move || {
+            if listening.take().is_some() {
+                start_listening();
+            }
+        }
+    };
+    let graph = Graph::watch(
+        &core,
+        &registry,
+        Streams {
+            output: output.stream.clone(),
+            captures: [input.stream.clone(), reference_stream.stream.clone()],
+        },
+        Setup {
+            mode,
+            input: input_name.unwrap_or_default().to_owned(),
+            auto_available,
+            switched: Box::new(restart_listening),
+        },
+    )?;
+
     let _commands = command_receiver.attach(mainloop.loop_(), {
-        let input = input.stream.clone();
+        let graph = graph.graph.clone();
         let reference_stream = reference_stream.stream.clone();
         let listening = listening.clone();
         let start_listening = start_listening.clone();
         move |control| match control {
-            Control::SetInput(name) => {
-                if let Err(err) = set_target(&input, &name) {
-                    eprintln!("Could not switch to {name}: {err}");
-                }
-            }
+            Control::SetInput(name) => graph.borrow_mut().set_input(name),
+            Control::SetMode(mode) => graph.borrow_mut().set_mode(mode),
             Control::SetOutput(name) => {
                 if let Err(err) = set_target(&reference_stream, &name) {
                     eprintln!("Could not take the reference from {name}: {err}");
@@ -336,14 +366,6 @@ pub fn run(
         }
     });
 
-    // not `connect`, the session manager mustn't link it
-    let format = format_param();
-    output.stream.connect(
-        spa::utils::Direction::Output,
-        None,
-        StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-        &mut [Pod::from_bytes(&format).unwrap()],
-    )?;
     // "Voice Filter" may not exist yet, Listen waits for it (it never falls back to another source)
     if listen_on {
         start_listening();
@@ -567,17 +589,26 @@ fn write_from(stream: &pw::stream::Stream, playback: &mut Playback, pulled: &mut
     delay
 }
 
-/// Points a capture stream to the device `name`, the empty name for the default one. A connected
-/// stream only follows a new target when it connects again.
-fn set_target(input: &StreamRc, name: &str) -> Result<()> {
-    let properties = properties! { *pw::keys::TARGET_OBJECT => name };
+/// Sets `properties` of a stream. A connected stream only follows them when it connects again.
+fn update_properties(stream: &StreamRc, properties: &[(&str, &str)]) -> Result<()> {
+    let mut all = pw::properties::PropertiesBox::new();
+    for (key, value) in properties {
+        all.insert(*key, *value);
+    }
     // SAFETY: both pointers are valid during the call, which copies the properties
     let result = unsafe {
-        pw::sys::pw_stream_update_properties(input.as_raw_ptr(), &(*properties.as_raw_ptr()).dict)
+        pw::sys::pw_stream_update_properties(stream.as_raw_ptr(), &(*all.as_raw_ptr()).dict)
     };
     if result < 0 {
         bail!("pw_stream_update_properties failed with {result}");
     }
+    Ok(())
+}
+
+/// Points a capture stream to the device `name`, the empty name for the default one, and connects
+/// it again if it's connected, so it follows.
+fn set_target(input: &StreamRc, name: &str) -> Result<()> {
+    update_properties(input, &[(*pw::keys::TARGET_OBJECT, name)])?;
     if !matches!(input.state(), StreamState::Unconnected) {
         input.disconnect()?;
         connect_capture(input)?;
@@ -620,36 +651,116 @@ fn stream(
     Ok(StreamRc::new(core.clone(), name, all)?)
 }
 
-/// Connects a stream in [`format_param`].
+/// Connects a stream in [`format_param`], for the session manager to link.
 fn connect(stream: &StreamRc, direction: spa::utils::Direction) -> Result<()> {
+    connect_with(stream, direction, StreamFlags::AUTOCONNECT)
+}
+
+/// Connects a stream in [`format_param`] with `flags` on top of what every stream has.
+fn connect_with(
+    stream: &StreamRc,
+    direction: spa::utils::Direction,
+    flags: StreamFlags,
+) -> Result<()> {
     let format = format_param();
     stream.connect(
         direction,
         None,
-        StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
+        flags | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
         &mut [Pod::from_bytes(&format).unwrap()],
     )?;
     Ok(())
 }
 
-/// The virtual microphone, the output stream's link into it and the capture streams, kept up to
-/// date from the registry.
+/// The properties of the output stream in `mode`.
 ///
-/// "Voice Filter" is a node of PipeWire's own (a null sink in an adapter, `object.linger`), not a
-/// stream of this process: it outlives a restart or crash of the filter, so the apps recording
-/// from it stay linked (and record silence meanwhile). It's created once the registry shows it
-/// doesn't exist, and again if it's destroyed while the filter runs. The output stream's link
-/// into it is the filter's own and goes with the process.
+/// Automatic: the stream is the source "Voice Filter", a smart filter. WirePlumber links every
+/// app that records from the default input to it instead, and the capture stream, in its link
+/// group, to the default input; without `filter.smart.target` it follows the default input, and
+/// apps that record from another microphone by name pass it by. It never picks a smart filter as
+/// the default input itself.
+///
+/// Manual: a playback stream into the null sink "Voice Filter". The session manager links playback
+/// streams only to sinks, so `Graph` links it. Passive, so its link doesn't keep "Voice Filter"
+/// running while nothing records from it (`link.passive` on the link has no effect).
+fn output_properties(mode: Mode) -> [(&'static str, &'static str); 7] {
+    match mode {
+        Mode::Auto => [
+            (*pw::keys::NODE_NAME, NODE_NAME),
+            (*pw::keys::NODE_DESCRIPTION, "Voice Filter"),
+            (*pw::keys::MEDIA_CLASS, "Audio/Source"),
+            (*pw::keys::NODE_AUTOCONNECT, "true"),
+            (*pw::keys::NODE_PASSIVE, "false"),
+            ("filter.smart", "true"),
+            ("filter.smart.name", GROUP),
+        ],
+        Mode::Manual => [
+            (*pw::keys::NODE_NAME, OUTPUT_NODE_NAME),
+            (*pw::keys::NODE_DESCRIPTION, "Voice Filter (output)"),
+            (*pw::keys::MEDIA_CLASS, "Stream/Output/Audio"),
+            (*pw::keys::NODE_AUTOCONNECT, "false"),
+            (*pw::keys::NODE_PASSIVE, "true"),
+            ("filter.smart", "false"),
+            ("filter.smart.name", GROUP),
+        ],
+    }
+}
+
+/// The streams `Graph` keeps in place.
+struct Streams {
+    /// What the chain outputs, see [`output_properties`].
+    output: StreamRc,
+    /// The microphone's and the reference's, connected while something records.
+    captures: [StreamRc; 2],
+}
+
+/// What `Graph` starts with.
+struct Setup {
+    /// The mode chosen.
+    mode: Mode,
+    /// The microphone of the manual mode, empty for the default input.
+    input: String,
+    /// Set once the registry shows whether the session manager has smart filters.
+    auto_available: Arc<AtomicBool>,
+    /// Called after the streams were set up for another mode.
+    switched: Box<dyn Fn()>,
+}
+
+/// The output stream in the mode it can run in, the virtual microphone of the manual mode, the
+/// output stream's link into it and the capture streams, kept up to date from the registry.
+///
+/// The mode is set up once the registry has shown everything: the automatic one if it's chosen
+/// and the metadata of the smart filters is there, otherwise the manual one; again when another
+/// one is chosen, or the metadata appears later (WirePlumber started after the filter). It stays
+/// automatic when the metadata goes, WirePlumber restarting. Switching connects the output stream
+/// again with other properties, so "Voice Filter" is a new node, and drops the sound for a moment.
+///
+/// In the manual mode "Voice Filter" is a node of PipeWire's own (a null sink in an adapter,
+/// `object.linger`), not a stream of this process: it outlives a restart or crash of the filter,
+/// so the apps recording from it stay linked (and record silence meanwhile). It's created once
+/// the registry shows it doesn't exist, and again if it's destroyed while the filter runs; in the
+/// automatic mode it's destroyed, and its apps go to the default input, i.e. to the filter. The
+/// output stream's link into it is the filter's own and goes with the process. In the automatic
+/// mode the filter goes with the process too, and WirePlumber links the apps to the default input
+/// directly.
 ///
 /// The capture streams are connected while something records from "Voice Filter", i.e. a link
 /// from it exists, and disconnected when the last one is gone: just inactive, the microphone's
 /// would still count as recording, and GNOME would show it as in use.
 struct Graph {
     core: pw::core::CoreRc,
-    captures: [StreamRc; 2],
-    /// The proxy of "Voice Filter" while it's being created.
+    registry: pw::registry::RegistryRc,
+    streams: Streams,
+    setup: Setup,
+    /// Whether the registry has shown everything once.
+    synced: bool,
+    /// The mode the streams are set up for.
+    running: Option<Mode>,
+    /// The id of the metadata of the smart filters.
+    filters: Option<u32>,
+    /// The proxy of the null sink "Voice Filter" while it's being created.
     creating: Option<pw::node::Node>,
-    /// The id of "Voice Filter".
+    /// The id of the null sink "Voice Filter".
     source: Option<u32>,
     /// The id of the output stream's node.
     output: Option<u32>,
@@ -662,8 +773,9 @@ struct Graph {
     recording: bool,
 }
 
-/// The listeners that keep a [`Graph`] up to date while they live.
+/// The listeners that keep a [`Graph`] up to date while they live, and the graph.
 struct GraphListeners {
+    graph: Rc<RefCell<Graph>>,
     _registry: pw::registry::Listener,
     _core: pw::core::Listener,
 }
@@ -672,11 +784,17 @@ impl Graph {
     fn watch(
         core: &pw::core::CoreRc,
         registry: &pw::registry::RegistryRc,
-        captures: [StreamRc; 2],
+        streams: Streams,
+        setup: Setup,
     ) -> Result<GraphListeners> {
         let graph = Rc::new(RefCell::new(Self {
             core: core.clone(),
-            captures,
+            registry: registry.clone(),
+            streams,
+            setup,
+            synced: false,
+            running: None,
+            filters: None,
             creating: None,
             source: None,
             output: None,
@@ -694,14 +812,20 @@ impl Graph {
                     let id = |key| props.get(key).and_then(|id| id.parse::<u32>().ok());
                     let mut graph = graph.borrow_mut();
                     match global.type_ {
-                        ObjectType::Node => match props.get(*pw::keys::NODE_NAME) {
-                            Some(NODE_NAME) => {
-                                graph.source = Some(global.id);
-                                graph.creating = None;
+                        ObjectType::Node => {
+                            let class = props.get(*pw::keys::MEDIA_CLASS);
+                            match props.get(*pw::keys::NODE_NAME) {
+                                // the null sink, not the output stream of the automatic mode
+                                Some(NODE_NAME) if class == Some("Audio/Source/Virtual") => {
+                                    graph.source = Some(global.id);
+                                    graph.creating = None;
+                                }
+                                Some(NODE_NAME | OUTPUT_NODE_NAME) => {
+                                    graph.output = Some(global.id);
+                                }
+                                _ => return,
                             }
-                            Some(OUTPUT_NODE_NAME) => graph.output = Some(global.id),
-                            _ => return,
-                        },
+                        }
                         ObjectType::Port => {
                             let Some(node) = id(*pw::keys::NODE_ID) else {
                                 return;
@@ -718,6 +842,13 @@ impl Graph {
                             };
                             graph.links.insert(global.id, (from, to));
                         }
+                        ObjectType::Metadata => {
+                            if props.get("metadata.name") != Some(FILTERS_METADATA) {
+                                return;
+                            }
+                            graph.filters = Some(global.id);
+                            graph.apply_mode();
+                        }
                         _ => return,
                     }
                     graph.update();
@@ -732,13 +863,20 @@ impl Graph {
         let pending = core.sync(0)?;
         let core_listener = core
             .add_listener_local()
-            .done(move |id, seq| {
-                if id == pw::core::PW_ID_CORE && seq == pending {
-                    graph.borrow_mut().create_source();
+            .done({
+                let graph = graph.clone();
+                move |id, seq| {
+                    if id == pw::core::PW_ID_CORE && seq == pending {
+                        let mut graph = graph.borrow_mut();
+                        graph.synced = true;
+                        graph.apply_mode();
+                        graph.update();
+                    }
                 }
             })
             .register();
         Ok(GraphListeners {
+            graph,
             _registry: registry_listener,
             _core: core_listener,
         })
@@ -759,14 +897,118 @@ impl Graph {
         if Some(id) == self.output {
             self.output = None;
         }
+        if Some(id) == self.filters {
+            self.filters = None;
+            self.apply_mode();
+        }
         if Some(id) == self.source {
             self.source = None;
-            self.create_source();
+            if self.running == Some(Mode::Manual) {
+                self.create_source();
+            }
         }
         self.update();
     }
 
-    /// Creates "Voice Filter" unless it exists or is being created.
+    /// Switches to `mode`, if it can run in it.
+    fn set_mode(&mut self, mode: Mode) {
+        self.setup.mode = mode;
+        self.apply_mode();
+        self.update();
+    }
+
+    /// Reads from the microphone `name` in the manual mode, the empty name for the default input.
+    fn set_input(&mut self, name: String) {
+        if self.running == Some(Mode::Manual)
+            && let Err(err) = set_target(&self.streams.captures[0], &name)
+        {
+            eprintln!("Could not switch to {name}: {err}");
+        }
+        self.setup.input = name;
+    }
+
+    /// Sets the streams up for the mode chosen, or the manual one if the automatic one isn't
+    /// possible, unless they are.
+    fn apply_mode(&mut self) {
+        if !self.synced {
+            return;
+        }
+        let available = self.filters.is_some();
+        self.setup
+            .auto_available
+            .store(available, Ordering::Relaxed);
+        let mode = match (self.setup.mode, available, self.running) {
+            (Mode::Manual, ..) => Mode::Manual,
+            // WirePlumber restarts, nothing links meanwhile anyway
+            (Mode::Auto, true, _) | (Mode::Auto, false, Some(Mode::Auto)) => Mode::Auto,
+            (Mode::Auto, false, _) => {
+                if self.running.is_none() {
+                    eprintln!(
+                        "The session manager has no smart filters (WirePlumber 0.5 or later), \
+                         filtering only for the apps that record from \"Voice Filter\""
+                    );
+                }
+                Mode::Manual
+            }
+        };
+        if self.running == Some(mode) {
+            return;
+        }
+        let switched = self.running.is_some();
+        self.running = Some(mode);
+        if let Err(err) = self.set_up(mode) {
+            eprintln!("Could not set up the streams: {err:#}");
+        }
+        match mode {
+            Mode::Auto => eprintln!("Filtering the default input for all apps"),
+            Mode::Manual if self.setup.input.is_empty() => eprintln!(
+                "Filtering the default input for the apps that record from \"Voice Filter\""
+            ),
+            Mode::Manual => eprintln!(
+                "Filtering {} for the apps that record from \"Voice Filter\"",
+                self.setup.input
+            ),
+        }
+        if switched {
+            (self.setup.switched)();
+        }
+    }
+
+    /// Connects the output stream for `mode`, points the capture stream to its microphone and
+    /// creates or destroys the null sink.
+    fn set_up(&mut self, mode: Mode) -> Result<()> {
+        let Streams { output, captures } = &self.streams;
+        let output = output.clone();
+        // connected again when something records from the new "Voice Filter"
+        for stream in captures.iter().chain([&output]) {
+            if !matches!(stream.state(), StreamState::Unconnected) {
+                stream.disconnect()?;
+            }
+        }
+        self.recording = false;
+        let input = match mode {
+            Mode::Auto => "",
+            Mode::Manual => &self.setup.input,
+        };
+        update_properties(&captures[0], &[(*pw::keys::TARGET_OBJECT, input)])?;
+        update_properties(&output, &output_properties(mode))?;
+        match mode {
+            Mode::Auto => {
+                if let Some(source) = self.source {
+                    // its apps go to the default input, i.e. to the filter
+                    let _ = self.registry.destroy_global(source);
+                }
+                connect(&output, spa::utils::Direction::Output)
+            }
+            Mode::Manual => {
+                self.create_source();
+                // not `connect`, the session manager mustn't link it
+                connect_with(&output, spa::utils::Direction::Output, StreamFlags::empty())
+            }
+        }
+    }
+
+    /// Creates the null sink "Voice Filter" unless it exists or is being created.
     fn create_source(&mut self) {
         if self.source.is_some() || self.creating.is_some() {
             return;
@@ -794,15 +1036,24 @@ impl Graph {
         }
     }
 
-    /// Links the output stream into "Voice Filter" once both have their ports, and switches the
-    /// capture streams when the recording starts or stops.
+    /// The node apps record from: the output stream in the automatic mode, the null sink in the
+    /// manual one.
+    fn recorded(&self) -> Option<u32> {
+        match self.running? {
+            Mode::Auto => self.output,
+            Mode::Manual => self.source,
+        }
+    }
+
+    /// Switches the capture streams when the recording starts or stops, and in the manual mode
+    /// links the output stream into "Voice Filter" once both have their ports.
     fn update(&mut self) {
         let recording = self
-            .source
+            .recorded()
             .is_some_and(|source| self.links.values().any(|&(from, _)| from == source));
         if recording != self.recording {
             self.recording = recording;
-            for capture in &self.captures {
+            for capture in &self.streams.captures {
                 let result = if recording {
                     connect_capture(capture)
                 } else {
@@ -812,6 +1063,9 @@ impl Graph {
                     eprintln!("Could not switch the capture streams: {err}");
                 }
             }
+        }
+        if self.running != Some(Mode::Manual) {
+            return;
         }
         let (Some(output), Some(source)) = (self.output, self.source) else {
             return;

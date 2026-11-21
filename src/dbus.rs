@@ -14,6 +14,7 @@ use crate::bridge::Stats;
 use crate::echo::EchoStatus;
 use crate::live::Device;
 use crate::param::Param;
+use crate::settings::Mode;
 use crate::{samples_ms, settings};
 
 /// The well-known name; only one process can own it, so it also keeps a second instance from
@@ -32,6 +33,8 @@ pub enum Control {
     SetOutput(String),
     /// Plays what "Voice Filter" outputs on the default output, or stops it.
     SetListen(bool),
+    /// Filters the microphone for all apps or only for those that record from "Voice Filter".
+    SetMode(Mode),
 }
 
 pub struct Service {
@@ -48,6 +51,11 @@ pub struct Service {
     pub echo: Option<Arc<EchoStatus>>,
     /// In samples.
     pub chain_latency: usize,
+    /// The mode chosen, see [`Self::mode`].
+    pub mode: Mode,
+    /// Whether the session manager has smart filters, which the automatic mode needs; set by the
+    /// PipeWire loop.
+    pub auto_available: Arc<AtomicBool>,
     /// The `node.name` of the microphone, empty for the default input.
     pub input: String,
     /// The microphones to choose from, kept up to date by the PipeWire loop.
@@ -249,8 +257,36 @@ impl Service {
         self.save_chain()
     }
 
-    /// The `node.name` of the microphone, empty for the default input. Setting it switches the
-    /// filter to that microphone and keeps it for the next runs.
+    /// Which apps get the filtered microphone: `auto` (the default) all apps that record from the
+    /// default input, the filter follows the input chosen in the system's settings; `manual` only
+    /// those that record from "Voice Filter", from the microphone of [`Self::input`]. Without
+    /// [`Self::auto_available`] the filter runs in the manual mode, whatever this says. Switching
+    /// sets up the streams again, which drops the sound for a moment. Kept for the next runs.
+    #[zbus(property)]
+    pub fn mode(&self) -> String {
+        self.mode.as_str().to_owned()
+    }
+
+    #[zbus(property)]
+    pub fn set_mode(&mut self, mode: String) -> fdo::Result<()> {
+        let mode: Mode = mode
+            .parse()
+            .map_err(|err: ::anyhow::Error| fdo::Error::InvalidArgs(err.to_string()))?;
+        (self.send)(Control::SetMode(mode)).map_err(failed)?;
+        self.mode = mode;
+        self.save(|dir| settings::save_mode(dir, mode))
+    }
+
+    /// Whether the automatic [`Self::mode`] is possible: the session manager is WirePlumber 0.5
+    /// or later, which has smart filters (it provides the metadata `filters`).
+    #[zbus(property(emits_changed_signal = "false"))]
+    pub fn auto_available(&self) -> bool {
+        self.auto_available.load(Ordering::Relaxed)
+    }
+
+    /// The `node.name` of the microphone in the manual [`Self::mode`], empty for the default
+    /// input. Setting it switches the filter to that microphone and keeps it for the next runs;
+    /// the automatic mode reads from the default input.
     #[zbus(property)]
     pub fn input(&self) -> String {
         self.input.clone()

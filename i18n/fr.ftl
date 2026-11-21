@@ -183,6 +183,22 @@ help-filter =
     bas montre le tout). Supprimer ce retard couperait un morceau du son à la désactivation et
     insérerait un blanc à l’activation, entendu comme un clic ou une coupure dans un appel ; ainsi,
     la bascule n’est qu’un fondu enchaîné.
+help-mode-auto =
+    Toute application qui enregistre depuis l’entrée par défaut reçoit le micro filtré, sans rien
+    régler dans l’application. Le filtre lit le micro choisi dans les paramètres de son du système
+    et suit quand tu en choisis un autre ou en branches un. Une application qui enregistre depuis un
+    micro précis reçoit celui-ci sans filtre.
+
+    WirePlumber (0.5 ou plus récent) insère le filtre entre les deux, comme filtre intelligent. Tant
+    que le filtre ne tourne pas, les applications reçoivent le micro directement. Changer de mode
+    coupe le son un instant.
+help-mode-manual =
+    Seules les applications qui enregistrent depuis « Voice Filter » reçoivent le micro filtré :
+    choisis-le comme micro dans l’application, ou comme entrée par défaut dans les paramètres de son
+    du système. Le filtre lit le micro choisi ci-dessous.
+
+    « Voice Filter » reste là pendant que le filtre est arrêté, les applications enregistrent du
+    silence jusqu’à ce qu’il tourne à nouveau. Changer de mode coupe le son un instant.
 help-listen-volume =
     Le volume auquel tu t’entends. Seulement pour l’écoute : les applications reçoivent la voix au
     niveau où le filtre l’amène.
@@ -244,8 +260,17 @@ copy = Copier
 copied = Copié
 group-input = Entrée
 group-input-description = Le filtre lit ce micro, les applications lisent « Voice Filter ».
+group-input-description-auto =
+    Le filtre lit l’entrée par défaut des paramètres de son du système, toute application qui
+    enregistre depuis celle-ci reçoit le micro filtré.
 filter = Filtre
 filter-subtitle = Désactivé, les applications reçoivent le micro tel quel
+mode-auto = Toutes les applications
+mode-auto-subtitle = Suit le micro choisi dans les paramètres de son du système
+mode-auto-unavailable = Nécessite WirePlumber 0.5 ou plus récent
+mode-manual = Applications choisies
+mode-manual-subtitle =
+    Seulement les applications qui enregistrent depuis « Voice Filter », depuis le micro choisi ici
 microphone = Micro
 speakers = Haut-parleurs
 default-input = Entrée par défaut
