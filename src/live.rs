@@ -781,7 +781,7 @@ struct Graph {
     setup: Setup,
     /// Whether the registry has shown everything once.
     synced: bool,
-    /// The mode the streams are set up for.
+    /// The mode the streams are set up for, none before the first time and after it failed.
     running: Option<Mode>,
     /// The id of the metadata of the smart filters, and a proxy to write the target into it.
     filters: Option<u32>,
@@ -1135,10 +1135,14 @@ impl Graph {
         if self.running == Some(mode) {
             return;
         }
-        self.running = Some(mode);
         if let Err(err) = self.set_up(mode) {
+            // in no mode then, so the next change of the mode chosen (also to the same one) or of
+            // the session manager's smart filters tries again
             eprintln!("Could not set up the streams: {err:#}");
+            self.running = None;
+            return;
         }
+        self.running = Some(mode);
         match mode {
             Mode::Auto if self.setup.input.is_empty() => {
                 eprintln!("Filtering the default input for all apps that record from it")
