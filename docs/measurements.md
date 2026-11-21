@@ -5,7 +5,8 @@ were measured, so they can be repeated. The decisions themselves are in the [con
 
 **Contents:** [Method](#method) · [Skipping frames](#skipping-frames-by-the-estimated-snr) ·
 [Low-latency variant](#low-latency-variant) · [High-pass and input level](#high-pass-and-input-level)
-· [Zero mask](#zero-mask) · [Steady tones](#steady-tones) · [Quantum](#quantum) ·
+· [Zero mask](#zero-mask) · [Expander level](#expander-level-by-the-noise-floor) ·
+[Steady tones](#steady-tones) · [Quantum](#quantum) ·
 [AEC3 tuning](#aec3-tuning-in-double-talk) · [Open](#open)
 
 ## Method
