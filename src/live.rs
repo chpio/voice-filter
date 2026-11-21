@@ -788,7 +788,7 @@ struct Graph {
     /// The `node.name` of every audio source.
     sources: HashMap<u32, String>,
     /// The metadata `default` with the listener that reads the default input from it.
-    defaults: Option<(pw::metadata::Metadata, pw::metadata::MetadataListener)>,
+    defaults: Option<ListenedMetadata>,
     /// The node of every port and whether it's an input.
     ports: HashMap<u32, (u32, bool)>,
     /// The output and input node of every link.
@@ -796,6 +796,17 @@ struct Graph {
     /// The output stream's link into "Voice Filter", with the two nodes.
     link: Option<(pw::link::Link, (u32, u32))>,
     recording: bool,
+}
+
+/// A metadata with a listener on it, which goes first: the listener doesn't keep the proxy alive,
+/// and a proxy the server has removed (the session manager restarting) is freed when it's dropped,
+/// so removed after it the listener writes into the freed memory.
+struct ListenedMetadata {
+    /// The id of its global.
+    id: u32,
+    // before the proxy, fields drop in order
+    _listener: pw::metadata::MetadataListener,
+    _metadata: pw::metadata::Metadata,
 }
 
 /// The listeners that keep a [`Graph`] up to date while they live, and the graph.
@@ -895,7 +906,7 @@ impl Graph {
                             Some(DEFAULT_METADATA) => {
                                 let registry = graph.registry.clone();
                                 match registry.bind::<pw::metadata::Metadata, _>(global) {
-                                    Ok(metadata) => graph.watch_defaults(metadata, weak),
+                                    Ok(metadata) => graph.watch_defaults(global.id, metadata, weak),
                                     Err(err) => {
                                         eprintln!("Could not read the default input: {err}")
                                     }
@@ -956,6 +967,13 @@ impl Graph {
             self.capture = None;
         }
         self.sources.remove(&id);
+        if self
+            .defaults
+            .as_ref()
+            .is_some_and(|defaults| defaults.id == id)
+        {
+            self.defaults = None;
+        }
         if Some(id) == self.filters {
             self.filters = None;
             self.filters_metadata = None;
@@ -972,7 +990,12 @@ impl Graph {
     }
 
     /// Keeps [`Setup::default_input`] up to date from the metadata `default`.
-    fn watch_defaults(&mut self, metadata: pw::metadata::Metadata, graph: Weak<RefCell<Self>>) {
+    fn watch_defaults(
+        &mut self,
+        id: u32,
+        metadata: pw::metadata::Metadata,
+        graph: Weak<RefCell<Self>>,
+    ) {
         let listener = metadata
             .add_listener_local()
             .property(move |subject, key, _, value| {
@@ -989,7 +1012,11 @@ impl Graph {
                 0
             })
             .register();
-        self.defaults = Some((metadata, listener));
+        self.defaults = Some(ListenedMetadata {
+            id,
+            _listener: listener,
+            _metadata: metadata,
+        });
     }
 
     fn set_default_input(&mut self, name: String) {
