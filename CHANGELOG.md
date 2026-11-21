@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.8
+
+### Features
+
+* filter the default input for all apps as a smart filter of WirePlumber
+* report the microphone the filter reads from and the default input over D-Bus
+* filter the chosen microphone for all apps that record from it
+* keep louder noise down in the pauses, the expander's opening level follows it
+
+### Fixes
+
+* don't write into freed memory when WirePlumber restarts
+* don't open the microphone for a moment when the mode is switched
+* play Listen kept from the last run, it stayed silent after the start
+* don't leave a silent "Voice Filter" next to the filter in the automatic mode
+* try again after the streams couldn't be set up for a mode
+* don't warn about "Voice Filter" as the default input while a microphone is chosen
+* name the default input in the app's microphone list, not the chosen microphone
+
+### Dependencies
+
+* update dependencies
+
 ## 0.1.7
 
 ### Dependencies
