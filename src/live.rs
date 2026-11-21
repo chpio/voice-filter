@@ -766,10 +766,10 @@ struct Setup {
 /// `object.linger`), not a stream of this process: it outlives a restart or crash of the filter,
 /// so the apps recording from it stay linked (and record silence meanwhile). It's created once
 /// the registry shows it doesn't exist, and again if it's destroyed while the filter runs; in the
-/// automatic mode it's destroyed, and its apps go to the default input, i.e. to the filter. The
-/// output stream's link into it is the filter's own and goes with the process. In the automatic
-/// mode the filter goes with the process too, and WirePlumber links the apps to the default input
-/// directly.
+/// automatic mode it's destroyed, whenever it shows up, and its apps go to the default input,
+/// i.e. to the filter. The output stream's link into it is the filter's own and goes with the
+/// process. In the automatic mode the filter goes with the process too, and WirePlumber links the
+/// apps to the default input directly.
 ///
 /// The capture streams are connected while something records from "Voice Filter", i.e. a link
 /// from it exists, and disconnected when the last one is gone: just inactive, the microphone's
@@ -881,6 +881,11 @@ impl Graph {
                                 Some(NODE_NAME) if class == Some("Audio/Source/Virtual") => {
                                     graph.source = Some(global.id);
                                     graph.creating = None;
+                                    // one still being created when the automatic mode was
+                                    // set up, or left by another run
+                                    if graph.running == Some(Mode::Auto) {
+                                        graph.destroy_source();
+                                    }
                                 }
                                 Some(NODE_NAME | OUTPUT_NODE_NAME) => {
                                     graph.output = Some(global.id);
@@ -1179,10 +1184,8 @@ impl Graph {
         update_properties(&output, &output_properties(mode))?;
         match mode {
             Mode::Auto => {
-                if let Some(source) = self.source {
-                    // its apps go to the default input, i.e. to the filter
-                    let _ = self.registry.destroy_global(source);
-                }
+                // one that's still being created goes when the registry shows it
+                self.destroy_source();
                 connect(&output, spa::utils::Direction::Output)
             }
             Mode::Manual => {
@@ -1190,6 +1193,15 @@ impl Graph {
                 // not `connect`, the session manager mustn't link it
                 connect_with(&output, spa::utils::Direction::Output, StreamFlags::empty())
             }
+        }
+    }
+
+    /// Destroys the null sink "Voice Filter" if there's one, for the automatic mode: its apps go
+    /// to the default input, i.e. to the filter, and none finds a silent "Voice Filter" next to
+    /// the filter of the same name.
+    fn destroy_source(&self) {
+        if let Some(source) = self.source {
+            let _ = self.registry.destroy_global(source);
         }
     }
 
