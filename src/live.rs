@@ -1154,6 +1154,12 @@ impl Graph {
                 stream.disconnect()?;
             }
         }
+        // Their nodes go, but stay in the registry until the server says so: forgotten here, the
+        // links of the old "Voice Filter" don't count as recording anymore, and no target is
+        // written for a node that's gone. The links stay, `remove` needs them for the proxy of
+        // the filter's own link; they belong to nodes this doesn't look at anymore.
+        self.output = None;
+        self.capture = None;
         self.recording = false;
         let input = match mode {
             Mode::Auto => "",
