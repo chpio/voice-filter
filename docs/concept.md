@@ -272,7 +272,7 @@ The biggest risk is latency: all stages together must stay live.
 
 ## Roadmap
 
-Three phases, each usable on its own. Each phase ends with a latency and listening test.
+Four phases, each usable on its own. Each phase ends with a latency and listening test.
 
 1. **Base** – done
    - [x] vendor `deep-filter-rt`
@@ -291,7 +291,7 @@ Three phases, each usable on its own. Each phase ends with a latency and listeni
    - [x] less choppy speech when talking into the playback: the sidechain in the chain while you talk (Voice Protection, 25 %, then AEC3 tuned instead and Voice Protection at 0 %; live still to listen to)
    - [ ] more recordings for it (rap, a podcast with music, a real call), listening tests
    - [ ] a test with only speech from the speakers, and over a longer call
+   - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
 4. **Usability**
    - [x] the automatic mode: a smart filter of WirePlumber in front of the default input or the microphone chosen, the manual mode (the virtual microphone) with `run --mode` and without smart filters
    - [ ] live tests of the automatic mode (see open questions)
-   - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
