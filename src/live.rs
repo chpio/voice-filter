@@ -967,6 +967,10 @@ impl Graph {
             self.capture = None;
         }
         self.sources.remove(&id);
+        // The proxies of the metadata go with their globals: the server removes what's bound to a
+        // global before it announces the removal (`pw_global_destroy`), so they've been removed
+        // by now and dropping them asks the server for nothing. Not so the link above, which
+        // outlives the global of its node.
         if self
             .defaults
             .as_ref()
