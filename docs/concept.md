@@ -2,9 +2,9 @@
 
 Started as the German document [Konzept: Live-Sprachfilter für Linux](https://claude.ai/artifact/2tXoWyCXGXVbrA8qy7i9kN) (as of 2026-10-31); this file is now the authoritative version, the original isn't updated anymore. How to use it is in the [README](../README.md), the measurements behind the defaults of the noise suppression and the order of the chain are in [measurements](measurements.md).
 
-**Status** (2026-11-21): phases 1 and 2 are done, most of phase 3. The live filter runs as a smart filter of WirePlumber in front of the default input (or, in the manual mode, as the virtual microphone "Voice Filter") with high-pass, echo cancellation, DeepFilterNet3, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus, with an icon in the tray that switches the whole filter. Missing from phase 3: listening tests of the tuned echo cancellation while talking into the playback (see [Double talk](#double-talk-the-echo-cancellation-only-decides), in the chain, measured offline) and more tests. See the [roadmap](#roadmap).
+**Status** (2026-11-21): The live filter runs as a smart filter of WirePlumber in front of the default input (or, in the manual mode, as the virtual microphone "Voice Filter") with high-pass, echo cancellation, DeepFilterNet3, EQ, de-esser, AGC, compressor, expander and limiter, controlled from a GNOME app over D-Bus, with an icon in the tray that switches the whole filter. Still open: more recordings and listening tests of the tuned echo cancellation while talking into the playback (see [Double talk](#double-talk-the-echo-cancellation-only-decides), in the chain, measured offline), and what's under [Risks and open questions](#risks-and-open-questions).
 
-**Contents:** [Goal and requirements](#goal-and-requirements) · [Signal chain](#signal-chain) · [Model choice](#model-choice) · [Echo cancellation](#echo-cancellation) · [Suppressing other voices](#suppressing-other-voices) · [Voice enhancement](#voice-enhancement) · [GPU strategy](#gpu-strategy) · [Architecture](#architecture) · [Risks and open questions](#risks-and-open-questions) · [Roadmap](#roadmap)
+**Contents:** [Goal and requirements](#goal-and-requirements) · [Signal chain](#signal-chain) · [Model choice](#model-choice) · [Echo cancellation](#echo-cancellation) · [Suppressing other voices](#suppressing-other-voices) · [Voice enhancement](#voice-enhancement) · [GPU strategy](#gpu-strategy) · [Architecture](#architecture) · [Risks and open questions](#risks-and-open-questions)
 
 ## Goal and requirements
 
@@ -141,7 +141,7 @@ AEC3 comes from [sonora](https://github.com/dignifiedquire/sonora) (BSD-3-Clause
 
 **AEC3 tuned instead** (2026-11-07, sonora 0.3.0 takes its configuration): taking you for dominant sooner and suppressing less while you are, AEC3 alone kept more of the voice than the chain with Voice Protection on all four echoes and let 2–7 dB less through besides it, the echo alone as before ([measurements](measurements.md#aec3-tuning-in-double-talk)). So the chain runs AEC3 tuned (`echo::aec3_config`) and Voice Protection is 0 % by default, kept as a parameter; not listened to yet.
 
-Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers) and listening live: whether the level of the music under the voice is heard to change with the phrases (about 11 dB between talking and pauses), and whether quiet word beginnings switch in time.
+Still to do: more recordings (rap, a podcast with a music bed, a real call over the speakers, only speech from the speakers, a longer call) and listening live: whether the level of the music under the voice is heard to change with the phrases (about 11 dB between talking and pauses), and whether quiet word beginnings switch in time.
 
 - AGC2 against our AGC, compressor and limiter, on another recording: 6 dB quieter with its defaults, the same spread between quiet and loud speech, pauses 5 dB further below the speech, peaks up to 0 dBFS. Not better enough to give up our adjustable chain; the expander would bring the quieter pauses.
 
@@ -249,7 +249,7 @@ The biggest risk is latency: all stages together must stay live.
 
 **Decided:**
 
-- Latency budget: no fixed number up front. Phase 1 measures the latency per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that (the de-esser added 1 ms to the chain since); at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms; a quantum of 480 saves nothing, what the bridge gains the microphone loses (see PipeWire details).
+- Latency budget: no fixed number up front. The latency is measured per stage, the budget follows from it and decides whether Hush and the low-latency variant of DeepFilterNet3 are needed. Measured so far: DeepFilterNet3 delays by 30 ms (10 ms STFT overlap plus 2 lookahead frames of 10 ms, `DfTract::delay`), not 20 ms as first assumed; with the FIFO (up to 10 ms) and the PipeWire buffers the target of 40 ms is out of reach with DeepFilterNet3 alone. Measured live (USB microphone, quantum 256): microphone 8.0 ms (as PipeWire reports it) + bridge 11.3 ms + chain 31.0 ms (DeepFilterNet3 and limiter) = 50.3 ms until the app, which buffers on top of that (the de-esser added 1 ms to the chain since); at most 2 ms of processing per 10 ms frame, no dropouts. The low-latency variant without lookahead would save 20 ms; a quantum of 480 saves nothing, what the bridge gains the microphone loses (see PipeWire details).
 - Echo cancellation: in our own process, not PipeWire's module (see [Echo cancellation](#echo-cancellation)).
 - Control: GNOME app over D-Bus.
 - No ML restoration: it would cost a GPU or a whole CPU core, the chain stays slim (see [Voice enhancement](#voice-enhancement)).
@@ -269,29 +269,3 @@ The biggest risk is latency: all stages together must stay live.
 - [ ] Live tests of the automatic mode: the idle state (WirePlumber links the capture stream itself now; voice-filter still connects it only while something records from "Voice Filter"), "Voice Filter" chosen as the default input in GNOME (the link group should rule it out for the capture stream, which then falls back to the best source), switching the mode while an app records, a chosen microphone as `filter.smart.target` (the apps on it, unplugging it, the default input on another one), and whether WirePlumber really links the filter (only the metadata `filters` is checked). Also what was fixed from reading the code and PipeWire's and WirePlumber's sources, without a run: a restart of WirePlumber while the filter runs (no crash, no "unknown resource" in the log, the filter linked again), Listen kept from the last run playing after the start in both modes and after a switch of the mode, and no second "Voice Filter" after starting before WirePlumber or switching the mode back and forth quickly.
 - [ ] Settings per microphone: they're global, while a good and a noisy microphone want different ones (the expander's thresholds, the level the noise suppression hears the voice at); they'd follow the input chosen.
 - [ ] Test coverage of the live mode and the app's window, which the CI's coverage leaves out as whole files (they need PipeWire or a display): either pull what can be tested out into files of their own, as with the bridge and the settings (on stable, only whole files can be left out), or measure on nightly and leave out single functions with `#[cfg_attr(coverage_nightly, coverage(off))]`. Not decided whether it's worth it.
-
-## Roadmap
-
-Four phases, each usable on its own. Each phase ends with a latency and listening test.
-
-1. **Base** – done
-   - [x] vendor `deep-filter-rt`
-   - [x] PipeWire node with DeepFilterNet3
-   - [x] offline mode for WAV tests
-   - [x] latency measurement per stage
-2. **Voice** – done
-   - [x] high-pass, EQ, de-esser, AGC, compressor, expander, limiter
-   - [x] D-Bus interface and GNOME app
-   - [x] attenuation limit of DeepFilterNet3 as a runtime setting (its default is still open)
-3. **Echo**
-   - [x] spike: AEC3 from sonora on a recording (see [Echo cancellation](#echo-cancellation))
-   - [x] AEC3 as the first stage, the speakers' monitor as the reference, the output device chosen in the app (5 ms latency; allocation-free since sonora 0.3.0)
-   - [x] live test: about 30 dB of the echo removed, the reference stream on the speakers' clock
-   - [x] offline: what the echo cancellation costs the voice in double talk, the sidechain against it, and DeepFilterNet3's encoder telling speech in the reference from music (see [Double talk](#double-talk-the-echo-cancellation-only-decides))
-   - [x] less choppy speech when talking into the playback: the sidechain in the chain while you talk (Voice Protection, 25 %, then AEC3 tuned instead and Voice Protection at 0 %; live still to listen to)
-   - [ ] more recordings for it (rap, a podcast with music, a real call), listening tests
-   - [ ] a test with only speech from the speakers, and over a longer call
-   - other voices (Hush with Full and Gate modes, or a personalized model) are postponed
-4. **Usability**
-   - [x] the automatic mode: a smart filter of WirePlumber in front of the default input or the microphone chosen, the manual mode (the virtual microphone) with `run --mode` and without smart filters
-   - [ ] live tests of the automatic mode (see open questions)

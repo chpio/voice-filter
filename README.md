@@ -24,7 +24,7 @@ apps, it shows up as a virtual microphone named _Voice Filter_ that only those a
   stage
 
 > **Status:** early, 0.1.0 is the first release. Echo cancellation, noise suppression and voice
-> enhancement work. What's still open is in the [roadmap](docs/concept.md#roadmap).
+> enhancement work. What's still open is in the [concept](docs/concept.md#risks-and-open-questions).
 
 ## How it works
 
@@ -303,7 +303,7 @@ cargo run --release --example batch -- in/ out/ [--only denoise] [--set denoise.
 How the defaults of the noise suppression were measured, and how to repeat it, is in
 [docs/measurements.md](docs/measurements.md).
 
-The design, the choice of models, the latency measurements and the roadmap are in
+The design, the choice of models, the latency measurements and what's still open are in
 [docs/concept.md](docs/concept.md). The DeepFilterNet3 inference is vendored as its own crate,
 [deep-filter-rt](crates/deep-filter-rt), because upstream's crate on crates.io is outdated.
 
