@@ -55,16 +55,9 @@ hands the result to the apps as the source _Voice Filter_:
 The values above are the defaults. The settings change them while it runs and are kept for the
 next runs.
 
-Every stage can be switched off while it runs. A stage that is off is skipped (it uses no CPU) and
-its input plays instead, delayed by the stage's latency, so the total latency never changes.
-Switching crossfades over one frame, so there are no clicks. The echo cancellation takes a few
-seconds after being switched on until it removes the echo fully again, as it missed what the
-speakers played meanwhile. The whole filter switches off the same way, all stages at once, while
-each stage keeps its own switch for when the filter is on again; kept for the next runs too.
-Switched off, it still delays the microphone by its latency (37 ms, 30 ms of it the noise
-suppression, see below): dropping the delay would cut a piece out of the sound when switching off
-and insert a gap when switching on, heard as a click or a stutter in a call, while at the same
-latency switching just crossfades.
+Every stage, and the whole filter, can be switched off while it runs: switching crossfades over
+one frame without clicks, and the latency stays the same
+([details](docs/usage.md#switching-stages-and-the-filter)).
 
 **Latency.** About 56 ms from the microphone to the app with a USB microphone: 8 ms microphone,
 11 ms for turning PipeWire's blocks into 10 ms frames (both measured live) and 37 ms for the chain.
@@ -117,46 +110,23 @@ voice-filter run --verbose
 voice-filter ui
 ```
 
-1. Start `voice-filter run`. `--output` names the speakers whose echo gets removed, kept for the
-   next runs; without one it's the default output.
-2. Choose the microphone, with `--input` or in the app, kept for the next runs. Every app that
-   records from it gets it filtered, nothing to set up in the apps:
-   - **Default Input** (the default): the filter reads from the microphone chosen in the system's
-     sound settings and follows when you choose another one there or plug one in.
-   - **A particular microphone**: the apps that record from it get it filtered, also through the
-     default input when it's chosen there; apps on another microphone get theirs unfiltered, and
-     while it's unplugged all of them do.
+1. Start `voice-filter run`. Every app that records from the default input gets it filtered,
+   nothing to set up in the apps; `--input` filters a particular microphone instead, `--output`
+   names the speakers whose echo gets removed.
+2. Open `voice-filter ui` to choose the microphone and the speakers, switch stages on and off or
+   adjust their settings. `voice-filter install-desktop` adds the app to the desktop, and
+   `voice-filter run` shows an icon in the tray that switches the filter and opens the app.
 
-   WirePlumber links the filter in between as a [smart filter][smart-filters]; while
-   `voice-filter run` isn't running, the apps get the microphone directly.
-3. Open `voice-filter ui` to choose the microphone and the speakers, switch stages on and off or
-   adjust their settings. All of it is kept for the next runs, in `~/.local/state/voice-filter/`
-   (`$XDG_STATE_HOME`); `chain` there lists what differs from the defaults, one setting per line
-   (`denoise off`, `denoise.limit 30`), delete it to go back to them.
+All of it is kept for the next runs. The microphone is only in use while an app records, and only
+then the chain runs. Without WirePlumber 0.5 or later, and with `--mode manual`, only the apps
+that record from the microphone **Voice Filter** get the filter.
 
-Without WirePlumber 0.5 or later, and with `--mode manual`, only the apps that record from **Voice
-Filter** get the filtered microphone: select it as the microphone in the app (or as the default
-input of the system). `--mode auto` goes back; switching sets up the streams again, the sound
-drops for a moment.
+More in the docs:
 
-[smart-filters]: https://pipewire.pages.freedesktop.org/wireplumber/policies/smart_filters.html
-
-The microphone is only in use while an app records from Voice Filter, and only then the chain
-runs: while no app records, `voice-filter run` takes no CPU. If Voice Filter is chosen as the
-default input in the system's sound settings, the filter reads from the source with the highest
-priority and the app says so; choose your microphone there instead.
-
-Only one `voice-filter run` can be active at a time. A second one stops with "Voice Filter is
-already running".
-
-In the manual mode Voice Filter stays after `voice-filter run` stopped, until PipeWire restarts
-(e.g. at the next login): apps that record from it stay with it and get silence until `voice-filter run` is back,
-rather than switching to the unfiltered microphone. To remove it, stop `voice-filter run`, look up
-the ID of Voice Filter under _Sources_ in `wpctl status` and run `pw-cli destroy <id>` (not
-`pw-cli destroy voice-filter`: that name also matches the client of `voice-filter run`); switching
-to the automatic mode removes it too.
-`voice-filter run` exits with an error when it loses its connection to PipeWire, so a service
-manager can start it again.
+- [docs/usage.md](docs/usage.md): the two modes, what's kept between runs, the GNOME app and the
+  tray, and the offline mode (`voice-filter process in.wav out.wav`) to try settings on WAV files
+- [docs/dbus.md](docs/dbus.md): the D-Bus interface the app uses, to control the filter from
+  scripts
 
 ### Tips
 
@@ -169,119 +139,8 @@ manager can start it again.
 - Get **close to the microphone**, about a hand's width. The louder the voice reaches it against
   the room, the speakers and the noise, the better every stage works; raising the microphone's
   volume above 100 % in software doesn't help, the automatic gain control does that anyway.
-- With **headphones** there's no echo, switch the echo cancellation off. Over speakers it removes
-  the echo; what's left of it it turns down band by band, and the voice with it while you talk
-  into the playback, less while it hears you talk (tuned for that). **Voice Protection** (off,
-  0 %) keeps a part of your voice as it was while you talk and leaves the rest of the echo to the
-  noise suppression, which removes music by itself; while you're silent the echo cancellation acts
-  fully. Higher keeps more of the voice but lets more of the playback through under it.
-
-### The GNOME app
-
-`voice-filter ui` controls a running `voice-filter run`. It's a separate process, so closing it
-never interrupts the audio. `voice-filter install-desktop` adds it to the apps of the desktop, with
-its icon (it writes `~/.local/share/applications/net.b128.VoiceFilter.desktop`,
-`~/.local/share/icons/hicolor/scalable/apps/net.b128.VoiceFilter.svg` and the two icons of the tray
-in `~/.local/share/icons/hicolor/symbolic/apps/`; delete them to remove it). In the app you can:
-
-- switch the whole **filter** off and on: off, apps get the microphone as it is, still at the
-  same latency (so switching doesn't click or stutter), and every stage keeps its own switch and
-  settings
-- choose the **microphone**: the default input (it shows which one that is) or a particular one,
-  switched while the filter keeps running
-- choose the **speakers** whose echo the echo cancellation removes (in its row); with headphones
-  there's no echo, it can be off. Its status shows whether it hears the speakers, how loud, and the
-  delay of their echo
-- turn on **Listen** to hear yourself through the filter on the default output (use headphones),
-  at a volume of its own; **Keep Listening** turns it on again after a restart, e.g. to keep
-  listening quietly (the microphone stays in use then)
-- switch **each stage** on and off and adjust its **settings**, e.g. the limit of the noise
-  suppression (lower values keep more of the original voice, 100 dB removes all the noise it can)
-  or the frequency of the high-pass; a stage's settings go back to their defaults with its
-  **Reset** button, everything with **Reset the Filter…** in the main menu
-- watch the **levels** of the microphone and of Voice Filter, and the background noise of the
-  microphone: above −45 dBFS the app points out that it's too noisy
-- watch the **latency**, the processing time per frame (mean, ~95 %, ~99 % and the longest, of
-  all stages, the echo cancellation and the noise suppression on their own and the other stages
-  together) and dropouts
-
-`voice-filter run` also shows an icon in the tray: a click opens the app, its menu switches the
-filter, the echo cancellation (no echo with headphones) and Listen, and the icon shows whether it's
-on (the microphone between noise and a clean wave, as on the app icon, struck through while it's
-off). KDE and most other desktops show it as they are; GNOME Shell needs the extension “AppIndicator
-and KStatusNotifierItem Support” (on Arch `gnome-shell-extension-appindicator`).
-
-The app and the icon in the tray speak the language of the desktop (`LANG`, `LANGUAGE`), English
-where there's no translation; translations are in `i18n/`, one Fluent file per language.
-
-The info button at the end of a row explains what the setting or the status value means; an
-expanding row (a stage, the processing time) explains itself as the first line inside. The status
-values (latency, processing time, dropouts, the echo cancellation's status and the background noise)
-have a copy button and can be selected, e.g. for a bug report.
-
-### Offline mode
-
-```bash
-voice-filter process in.wav out.wav
-# with what the speakers played, for the echo cancellation
-voice-filter process in.wav out.wav --reference played.wav
-```
-
-Runs a WAV file (48 kHz, mixed down to mono) through the same chain and writes the result, lined
-up with the input. It prints the latency and the processing time of every stage. Use it to compare
-settings, e.g. `--atten-lim 12` for a limit of 12 dB; it takes the defaults, not the settings kept
-for `run` (`run --atten-lim` sets the limit and keeps it, like the app). For the echo
-cancellation, record the microphone and the monitor of the speakers at the same time, e.g.:
-
-```bash
-pw-record --target <microphone> --rate 48000 --channels 1 in.wav &
-pw-record --target <speakers> -P '{ stream.capture.sink = true }' \
-    --rate 48000 --channels 1 played.wav &
-```
-
-### D-Bus
-
-The daemon serves `net.b128.VoiceFilter.Daemon` on the session bus (object `/net/b128/VoiceFilter`,
-interface `net.b128.VoiceFilter1`), which the GNOME app uses too:
-
-| Member            | Type                 | Description                                                                                                         |
-| ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `Mode`            | `s`, read/write      | `auto` (all apps on the microphone) or `manual` (only apps on Voice Filter), kept for the next runs                 |
-| `AutoAvailable`   | `b`, read            | whether the session manager has smart filters (WirePlumber 0.5 or later), which `auto` needs                        |
-| `Input`           | `s`, read/write      | the microphone's `node.name`, empty for the default input                                                           |
-| `ActiveInput`     | `s`, read            | the `node.name` of the source the filter reads from, empty while no app records                                     |
-| `DefaultInput`    | `s`, read            | the `node.name` of the system's default input                                                                       |
-| `Output`          | `s`, read/write      | the speakers' `node.name` (for the echo), empty for the default output                                              |
-| `Listen`          | `b`, read/write      | plays Voice Filter on the default output                                                                            |
-| `KeepListen`      | `b`, read/write      | keeps `Listen` for the next runs (off by default)                                                                   |
-| `ListenVolume`    | `d`, read/write      | the volume of `Listen` in dB, −40 to 0, kept for the next runs                                                      |
-| `Enabled`         | `b`, read/write      | the whole filter on or off (off, the microphone passes as it is), kept for the next runs                            |
-| `SetStageEnabled` | method `(sb)`        | switches a stage on or off by name, kept for the next runs                                                          |
-| `Parameters`      | `a(ssssddddd)`, read | the settings: stage, name, title, unit, min, max, step, default, value                                              |
-| `SetParameter`    | method `(ssd)`       | sets a setting of a stage (stage, name, value), within its range, kept for the next runs                            |
-| `Stages`          | `a(sb)`, read        | the stages in order and whether they're on                                                                          |
-| `Inputs`          | `a(ssi)`, read       | the microphones: name, description, priority                                                                        |
-| `Outputs`         | `a(ssi)`, read       | the output devices, the same way                                                                                    |
-| `Echo`            | `a{sd}`, read        | the echo cancellation: frame counters, level of the speakers, AEC3's ERLE/ERL (of its linear filter only) and delay |
-| `Latency`         | `a{sd}`, read        | `total`, `microphone`, `bridge`, `chain` and `app`, in ms                                                           |
-| `Quantum`         | `t`, read            | samples per PipeWire cycle                                                                                          |
-| `MaxFrameTime`    | `d`, read            | longest processing time of a frame over the last 10 s, in ms                                                        |
-| `FrameTimes`      | `a(sdddd)`, read     | processing time per frame over the last 10 s in ms: part, mean, 95 % and 99 % percentile, longest                   |
-| `Levels`          | `a{sd}`, read        | `input` and `output` (dBFS, falling 20 dB/s) and `input-floor`, the noise floor of the microphone                   |
-| `Counters`        | `a{st}`, read        | `frames`, `silence`, `dropped` and `errors` since the start                                                         |
-
-For example with `busctl`:
-
-```bash
-vf="net.b128.VoiceFilter.Daemon /net/b128/VoiceFilter net.b128.VoiceFilter1"
-busctl --user introspect $vf
-busctl --user get-property $vf Parameters
-busctl --user call $vf SetParameter ssd denoise limit 12
-busctl --user call $vf SetStageEnabled sb agc false
-busctl --user set-property $vf Enabled b false
-```
-
-The interface may still change before 1.0.
+- With **headphones** there's no echo, switch the echo cancellation off
+  ([over speakers](docs/usage.md#echo-cancellation-over-speakers)).
 
 ## Development
 
@@ -301,11 +160,10 @@ cargo run --release --example batch -- in/ out/ [--only denoise] [--set denoise.
 ```
 
 How the defaults of the noise suppression were measured, and how to repeat it, is in
-[docs/measurements.md](docs/measurements.md).
-
-The design, the choice of models, the latency measurements and what's still open are in
-[docs/concept.md](docs/concept.md). The DeepFilterNet3 inference is vendored as its own crate,
-[deep-filter-rt](crates/deep-filter-rt), because upstream's crate on crates.io is outdated.
+[docs/measurements.md](docs/measurements.md). The design, the choice of models, the latency
+measurements and what's still open are in [docs/concept.md](docs/concept.md). The DeepFilterNet3
+inference is vendored as its own crate, [deep-filter-rt](crates/deep-filter-rt), because
+upstream's crate on crates.io is outdated.
 
 ## Repository
 
